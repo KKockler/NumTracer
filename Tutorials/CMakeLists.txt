@@ -45,6 +45,9 @@ function(nt_tutorial name src)
   add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
+# 00 — hello, tensor network: contract vectors through a metric and a projector (no physics)
+nt_tutorial(hello_network 00-hello-network/hello_network.cpp)
+
 # 01 — colour factors fold to a number
 nt_tutorial(colour_factors 01-color-contraction/colour_factors.cpp)
 

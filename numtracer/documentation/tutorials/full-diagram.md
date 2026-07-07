@@ -83,6 +83,58 @@ $\text{numeric} = \text{closed} = 3.527568$ — is what pins the algebra down: t
 $4p(-3c\,l_1 + p + 2c^2 p)$ is the analytic value for $q = l - p$, and the numeric engine reaches
 the same number the way the code generator does.
 
+## Lowering to an optimized kernel
+
+The contraction above is only the first half of the pipeline. The second half — **lowering** the
+resulting polynomial to straight-line real arithmetic and **emitting** it as C++ — is callable right
+here from the same program, no Mathematica involved. This is a preview of the codegen; the passes
+below (Horner factoring, real CSE) are explained in full in
+[CSE and Horner lowering](../internals/cse-and-lowering.md). It produces the *same bytes* the
+[front-end](generating-kernels.md) writes:
+
+```cpp
+#include "numtracer/codegen/gen.hpp" // GlobalEnv, GenProg, emit_cpp, emit_env_layout
+
+net::GlobalEnv g;                          // the shared symbol table (one f[] slot per symbol/atom)
+net::GenProg  prog = nm::to_genprog(tr, g); // Horner-factor + hash-consed real CSE
+net::emit_env_layout(std::cout, g);         // comment: which f[i] is which symbol / 1/l^2
+net::emit_cpp(std::cout, prog, "T_num");    // -> double T_num(const double* f) { ... }
+```
+
+One catch: in the contraction above the momenta are plain numbers, so `tr` is a **constant** `MPoly`
+and would lower to a bare number. To get a real *kernel* the tutorial redoes the contraction with the
+momentum **components as symbols** — `ns = 3`: `f[0] = |p|`, `f[1] = l_0`, `f[2] = l_{1y}` — reusing
+the *same* `chain`/`lor` tokens (they refer to momentum ids, not values). The emitted function is then
+a genuine function of the frame:
+
+```text
+// fundamental-symbol env layout (fill f[i] per call):
+//   f[0] = var(0)   // |p|
+//   f[1] = var(1)   // l0
+//   f[2] = var(2)   // l1y
+//   f[3] = inv(0)   // 1 / l^2
+static inline double T_num(const double *f) {
+  const double s0 = -4;
+  const double s1 = 4;
+  const double s2 = f[0];
+  const double s3 = s1*s2;
+  // … Horner-factored, every repeated subexpression shared exactly once …
+  const double s23 = s2*s22;
+  return s23;
+}
+```
+
+That is exactly the `trN(const double* f)` shape of a generated kernel: a flat straight-line body over
+a shared `f[]` environment, which a companion `fill(...)` populates from the kernel's scalar
+arguments once per call.
+
+**Can you run the lowered kernel directly?** The lowered form *is* C++ — you run it by compiling
+`T_num(f)` and calling it (that is what a generated kernel does; there is no interpreter for the
+lowered instruction stream). In-process, what you can run without a compile step is the *contracted
+polynomial* itself: `nm::eval(tr, symbolValues, atomValues)` evaluates it directly — the same numbers,
+just not the Horner/CSE'd arithmetic. The tutorial uses exactly that to self-check the symbolic
+contraction against the closed form before printing the kernel.
+
 ## From here to a kernel
 
 A real flow has many such diagrams, each multiplied by its scalar coefficient (dressings,

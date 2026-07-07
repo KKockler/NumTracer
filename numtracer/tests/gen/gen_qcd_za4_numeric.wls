@@ -33,6 +33,6 @@ Print["[time] NumTrace (analyse): ", tA, " s   diagrams = ", Length[ntk[[1]]["Di
 
 tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_qcd_za4_num.cpp"}], FileNameJoin[{$gen, "ZA4_num_kernel.hh"}], FileNameJoin[{$gen, "ZA4_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZA4_num_kernel", "Namespace" -> "za4_num", "Dressings" -> dress, "AngleDefs" -> spAngles4] ];
+  "Name" -> "ZA4_num_kernel", "Namespace" -> "za4_num", "Dressings" -> dress, "AngleDefs" -> spAngles4] ];
 Print["[time] Numeric backend: ", tN, " s"];
 Print["ZA4 numeric kernel generated."];

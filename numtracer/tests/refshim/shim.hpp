@@ -82,14 +82,6 @@ namespace DiFfRG
   };
   template <class A, class B, class C> using SplineInterpolator1D = Fn;
 
-  // Per-component (group-diagonal) dressing access: a kernel passes a std::array of interpolators
-  // (one per colour/flavour component) and the generated integrand calls ntDiagDress(arr, a, scale)
-  // for the surviving component `a` of the SU(N) fold. Indexed lookup + evaluation at the scale.
-  template <class Arr> inline auto ntDiagDress(const Arr &arr, int a, double scale)
-  {
-    return arr[static_cast<std::size_t>(a)](scale);
-  }
-
   // ---- a fixed analytic regulator (same on both paths) -----------------------
   // Exponential-type: RB(k2,p2) = k2 * exp(-p2/k2). RBdot is a fixed companion.
   // The fermionic RB/RFdot are nonzero analytic companions (the exact form is

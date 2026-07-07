@@ -6,13 +6,12 @@
    Two public entry points:
      NumTrace[net, opts]     builds an intermediate-expression tree (an NTKernel)
                              from a network written in the DSL heads below;
-     MakeNTKernel[ntk, ...]  serialises that tree to C++; "Backend" selects the
-                             path ("ET" | "Dense" -> one kernel header, "Generate"
-                             -> the invariant-basis build-time generation path).
+     MakeNTKernel[ntk, ...]  serialises that tree to C++ via the numeric
+                             matrix-product backend (the sole generation path).
 
    The network is `Σ_terms coeff(dressings…) × trace(momenta)`: the trace is a
-   contraction of the tensor heads (emitted as `et` builder calls + contract_all,
-   lowered by expr::eval_real), the coeff is flat C++. This is exactly the split
+   contraction of the tensor heads (contracted numerically to an MPoly, then
+   Horner-lowered to a real straight-line kernel), the coeff is flat C++. This is exactly the split
    tests/refshim/flow_ym_zc.hpp demonstrates by hand — we generate it. *)
 
 BeginPackage["NumTracer`"];
@@ -25,7 +24,7 @@ ClearAll["NumTracer`*"];
 
 NumTrace::usage = "NumTrace[net, \"Frame\"->frame, \"Args\"->{...}] analyses a DSL tensor network into an NTKernel[<|...|>]: a list of terms, each a scalar coefficient times one or more independent contraction components, plus the env-id layout and frame needed to emit code.";
 
-MakeNTKernel::usage = "MakeNTKernel[ntk, file, \"Backend\"->\"ET\"|\"Dense\", \"Name\"->\"X\", \"Dressings\"->{...}] serialises an NTKernel to a single C++ kernel header at `file` (symbolic ETensor kernel, or the brute-force numeric DTensor baseline).\nMakeNTKernel[ntk, genFile, kernelFile, tracesFile, \"Backend\"->\"Generate\", \"Name\"->\"X\", \"Namespace\"->ns, ...] emits the invariant-basis C++ generation path: a build-time generator program at `genFile`, runs it to produce the committed straight-line traces header `tracesFile`, and the kernel header `kernelFile` that fills the fundamental symbols and calls them.\n\"Backend\"->Automatic (default) resolves from the argument count: one output file -> \"ET\", three -> \"Generate\".";
+MakeNTKernel::usage = "MakeNTKernel[ntk, genFile, kernelFile, tracesFile, \"Name\"->\"X\", \"Namespace\"->ns, \"Dressings\"->{...}] serialises an NTKernel to C++ via the numeric matrix-product backend: a build-time generator program at `genFile`, run to produce the committed straight-line traces header `tracesFile`, and the kernel header `kernelFile` that fills the fundamental symbols and calls them.";
 
 NTKernel::usage = "NTKernel[assoc] is the analysed intermediate-expression tree produced by NumTrace and consumed by MakeNTKernel.";
 
@@ -63,9 +62,9 @@ ntSUNT::usage = "ntSUNT[N, a, i, j] — SU(N) fundamental generator (T^a)_{ij} (
 
 ntSUNDeltaFund::usage = "ntSUNDeltaFund[N, i, j] — SU(N) fundamental Kronecker delta_{ij} (rank N).";
 
-ntSUNDiagFund::usage = "ntSUNDiagFund[N, i, j, name, scale] — a fundamental Kronecker delta_{ij} (rank N) carrying a PER-COMPONENT dressing: the diagonal insertion diag(name[0],..,name[N-1]) with each component evaluated at the kinematic `scale`. `name` is a kernel parameter (a std::array of N interpolators). Folds (via sun_value_dressed) to Σ_i name[i](scale) instead of the flavour-blind δ — this is how the u- and d-quark (etc.) are dressed differently WITHIN the SU(N) trace, no per-flavour diagram split.";
+ntSUNDiagFund::usage = "ntSUNDiagFund[N, i, j, spec, scale] — a fundamental Kronecker delta_{ij} (rank N) carrying a PER-COMPONENT dressing. `spec` is a rules list {c1 -> name1, c2 -> name2, ..., Default -> defName}: `ci` are 1-based component indices (1..N) and `namei` are distinctly-named SCALAR dressing symbols evaluated at the kinematic `scale`; a Default -> defName rule dresses every unnamed component, and components with neither a rule nor a Default are DROPPED (contribute nothing). Folds (via sun_value_dressed) to Σ_i c_i name_i(scale) instead of the flavour-blind δ — this dresses e.g. the u- and d-quark differently WITHIN the SU(N) trace, no per-flavour diagram split. Each name is an ordinary scalar kernel dressing parameter.";
 
-ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, name, scale] — an adjoint Kronecker delta^{ab} (rank N) carrying a PER-COMPONENT adjoint dressing diag(name[0],..,name[N^2-2]), each evaluated at `scale`. `name` is a kernel parameter (a std::array of N^2-1 interpolators). Folds to Σ_a c_a name[a](scale) — e.g. a condensed gluon with a colour-component-dependent dressing Z_A^a.";
+ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, spec, scale] — an adjoint Kronecker delta^{ab} (rank N) carrying a PER-COMPONENT adjoint dressing. `spec` is a rules list {c1 -> name1, ..., Default -> defName} with 1-based component indices (1..N^2-1, e.g. 3 and 8 for the SU(3) Cartan/Gell-Mann directions) and distinctly-named scalar dressing symbols evaluated at `scale`; unnamed components collapse to Default when present, else drop. Folds to Σ_a c_a name_a(scale) — e.g. a gluon condensed along the Cartan directions (ntSUNDiagAdj[3, a, b, {3 -> A03, 8 -> A08}, scale]), the other 6 colours dropping out with no dead terms.";
 
 ntSP::usage = "ntSP[q1, q2] — Lorentz scalar product q1.q2 (a scalar coefficient).";
 

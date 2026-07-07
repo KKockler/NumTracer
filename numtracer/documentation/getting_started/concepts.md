@@ -2,7 +2,9 @@
 
 This page builds the mental model the rest of the guide relies on: what a tensor network *is*
 in NumTracer, how indices decide what gets summed, where the runtime numbers come from, and
-what the generated kernel ends up looking like. It is short on purpose.
+what the generated kernel ends up looking like. It is short on purpose. For the exact sectors and
+conventions it assumes — in particular that spacetime is 4D and the metric is the **Euclidean**
+$\delta_{\mu\nu}$, not Minkowski — see [Scope & conventions](scope-and-conventions.md).
 
 ## A network is tensors with shared indices
 
@@ -28,7 +30,7 @@ The DSL heads mirror the FORM/FormTracer vocabulary:
 | `ntSUNT[N, a, i, j]` | SU(N) fundamental generator $(T^a)_{ij}$ |
 | `ntSUNDeltaAdj[N, a, b]` | SU(N) adjoint $\delta^{ab}$ |
 | `ntSUNDeltaFund[N, i, j]` | SU(N) fundamental $\delta_{ij}$ |
-| `ntSUNDiagFund[N, i, j, Z, s]` / `ntSUNDiagAdj[N, a, b, Z, s]` | group-diagonal $\delta$ carrying a per-component dressing $Z[a](s)$ (see [dressed-flavour](../tutorials/dressed-flavour.md)) |
+| `ntSUNDiagFund[N, i, j, spec, s]` / `ntSUNDiagAdj[N, a, b, spec, s]` | group-diagonal $\delta$ dressing SELECTED (1-based) components with distinct scalar dressings via a rules-list `spec` `{c -> name, …, Default -> defName}` (unnamed components collapse to `Default` or drop); see [dressed-flavour](../tutorials/dressed-flavour.md) |
 | `ntGamma`, slashed momenta | Dirac gamma matrices and $\slashed p = p^\mu\gamma_\mu$ |
 | `ntSP[q1, q2]`, `ntDress[h, …]` | scalar coefficients (dot product, opaque dressing) |
 
@@ -100,9 +102,8 @@ call from the runtime arguments, then runs the lowered arithmetic.
 A network with no free indices is a single number — a scalar. A network with no runtime
 content at all (a pure colour factor, a pure gamma trace) folds to a compile-time constant. A
 network carrying momenta and dressings becomes a small polynomial in the frame's scalar
-symbols, which the codegen lowers to a flat, straight-line kernel. The end product has the same
-shape as a FORM reference kernel: trace functions over a few symbols, plus the per-diagram
-assembly.
+symbols, which the codegen lowers to a flat, straight-line kernel: trace functions over a few
+symbols, plus the per-diagram assembly.
 
 Next, the [tutorials](../tutorials/index.md) build a complete physical integrand — the quark
 self-energy — from a network in the DSL all the way to a generated, validated kernel.

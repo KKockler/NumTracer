@@ -1,7 +1,6 @@
 # Sector data
 
-> Headers: `dirac/dirac_data.hpp`, `dirac/dense_trace.hpp`, `sun/sun_data.hpp`, `sun/sun.hpp`,
-> `dense/dtensor.hpp`
+> Headers: `dirac/dirac_data.hpp`, `dirac/dense_trace.hpp`, `sun/sun_data.hpp`, `sun/sun.hpp`
 
 The contraction engine is ignorant of physics — it folds matrices and sums indices. The physics
 constants live in small, typed-out tables that the engine reads. Each sector has a `constexpr`
@@ -29,7 +28,8 @@ sixteen; that sparsity, and the block-antidiagonal Weyl structure, are what the 
 
 ### The chiral dense trace
 
-`dirac/dense_trace.hpp` provides a sparsity-aware dense gamma trace, `chiral_gamma_trace`. A
+`dense_trace.hpp` (which lives with the tests, `tests/oracle/dense_trace.hpp`) provides a
+sparsity-aware dense gamma trace, `chiral_gamma_trace`. A
 slashed momentum in the Weyl basis is block-antidiagonal, $\slashed p = \big[\begin{smallmatrix}0
 & P\\ Q & 0\end{smallmatrix}\big]$, so a chain of them folds into products of 2×2 chiral blocks
 rather than 4×4 matrices — a few times faster than the brute 4×4 chain — and yields
@@ -56,14 +56,3 @@ dresses each colour/flavour component differently (a group-diagonal $\delta$) fo
 
 `sun.hpp` also defines `Mat<N>`, `matmul`, and `trace` — a plain dense complex matrix type used
 by the oracle and the tests.
-
-## The dense numeric tensor
-
-`dense/dtensor.hpp` defines `dense::DTensor`, a dense numeric tensor over labelled axes
-`Ax<Id, Dim>`. It contracts any network — Lorentz, Dirac, SU(N), or a mix — entry-for-entry with
-runtime `Cx` numbers and **no** structural pruning. That makes it the entry-for-entry **oracle**
-the generated kernels are validated against, and the target of the codegen's `"Dense"` backend
-(see [codegen](codegen.md)). It and the symbolic contraction share the same `Ax<Id, Dim>` axis
-language and a division-free index *odometer* (inline in `dense/dtensor.hpp`), a mixed-radix counter
-that walks every index combination while maintaining running flat offsets — so the inner contraction
-loop needs no division or modulo and vectorises well.

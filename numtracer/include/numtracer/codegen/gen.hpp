@@ -12,6 +12,7 @@
 /// computes the shared `f[]` once per call and invokes them.
 #pragma once
 
+#include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/codegen/lower.hpp"
 #include "numtracer/network/network.hpp" // splitmix64_finalise / hash_combine hash helpers + <cstdint>
 
@@ -100,7 +101,7 @@ namespace numtracer::network
   /// the kernel multiplies it by the (also complex) runtime dressing coefficient and the consumer takes
   /// Re, so the imaginary part must survive to the kernel rather than being dropped at this lowering.
   struct GenProg {
-    std::vector<expr::RInstr> ins;
+    std::vector<RInstr> ins;
     int root = -1;
     int rootIm = kRealProgram;
   };
@@ -111,6 +112,8 @@ namespace numtracer::network
   /// pivot choices, hence the operation count) depends only on the polynomial as a *set*, not on the
   /// order the upstream reduction happened to produce it. This makes the kernel reproducible across the
   /// serial and (term-reordering) sharded-parallel rebase paths — the same op count either way.
+  // Lowering internals (Horner ordering sweep) — ODR-used only via to_genprog (the library TU).
+#if NUMTRACER_DEFINE_BODIES
   namespace gdetail
   {
     /// The deterministic monomial orderings the greedy (order-sensitive) Horner is tried on; the caller
@@ -186,7 +189,7 @@ namespace numtracer::network
     /// Pick the cheapest Horner ordering of @p monos (costed on scratch builders), then replay it into
     /// @p w (so several parts — e.g. a trace's real and imaginary halves — share one CSE stream). Returns
     /// the result slot in @p w.
-    inline int best_into(const std::vector<LMono> &monos, expr::rdetail::RBuilder &w)
+    inline int best_into(const std::vector<LMono> &monos, rdetail::RBuilder &w)
     {
       // The greedy Horner is order-sensitive, so we cost several deterministic orderings and keep the
       // cheapest. But each trial is a FULL horner pass: for the dense 1/4/7 traces (tens of thousands of
@@ -207,7 +210,7 @@ namespace numtracer::network
       std::size_t bestIdx = 0, bestOps = 0;
       bool have = false;
       for (std::size_t i = 0; i < numOrderings; ++i) {
-        expr::rdetail::RBuilder scratch; // cost this ordering on a throwaway builder
+        rdetail::RBuilder scratch; // cost this ordering on a throwaway builder
         horner(scratch, orders[i]);
         if (!have || scratch.ins.size() < bestOps) {
           bestOps = scratch.ins.size();
@@ -218,12 +221,20 @@ namespace numtracer::network
       return horner(w, std::move(orders[bestIdx]));
     }
   } // namespace gdetail
+#endif // NUMTRACER_DEFINE_BODIES
 
+  // Code-printing entry points, ODR-used by the generator TU: declared always, defined once
+  // (library TU / header-only build). See core/export.hpp.
+  NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
+                               const std::string &decor = "static inline");
+  NUMTRACER_FUNC void emit_env_layout(std::ostream &out, const GlobalEnv &g);
+
+#if NUMTRACER_DEFINE_BODIES
   /// @brief Print a lowered program as a straight-line C++ function `name(const double* f)`.
   ///        `decor` is the function decorator/prefix (e.g. `"static __host__ __device__ inline"`
   ///        for a CUDA-callable kernel); the default keeps the emitted bytes unchanged.
-  inline void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
-                       const std::string &decor = "static inline")
+  NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
+                               const std::string &decor)
   {
     // Compile-time escape hatch (NT_GEN_NOINLINE_TRACES): force the per-diagram trace functions
     // OUT-OF-LINE. The default all-inlined emission is the runtime-optimal one — the register
@@ -241,6 +252,30 @@ namespace numtracer::network
       else
         effDecor += " __attribute__((noinline))";
     }
+    // Emit one instruction's right-hand side (`s<i> = <rhs>`). Shared by the complex and real bodies
+    // below so the opcode set lives in one place.
+    auto emitRhs = [&out](const RInstr &in) {
+      switch (in.op) {
+      case RCONST:
+        out << in.k;
+        break;
+      case RVAR:
+        out << "f[" << in.a << "]";
+        break;
+      case RADD:
+        out << "s" << in.a << "+s" << in.b;
+        break;
+      case RSUB:
+        out << "s" << in.a << "-s" << in.b;
+        break;
+      case RMUL:
+        out << "s" << in.a << "*s" << in.b;
+        break;
+      default:
+        out << "-s" << in.a;
+        break; // RNEG
+      }
+    };
     // COMPLEX trace (folded imaginary colour): real + imaginary halves share the instruction stream;
     // return std::complex<double>{re, im}. The kernel multiplies it by the (complex) dressing
     // coefficient and the consumer takes std::real — so the imaginary part reaches the kernel.
@@ -249,28 +284,8 @@ namespace numtracer::network
       out << effDecor << " std::complex<double> " << name << "(const double *f) {\n";
       out << std::setprecision(17);
       for (std::size_t i = 0; i < p.ins.size(); ++i) {
-        const expr::RInstr &in = p.ins[i];
         out << "  const double s" << i << " = ";
-        switch (in.op) {
-        case expr::RCONST:
-          out << in.k;
-          break;
-        case expr::RVAR:
-          out << "f[" << in.a << "]";
-          break;
-        case expr::RADD:
-          out << "s" << in.a << "+s" << in.b;
-          break;
-        case expr::RSUB:
-          out << "s" << in.a << "-s" << in.b;
-          break;
-        case expr::RMUL:
-          out << "s" << in.a << "*s" << in.b;
-          break;
-        default:
-          out << "-s" << in.a;
-          break; // RNEG
-        }
+        emitRhs(p.ins[i]);
         out << ";\n";
       }
       out << "  return std::complex<double>{" << slot(p.root) << ", " << slot(p.rootIm) << "};\n}\n";
@@ -283,28 +298,8 @@ namespace numtracer::network
     }
     out << std::setprecision(17);
     for (std::size_t i = 0; i < p.ins.size(); ++i) {
-      const expr::RInstr &in = p.ins[i];
       out << "  const double s" << i << " = ";
-      switch (in.op) {
-      case expr::RCONST:
-        out << in.k;
-        break;
-      case expr::RVAR:
-        out << "f[" << in.a << "]";
-        break;
-      case expr::RADD:
-        out << "s" << in.a << "+s" << in.b;
-        break;
-      case expr::RSUB:
-        out << "s" << in.a << "-s" << in.b;
-        break;
-      case expr::RMUL:
-        out << "s" << in.a << "*s" << in.b;
-        break;
-      default:
-        out << "-s" << in.a;
-        break; // RNEG
-      }
+      emitRhs(p.ins[i]);
       out << ";\n";
     }
     out << "  return s" << p.root << ";\n}\n";
@@ -312,7 +307,7 @@ namespace numtracer::network
 
   /// @brief Print the shared env layout as a comment (which `f[i]` is which symbol) so the codegen /
   ///        kernel knows the formula to fill each slot with.
-  inline void emit_env_layout(std::ostream &out, const GlobalEnv &g)
+  NUMTRACER_FUNC void emit_env_layout(std::ostream &out, const GlobalEnv &g)
   {
     out << "// fundamental-symbol env layout (fill f[i] per call):\n";
     for (std::size_t i = 0; i < g.syms.size(); ++i) {
@@ -327,6 +322,7 @@ namespace numtracer::network
         out << "//   f[" << i << "] = var(" << a << ")\n";
     }
   }
+#endif // NUMTRACER_DEFINE_BODIES
 
   /// @brief Formula providers for the fundamental symbols: given the symbol the reduction assigned to
   ///        an `f[]` slot, return the C++ expression that computes it from the kernel scalars.
@@ -338,13 +334,18 @@ namespace numtracer::network
     std::function<std::string(int /*varId*/)> var;       ///< C++ for a raw user symbol (numeric backend, kind 3).
   };
 
+  NUMTRACER_FUNC void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name,
+                                const std::string &argSig, const FillFormulas &fm,
+                                const std::string &decor = "static inline");
+
+#if NUMTRACER_DEFINE_BODIES
   /// @brief Print a `fill(double* f, <args>)` that fills every shared `f[]` slot from the kernel
   ///        scalars, using the supplied formula providers. Emitting this **from the generator**
   ///        (which alone knows the reduced layout) decouples the kernel from the `f[]` ordering: the
   ///        kernel just calls `fill(...)` then the `trN(f)`. `argSig` is the parameter list (e.g.
   ///        `"double l1, double cos1, double cos2, double p"`).
-  inline void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name, const std::string &argSig,
-                        const FillFormulas &fm, const std::string &decor = "static inline")
+  NUMTRACER_FUNC void emit_fill(std::ostream &out, const GlobalEnv &g, const std::string &name,
+                                const std::string &argSig, const FillFormulas &fm, const std::string &decor)
   {
     out << std::setprecision(17);
     out << decor << " void " << name << "(double *f, " << argSig << ") {\n";
@@ -359,5 +360,6 @@ namespace numtracer::network
     }
     out << "}\n";
   }
+#endif // NUMTRACER_DEFINE_BODIES
 
 } // namespace numtracer::network

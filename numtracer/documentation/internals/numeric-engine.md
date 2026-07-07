@@ -62,11 +62,12 @@ generators `T^a` — is just a number once fully contracted. `network/sun_net.hp
 (`sun_value` / `sun_value_cx`) contracts it numerically at build time over the typed-out
 SU(N) tables, so the kernel never carries a colour tensor. Folding colour to a number also lets
 the generator group diagrams that share a (factored) dressing coefficient, so identical
-monomials from different diagrams merge — the cross-diagram collection FORM does.
+monomials from different diagrams merge (cross-diagram collection).
 
 When a network carries a **group-diagonal dressing** (`ntSUNDiagFund` / `ntSUNDiagAdj`), the
 colour fold keeps it as a polynomial instead of a single number: `sun_value_dressed` folds it to
-$\sum_a c_a Z_a$ over the runtime per-component dressing leaves $Z[a](\text{scale})$. The Dirac
+$\sum_a c_a Z_a(\text{scale})$ over the named runtime scalar dressings the `spec` selects (the
+$\delta$'s `comp2dr` map assigns each surviving component a dressing, and drops the rest). The Dirac
 trace is still contracted once; only the colour weight is left component-resolved. (`sun_value_cx`
 itself is unchanged, so colour-blind flows are byte-identical.)
 
@@ -80,12 +81,13 @@ the `trN(const double* f)` functions plus the `fill` that computes the frame sym
 call. `mpoly_to_cpp` renders a momentum component or a propagator denominator as a C++ expression
 for the `fill` body.
 
-## Why this reaches FORM
+## Why the kernel is compact and fast
 
-FORM keeps scalar products symbolic and emits a flat polynomial in them. The numeric engine
-reaches the *same* basis: by contracting over a fixed frame it produces a polynomial in the
-frame's scalar symbols directly, with the projector and Wick combinatorics resolved numerically
-rather than expanded. The residual runtime gap to FORM is the one optimisation FORM does that the
-fixed-frame contraction does not — integration-by-parts on the symbolic scalar products *before*
-the frame is substituted — which on the heaviest vertices leaves NumTracer ~1.2–1.6× FORM at
-runtime, in exchange for generating the kernel ~80–175× faster (see the README).
+By contracting over a fixed frame the engine produces a polynomial in the frame's scalar symbols
+directly, with the projector and Wick combinatorics resolved numerically rather than expanded — the
+same invariant scalar-product basis a symbolic tracer arrives at, without ever forming the
+intermediate blow-ups. The one thing a fixed-frame contraction *cannot* do that a symbolic tracer
+can is integration-by-parts on the symbolic scalar products *before* the frame is substituted; on
+the heaviest vertices that leaves the generated kernel a little slower at runtime, in exchange for
+generating it far faster. The one place we quantify that trade-off is the
+[relationship note](../getting_started/overview.md#why-generate-rather-than-evaluate-symbolically).

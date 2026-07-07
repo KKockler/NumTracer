@@ -106,46 +106,49 @@ int main() {
   // ---- group-diagonal dressings: the fold returns a SUNPoly Σ_a c_a D_a, not a single number ----
   std::printf("[group-diagonal dressings — sun_value_dressed -> SUNPoly]\n");
   {
-    // evaluate a SUNPoly at a per-component assignment D(dr,component) -> real value.
+    // A diag factor carries comp2dr: component v -> a dressing-id (-1 = drop). Here every component
+    // gets its own id (0..dim-1), so a leaf id names its component; D maps an id -> real value.
+    auto arr = [](int dim) { std::vector<int> v(dim); for (int i = 0; i < dim; ++i) v[i] = i; return v; };
+    // evaluate a SUNPoly at a dressing-id assignment D(id) -> real value.
     auto evalPoly = [](const SUNPoly &p, auto &&D) {
       Cx s{0, 0};
       for (const auto &t : p) {
         Cx c = t.coeff;
-        for (const auto &dc : t.dress) c = c * Cx{D(dc.first, dc.second), 0.0};
+        for (int id : t.dress) c = c * Cx{D(id), 0.0};
         s = s + c;
       }
       return s;
     };
-    auto ones = [](int, int) { return 1.0; };
+    auto ones = [](int) { return 1.0; };
 
     // (a) all D_a == 1 reproduces the undressed delta — the δ-reduction invariant (fund + adj).
     {
-      SUNPoly fp = sun_value_dressed({SUN::diagFund(3, 10, 11, 0), SUN::deltaFund(3, 11, 10)});
+      SUNPoly fp = sun_value_dressed({SUN::diagFund(3, 10, 11, arr(3)), SUN::deltaFund(3, 11, 10)});
       rep("SU(3) diagFund loop, all D=1 (=3)", evalPoly(fp, ones), Cx{3, 0});
-      SUNPoly ap = sun_value_dressed({SUN::diagAdj(3, 0, 1, 0), SUN::deltaAdj(3, 1, 0)});
+      SUNPoly ap = sun_value_dressed({SUN::diagAdj(3, 0, 1, arr(8)), SUN::deltaAdj(3, 1, 0)});
       rep("SU(3) diagAdj loop, all D=1 (=8)", evalPoly(ap, ones), Cx{8, 0});
     }
 
     // (b) fundamental δ-loop with a diagonal dressing == Σ_i D_i (weighted trace).
     {
-      SUNPoly p = sun_value_dressed({SUN::diagFund(3, 10, 11, 0), SUN::deltaFund(3, 11, 10)});
-      // D_i = i+1  ->  1+2+3 = 6
-      rep("SU(3) Σ_i D_i  (D_i=i+1, =6)", evalPoly(p, [](int, int i) { return i + 1.0; }), Cx{6, 0});
-      // a closed loop of 4 diagonal dressings on ONE flavour line (the in-group u/d structure):
-      // Σ_i D0_i D1_i D2_i D3_i — here SU(2), all four dressings equal, D_i = {2,5} -> 2^4+5^4 = 641.
-      SUNPoly q = sun_value_dressed({SUN::diagFund(2, 10, 11, 0), SUN::diagFund(2, 11, 12, 1),
-                                     SUN::diagFund(2, 12, 13, 2), SUN::diagFund(2, 13, 10, 3)});
-      auto d2 = [](int, int i) { return i == 0 ? 2.0 : 5.0; };
+      SUNPoly p = sun_value_dressed({SUN::diagFund(3, 10, 11, arr(3)), SUN::deltaFund(3, 11, 10)});
+      // id i -> i+1  ->  1+2+3 = 6
+      rep("SU(3) Σ_i D_i  (D_i=i+1, =6)", evalPoly(p, [](int i) { return i + 1.0; }), Cx{6, 0});
+      // a closed loop of 4 diagonal dressings on ONE flavour line (the in-group u/d structure), all
+      // four sharing the same per-component ids: Σ_i D_i^4 — here SU(2), D = {2,5} -> 2^4+5^4 = 641.
+      SUNPoly q = sun_value_dressed({SUN::diagFund(2, 10, 11, arr(2)), SUN::diagFund(2, 11, 12, arr(2)),
+                                     SUN::diagFund(2, 12, 13, arr(2)), SUN::diagFund(2, 13, 10, arr(2))});
+      auto d2 = [](int i) { return i == 0 ? 2.0 : 5.0; };
       rep("SU(2) Σ_i Π_k D_i  (=641)", evalPoly(q, d2), Cx{641, 0});
       rep("  same, all D=1 (=2=Nf)", evalPoly(q, ones), Cx{2, 0});
     }
 
     // (c) adjoint: Σ_c Z_c f^{acd}f^{bcd}δ^{ab}|diag.  Undressed = N(N²−1)=24; per-component c_a = N = 3.
     {
-      SUNPoly p = sun_value_dressed({SUN::f(3, 0, 1, 2), SUN::f(3, 3, 1, 2), SUN::diagAdj(3, 0, 3, 0)});
+      SUNPoly p = sun_value_dressed({SUN::f(3, 0, 1, 2), SUN::f(3, 3, 1, 2), SUN::diagAdj(3, 0, 3, arr(8))});
       rep("SU(3) Σ_a Z_a f f, all Z=1 (=24)", evalPoly(p, ones), Cx{24, 0});
-      // Z_a = a+1 -> 3 * Σ_{a=0}^{7}(a+1) = 3*36 = 108
-      rep("SU(3) Σ_a Z_a f f  (Z_a=a+1, =108)", evalPoly(p, [](int, int a) { return a + 1.0; }), Cx{108, 0});
+      // id a -> a+1 -> 3 * Σ_{a=0}^{7}(a+1) = 3*36 = 108
+      rep("SU(3) Σ_a Z_a f f  (Z_a=a+1, =108)", evalPoly(p, [](int a) { return a + 1.0; }), Cx{108, 0});
       bool allN = !p.empty();
       for (const auto &t : p) allN = allN && approx(t.coeff, Cx{3, 0});
       std::printf("  %s: %-40s\n", allN ? "ok  " : "FAIL", "each per-colour coeff == N (=3)");
@@ -155,9 +158,16 @@ int main() {
     // (d) two groups still factorise: SU(3) f.f (24) × SU(2) diagFund loop (Σ_i D_i).
     {
       SUNPoly p = sun_value_dressed({SUN::f(3, 0, 1, 2), SUN::f(3, 0, 1, 2),
-                                     SUN::diagFund(2, 50, 51, 7), SUN::deltaFund(2, 51, 50)});
+                                     SUN::diagFund(2, 50, 51, arr(2)), SUN::deltaFund(2, 51, 50)});
       rep("SU(3)ff × SU(2)diag, all D=1 (=48)", evalPoly(p, ones), Cx{48, 0});
-      rep("  D_i=i+1: 24*(1+2)=72", evalPoly(p, [](int, int i) { return i + 1.0; }), Cx{72, 0});
+      rep("  D_i=i+1: 24*(1+2)=72", evalPoly(p, [](int i) { return i + 1.0; }), Cx{72, 0});
+    }
+
+    // (e2) DROP: a component with comp2dr = -1 contributes nothing. Fund SU(3) loop dressing only
+    //      components 0 and 2 (id -1 on component 1) folds to D_0 + D_2, not D_0+D_1+D_2.
+    {
+      SUNPoly p = sun_value_dressed({SUN::diagFund(3, 10, 11, {0, -1, 2}), SUN::deltaFund(3, 11, 10)});
+      rep("SU(3) diagFund drop comp 1 (D_i=i+1, =4)", evalPoly(p, [](int i) { return i + 1.0; }), Cx{4, 0});
     }
 
     // (e) undressed nets routed through sun_value_dressed are a single term == sun_value_cx.

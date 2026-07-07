@@ -1,18 +1,20 @@
 # NumTracer
 
-**NumTracer** is a header-only C++20 engine that builds and contracts the tensor networks
-that appear in quantum-field-theory loop integrands — Lorentz, Dirac, and SU(N) (colour and
-flavour) — and **generates flat, FORM-style C++ kernels** from them, without a symbolic-algebra
-runtime and without a FORM dependency.
+**NumTracer** is a header-only C++20 engine that builds and contracts tensor networks —
+metrics, momentum vectors, projectors, Dirac gamma matrices, and SU($N$) colour/flavour factors —
+and **generates flat, straight-line C++ kernels** from them, with no symbolic-algebra runtime and
+no external dependency.
+
+It is a *general* engine: the physics lives in the network you hand it, not in the engine. The
+worked examples in this guide are quantum-field-theory loop integrands (functional-Renormalization-
+Group flows for Yang–Mills and QCD), but nothing in the contraction or the codegen is specific to
+them — see [Bring your own network](getting_started/bring-your-own-network.md).
 
 NumTracer generates kernels by **numeric tracing**. A diagram is contracted *numerically* over a
 compact loop frame — its Dirac trace as 4×4 chiral matrix products, its Lorentz network by
 bounded index elimination, its colour factor folded to a number — so each diagram collapses
 to a small polynomial in the frame's scalar symbols, which is then lowered to straight-line
-real arithmetic. The result is the same shape a FORM reference kernel has, generated in
-seconds.
-
-It is a *general* engine: the physics lives in the network you hand it, not in the engine.
+real arithmetic in seconds.
 
 ::::{grid} 1 1 2 2
 :gutter: 3

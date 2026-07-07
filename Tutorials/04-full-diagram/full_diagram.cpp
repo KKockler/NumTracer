@@ -8,11 +8,13 @@
 //   contract numerically; (2) the closed form   — 4 p ( -3 c l1 + p
 //   + 2 c^2 p ), the analytic value for q = l - p.
 // The two agree, which is what pins the engine's algebra down.
-#include "numtracer/numeric/numeric_contract.hpp" // numeric_value, nprojT, dslash, dgamma
+#include "numtracer/codegen/gen.hpp"             // GlobalEnv, GenProg, emit_cpp, emit_env_layout
+#include "numtracer/numeric/numeric_contract.hpp" // numeric_value, to_genprog, nprojT, dslash, dgamma
 
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <iostream>
 #include <vector>
 
 namespace nm = numtracer::numeric;
@@ -84,7 +86,38 @@ int main() {
       "closed   T_num = %.6f   (4 p(-3 c l1 + p + 2 c^2 p), q = l - p)\n",
       closed);
 
-  const bool ok = std::fabs(numeric_val - closed) < 1e-10;
+  // ---- (3) lower the SAME contraction to an optimized C++ kernel
+  // -----------------------------------------------------------------
+  // Above, the momenta were plain numbers, so the trace is a CONSTANT MPoly and would lower to a
+  // bare number. To get a real *kernel* we redo the contraction with the momentum COMPONENTS as
+  // symbols (ns = 3: 0 -> |p|, 1 -> l0, 2 -> l1y); the same DiracNet/Lorentz-net tokens (they refer
+  // to momentum ids, not values) then contract to a polynomial in those symbols. `to_genprog`
+  // Horner-factors + CSEs it into a straight-line real program over a shared symbol env `g`, and
+  // `emit_cpp` prints the exact `double T_num(const double* f)` a generated kernel would carry.
+  const int ns = 3;
+  auto V = [&](int i) { return nm::MPoly::var(ns, i); };            // the i-th symbol
+  auto K = [&](double v) { return nm::MPoly::constant(ns, Cx{v, 0}); };
+  std::vector<std::array<nm::MPoly, 4>> sc(3);
+  sc[0] = {V(0), K(0), K(0), K(0)};                                 // p = (|p|, 0, 0, 0)
+  sc[2] = {V(1), V(2), K(0), K(0)};                                 // l = (l0, l1y, 0, 0)
+  sc[1] = {sc[2][0] - sc[0][0], sc[2][1], K(0), K(0)};              // q = l - p
+  std::vector<nm::MPoly> satomDen = {sc[2][0] * sc[2][0] + sc[2][1] * sc[2][1]}; // atom 0 = l^2
+
+  nm::MPoly trs = nm::numeric_value(ns, chain, lor, sc, satomDen);
+  net::GlobalEnv g;
+  net::GenProg prog = nm::to_genprog(trs, g);
+  std::printf("\nlowered kernel (symbolic components |p|, l0, l1y):\n");
+  net::emit_env_layout(std::cout, g);   // which f[i] holds which symbol / 1/l^2
+  net::emit_cpp(std::cout, prog, "T_num"); // -> double T_num(const double* f) { ... }
+
+  // The lowered polynomial is directly runnable in-process too: eval it at the tutorial's frame
+  // point and check it still equals the closed form (this keeps section (3) gated by the test).
+  const double lowered_val = nm::eval(trs, {p, l0, l1y}, {1.0 / l2}).re;
+  std::printf("\nsymbolic T_num = %.6f   (eval of the lowered polynomial at the same point)\n",
+              lowered_val);
+
+  const bool ok = std::fabs(numeric_val - closed) < 1e-10 &&
+                  std::fabs(lowered_val - closed) < 1e-10;
   std::printf(ok ? "ALL TESTS PASSED\n" : "TESTS FAILED\n");
   return ok ? 0 : 1;
 }

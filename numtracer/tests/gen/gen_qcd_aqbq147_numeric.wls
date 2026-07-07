@@ -52,7 +52,7 @@ Do[
       FileNameJoin[{$gen, "gen_qcd_aqbq147_" <> ToString[lab] <> "_num.cpp"}],
       FileNameJoin[{$gen, "ZAqbq" <> ToString[lab] <> "_147_num_kernel.hh"}],
       FileNameJoin[{$gen, "ZAqbq" <> ToString[lab] <> "_147_num_kernels.hh"}],
-      "Backend" -> "Numeric", "Name" -> "ZAqbq" <> ToString[lab] <> "_147_num_kernel",
+      "Name" -> "ZAqbq" <> ToString[lab] <> "_147_num_kernel",
       "Namespace" -> "zaqbq" <> ToString[lab] <> "_147_num", "Dressings" -> dress, "AngleDefs" -> spAngles] ];
     (* GlobalCollect is ON by default (MakeNTKernel): groups the 306 diagrams by dressing coeff
        (-> 216 traces), COEN collects the factored coefficient across diagrams like FORM -> ~30%

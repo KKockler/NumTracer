@@ -23,17 +23,18 @@ colour generators — contracted together down to a single number that still dep
 runtime quantities (momentum magnitudes, angles, propagator dressings). That number is fed to a
 numerical integrator and evaluated at hundreds of thousands of grid points.
 
-The traditional approach (FORM, FormTracer) does the tensor algebra symbolically *ahead of
-time* and emits a flat polynomial in the scalar products, which a C++ compiler turns into a
-fast kernel. NumTracer produces the same kind of kernel, but does the contraction in plain
-C++ as a build-time step — no symbolic-algebra runtime, no FORM trace.
+A symbolic tensor-algebra system does this algebra *ahead of time* and emits a flat polynomial in
+the scalar products, which a C++ compiler turns into a fast kernel. NumTracer produces the same
+kind of kernel, but does the contraction in plain C++ as a build-time step — no symbolic-algebra
+runtime (the [overview](../getting_started/overview.md#why-generate-rather-than-evaluate-symbolically)
+states the one comparison to such systems).
 
 ## The pipeline
 
 ```text
    DSL network ──NumTrace──▶ diagrams (coeff × contraction) + frame + env layout
         │
-        ▼  MakeNTKernel  "Backend" -> "Numeric"
+        ▼  MakeNTKernel
    numeric contraction (per diagram):
         Dirac trace  ─ 4×4 chiral matrix products ─▶ polynomial
         Lorentz net  ─ bounded index elimination  ─▶ polynomial
@@ -49,25 +50,24 @@ The reading order of this section follows that pipeline:
 |---|---|
 | [Front-end & codegen](codegen.md) | the Mathematica DSL, `NumTrace` / `MakeNTKernel`, eager summation, the FunKit adapter |
 | [The numeric contraction engine](numeric-engine.md) | matrix-product Dirac trace, Lorentz network reduction, colour fold |
-| [The expression algebra](expression-algebra.md) | the compile-time expression types and structural pruning the lowering is built on |
-| [CSE and real lowering](cse-and-lowering.md) | turn a polynomial into a fast, straight-line real kernel |
-| [Sector data](sectors.md) | the typed-out gamma and SU(N) tables, the chiral dense trace, the numeric oracle |
+| [Cx: the compile-time complex type](expression-algebra.md) | the `Cx` NTTP complex type (tensor entries, coefficients) and the `Lit` constant carrier |
+| [CSE and Horner lowering](cse-and-lowering.md) | turn a polynomial into a fast, straight-line real kernel (Horner + real value-numbering) |
+| [Sector data](sectors.md) | the typed-out gamma and SU(N) tables and the chiral dense trace |
 | [Worked example](worked-example.md) | the quark self-energy, end to end |
 
 ## Why it runs at *build* time, not in the consumer's compiler
 
-An earlier version of NumTracer contracted networks *inside the consumer's C++ compiler*, with
-every tensor entry encoded as a type. That is correct but expensive at scale: a trace of
-several transverse projectors expands explosively in the frame-component basis, and the
-compiler never reclaims the intermediate memory it allocates during constant evaluation, so
-peak RAM grows with *total* allocations rather than the live set.
+Contracting networks *inside the consumer's C++ compiler* — every tensor entry encoded as a
+type — is correct but expensive at scale: a trace of several transverse projectors expands
+explosively in the frame-component basis, and the compiler never reclaims the intermediate memory
+it allocates during constant evaluation, so peak RAM grows with *total* allocations rather than
+the live set.
 
 The numeric path runs the identical contraction as a *generator program* instead — numerically,
 over a fixed loop frame. The generator runs on the native CPU in seconds and tens of megabytes,
-prints a small flat kernel, and the consumer only ever compiles that. This is exactly how FORM
-kernels are produced; the difference is that NumTracer does the trace in C++ rather than in a
-symbolic-algebra system. The expression algebra and CSE machinery survive as the **lowering
-stage** that turns the generator's polynomial into straight-line real arithmetic.
+prints a small flat kernel, and the consumer only ever compiles that. The generator's polynomial is
+turned into straight-line real arithmetic by the **lowering stage** — greedy Horner factoring plus
+real value-numbering (CSE).
 
 ## Terminology
 
@@ -78,15 +78,16 @@ Frame
 
 Scalar symbol
 : A scalar product (`l·p`, `l²`, …) kept as a named quantity. The generated kernel computes
-  each once per call and the lowered arithmetic is a polynomial in them — this is the
-  *invariant basis*, the same one FORM uses.
+  each once per call and the lowered arithmetic is a polynomial in them — the *invariant basis* of
+  scalar products.
 
 Diagram coefficient
 : The scalar (dressings, regulators, propagator denominators) multiplying a diagram's
   contraction. NumTracer owns the contraction; the coefficient is ordinary C++, emitted by
   FunKit's COEN.
 
-Structural pruning
-: Dropping `Zero`/`One` sub-branches from an expression as it is built, so a product touching a
-  zero vanishes. It is what keeps the lowering of a sparse trace small. See
-  [the expression algebra](expression-algebra.md).
+Numeric pruning
+: A zero (or round-off-tiny) term never materialises in the contracted polynomial — a product
+  over largely-sparse gamma matrices collapses to the few surviving monomials instead of $4^k$ of
+  them. It is what keeps the lowering of a sparse trace small. See
+  [the numeric engine](numeric-engine.md).

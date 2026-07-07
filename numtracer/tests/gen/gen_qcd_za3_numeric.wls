@@ -1,6 +1,6 @@
 #!/usr/bin/env wolframscript
 (* QCD ZA3 (three-gluon vertex, with quark triangle) via the NUMERIC matrix-product backend (task
-   #22) — the headline target. Emits the Numeric kernel + a Dense oracle. Run from numtracer/:
+   #22) — the headline target. Emits the Numeric kernel (validated against the FORM oracle). Run from numtracer/:
      wolfram -script tests/gen/gen_qcd_za3_numeric.wls                                            *)
 
 If[Quiet[Needs["FunKit`"]] === $Failed,
@@ -40,11 +40,7 @@ tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_qcd_za3_num.cpp"}],
   FileNameJoin[{$gen, "ZA3_num_kernel.hh"}],
   FileNameJoin[{$gen, "ZA3_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZA3_num_kernel", "Namespace" -> "za3_num",
+  "Name" -> "ZA3_num_kernel", "Namespace" -> "za3_num",
   "Dressings" -> dress, "AngleDefs" -> spAngles] ];
 Print["[time] Numeric backend (contract+compile+run): ", tN, " s"];
-
-tD = First @ AbsoluteTiming[ MakeNTKernel[ntk, FileNameJoin[{$gen, "ZA3_num_dense_kernel.hh"}],
-  "Name" -> "ZA3_num_dense_kernel", "Dressings" -> dress, "Backend" -> "Dense", "AngleDefs" -> spAngles] ];
-Print["[time] Dense oracle: ", tD, " s"];
 Print["ZA3 numeric kernels generated."];

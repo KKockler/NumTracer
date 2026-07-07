@@ -26,6 +26,7 @@
 /// so the value factorises — @ref sun_value_cx contracts each group separately and multiplies.
 #pragma once
 
+#include "numtracer/core/export.hpp" // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/sun/sun_data.hpp" // SUNData<N> tables, Mat<N>, matmul, trace, Cx, sun_detail::FEntry
 
 #include <algorithm>
@@ -49,17 +50,20 @@ namespace numtracer::network {
 ///   - kind 1 `f(a,b,c)`           : `a,b,c` adjoint
 ///   - kind 2 `T^a_{ij}` generator : `a` adjoint, `b = i` fund (row), `c = j` fund (col)
 ///   - kind 3 `delta_fund(i,j)`    : `a = i`, `b = j` fundamental
-///   - kind 4 `diag_fund(i,j;dr)`  : `a = i`, `b = j` fundamental — a δ^{ij} carrying a *per-component*
-///                                   dressing `dr`, i.e. the diagonal insertion `diag(D^{dr}_0..D^{dr}_{N-1})`
-///   - kind 5 `diag_adj(a,b;dr)`   : `a,b` adjoint — a δ^{ab} carrying a per-component adjoint dressing
-///                                   `dr`, i.e. `diag(D^{dr}_0..D^{dr}_{N²−2})`
+///   - kind 4 `diag_fund(i,j)`     : `a = i`, `b = j` fundamental — a δ^{ij} carrying a *per-component*
+///                                   dressing, i.e. the diagonal insertion `diag(D_0..D_{N-1})`
+///   - kind 5 `diag_adj(a,b)`      : `a,b` adjoint — a δ^{ab} carrying a per-component adjoint
+///                                   dressing, i.e. `diag(D_0..D_{N²−2})`
 ///
 /// Kinds 4/5 are the *group-diagonal dressing* insertions: instead of folding to a constant, a net
-/// carrying them folds (via @ref sun_value_dressed) to a polynomial `Σ_a c_a D^{dr}_a` over the
-/// per-component runtime dressing symbols. The `dr` field is `-1` for the plain (kinds 0–3) factors.
-/// @brief The structure a @ref SUNFac selects. Underlying values are pinned (they used to be raw
-///        `int` literals 0–5 and are relied upon nowhere outside this header, but pinning keeps the
-///        switch/order stable and self-documenting).
+/// carrying them folds (via @ref sun_value_dressed) to a polynomial `Σ_a c_a D_a` over named runtime
+/// dressing symbols. The per-component dressing is carried by @ref SUNFac::comp2dr: entry `v` is the
+/// dressing-id for component `v`, or `-1` to *drop* that component (it contributes nothing). This lets
+/// the front-end dress only selected components (e.g. the Cartan directions of a condensate) and drop
+/// the rest — no dead terms. `comp2dr` is empty for the plain (kinds 0–3) factors.
+/// @brief The structure a @ref SUNFac selects. Underlying values are pinned to `int` literals 0–5:
+///        relied upon nowhere outside this header, but pinning keeps the switch/order stable and
+///        self-documenting.
 enum class SUNFacKind : int {
   DeltaAdj = 0,  ///< `δ^{ab}` (adjoint Kronecker)
   F = 1,         ///< `f^{abc}` (structure constant)
@@ -73,23 +77,22 @@ struct SUNFac {
   SUNFacKind kind; ///< which structure (see @ref SUNFacKind and the table above)
   int g;        ///< group rank `N` (3 colour, 2 flavour, …)
   int a, b, c;  ///< adjoint/fundamental index labels (see kind table above; `c` unused for kinds 0/3/4/5)
-  int dr = -1;  ///< per-component dressing id (kinds 4/5 only; `-1` otherwise)
+  std::vector<int> comp2dr; ///< kinds 4/5 only: per-component dressing-id (`-1` = drop); empty otherwise
 };
 /// @brief A fully-contracted SU(N) colour/flavour network (every label appears exactly twice).
 using SUNNet = std::vector<SUNFac>;
 
-/// @brief One monomial of a dressed SU(N) value: a constant times a product of per-component
-///        dressing symbols.
+/// @brief One monomial of a dressed SU(N) value: a constant times a product of named dressing symbols.
 ///
-/// `dress` is a sorted list of `(dr, component)` pairs — each names the value `D^{dr}_{component}`
-/// of a per-component dressing (kind-4/5 factor). An empty `dress` is a plain constant. The codegen
-/// emits the dressing symbol as the array access `name[component](scale)`.
+/// `dress` is a sorted list of dressing-ids — each names one runtime dressing `D^{dr}` (a kind-4/5
+/// component that survived the fold). A repeated id is a power. An empty `dress` is a plain constant.
+/// The codegen maps each id to a scalar dressing symbol and emits the standard `name(scale)` token.
 struct SUNTerm {
   Cx coeff{1.0, 0.0};
-  std::vector<std::pair<int, int>> dress; ///< sorted (dr, component) pairs
+  std::vector<int> dress; ///< sorted dressing-ids (repetition = power)
 };
-/// @brief A dressed SU(N) value: `Σ_t coeff_t · Π D^{dr}_{component}` (a small polynomial over the
-///        per-component dressing symbols). With no kind-4/5 factor it is a single constant term.
+/// @brief A dressed SU(N) value: `Σ_t coeff_t · Π D^{dr}` (a small polynomial over the named runtime
+///        dressing symbols). With no kind-4/5 factor it is a single constant term.
 using SUNPoly = std::vector<SUNTerm>;
 
 /// @brief Builders for SU(N) colour/flavour-network factors.
@@ -99,16 +102,21 @@ using SUNPoly = std::vector<SUNTerm>;
 /// algebra: `f` (structure constant), `deltaAdj`/`deltaFund` (adjoint/fundamental Kronecker),
 /// `T` (fundamental generator).
 namespace SUN {
-inline SUNFac f(int g, int a, int b, int c) { return {SUNFacKind::F, g, a, b, c, -1}; }   ///< structure constant `f^{abc}`
-inline SUNFac deltaAdj(int g, int a, int b) { return {SUNFacKind::DeltaAdj, g, a, b, -1, -1}; }  ///< adjoint Kronecker `δ^{ab}`
-inline SUNFac T(int g, int a, int i, int j) { return {SUNFacKind::T, g, a, i, j, -1}; }   ///< fundamental generator `(T^a)_{ij}`
-inline SUNFac deltaFund(int g, int i, int j) { return {SUNFacKind::DeltaFund, g, i, j, -1, -1}; } ///< fundamental Kronecker `δ^{ij}`
-/// fundamental diagonal dressing: `δ^{ij}` carrying per-component dressing `dr` (= `diag(D^{dr}_i)`).
-inline SUNFac diagFund(int g, int i, int j, int dr) { return {SUNFacKind::DiagFund, g, i, j, -1, dr}; }
-/// adjoint diagonal dressing: `δ^{ab}` carrying per-component adjoint dressing `dr` (= `diag(D^{dr}_a)`).
-inline SUNFac diagAdj(int g, int a, int b, int dr) { return {SUNFacKind::DiagAdj, g, a, b, -1, dr}; }
+inline SUNFac f(int g, int a, int b, int c) { return {SUNFacKind::F, g, a, b, c, {}}; }   ///< structure constant `f^{abc}`
+inline SUNFac deltaAdj(int g, int a, int b) { return {SUNFacKind::DeltaAdj, g, a, b, -1, {}}; }  ///< adjoint Kronecker `δ^{ab}`
+inline SUNFac T(int g, int a, int i, int j) { return {SUNFacKind::T, g, a, i, j, {}}; }   ///< fundamental generator `(T^a)_{ij}`
+inline SUNFac deltaFund(int g, int i, int j) { return {SUNFacKind::DeltaFund, g, i, j, -1, {}}; } ///< fundamental Kronecker `δ^{ij}`
+/// fundamental diagonal dressing: `δ^{ij}` carrying a per-component dressing map (component → id, `-1` = drop).
+inline SUNFac diagFund(int g, int i, int j, std::vector<int> comp2dr) { return {SUNFacKind::DiagFund, g, i, j, -1, std::move(comp2dr)}; }
+/// adjoint diagonal dressing: `δ^{ab}` carrying a per-component dressing map (component → id, `-1` = drop).
+inline SUNFac diagAdj(int g, int a, int b, std::vector<int> comp2dr) { return {SUNFacKind::DiagAdj, g, a, b, -1, std::move(comp2dr)}; }
 } // namespace SUN
 
+// The whole SU(N) contraction machinery (dynamic matrices, generator/f-table build+cache, group
+// contraction) is internal to the generator: its bodies compile only in the library TU (or a
+// header-only build). A normal consumer sees just the SUNFac/SUNNet types + SUN builders above and
+// links the sun_value* entry points declared below. See core/export.hpp.
+#if NUMTRACER_DEFINE_BODIES
 namespace sun_net_detail {
 
 /// @brief A runtime-sized N×N complex matrix (row-major) for the cold generator path.
@@ -194,10 +202,11 @@ template <int N> SUNDyn seed_from_table() {
 /// Mirrors @ref numtracer::sun::SUNBuilder::build_generators / build_structure_constants exactly, with
 /// `f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)`, using the dynamic matrix.
 inline SUNDyn build_oracle(int N) {
+  if (N < 1) throw std::runtime_error("sun_net: build_oracle requires group rank N >= 1");
   SUNDyn d;
   d.N = N;
-  const int adj = N * N - 1;
-  d.gens.assign(adj < 0 ? 0 : adj, DynMat(N));
+  const int adj = N * N - 1; // ≥ 0 for N ≥ 1 (guarded above)
+  d.gens.assign(adj, DynMat(N));
   const std::complex<double> I{0, 1};
   int idx = 0;
   for (int k = 0; k < N; ++k)
@@ -214,7 +223,7 @@ inline SUNDyn build_oracle(int N) {
     m(l, l) = {-norm * l, 0};
     d.gens[idx++] = m;
   }
-  if (idx != (adj < 0 ? 0 : adj)) throw std::logic_error("sun_net: wrong generator count");
+  if (idx != adj) throw std::logic_error("sun_net: wrong generator count");
   // structure constants below this magnitude are floating-point round-off in the commutator trace,
   // not genuine nonzero entries, so they are dropped.
   constexpr double kStructConstTol = 1e-12;
@@ -252,6 +261,47 @@ inline const SUNDyn &sun_data_for(int N) {
   return it->second;
 }
 
+/// @brief Extract the generator fundamental cycles. Each generator `T^a_{ij}` is a directed edge
+///        rowClass(i) → colClass(j); a closed contraction makes these disjoint cycles, one
+///        `tr(T^{a_1}…T^{a_m})` per cycle. Returns each cycle as its ordered adjoint classes.
+///        Shared verbatim by @ref contract_group and @ref contract_group_dressed.
+inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array<int, 3>> &gens) {
+  std::map<int, std::size_t> rowToGen; // rowClass(i) -> generator index
+  for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
+  std::vector<char> seen(gens.size(), 0);
+  std::vector<std::vector<int>> cycles;
+  for (std::size_t start = 0; start < gens.size(); ++start) {
+    if (seen[start]) continue;
+    std::vector<int> cycle;
+    std::size_t curGen = start;
+    do {
+      seen[curGen] = 1;
+      cycle.push_back(gens[curGen][0]); // adjoint class of this generator
+      auto it = rowToGen.find(gens[curGen][2]); // next generator: its row == this col
+      if (it == rowToGen.end())
+        throw std::runtime_error("sun_net: open fundamental chain (only closed traces supported)");
+      curGen = it->second;
+    } while (curGen != start);
+    cycles.push_back(std::move(cycle));
+  }
+  return cycles;
+}
+
+/// @brief The product of generator traces `∏_cycles tr(T^{a_1}…T^{a_m})` for a fully-pinned adjoint
+///        assignment @p classVal (class → component `0..Adim-1`). Shared by both contractions.
+inline Cx loop_prod(const SUNDyn &dat, const std::vector<std::vector<int>> &cycles,
+                    const std::map<int, int> &classVal) {
+  Cx prod{1.0, 0.0};
+  for (const auto &cycle : cycles) {
+    DynMat m = dat.gens[classVal.at(cycle[0])];
+    for (std::size_t k = 1; k < cycle.size(); ++k)
+      m = dmatmul(m, dat.gens[classVal.at(cycle[k])]);
+    const std::complex<double> tr = dtrace(m);
+    prod = prod * Cx{tr.real(), tr.imag()};
+  }
+  return prod;
+}
+
 /// @brief Contract a single-group network (all factors share rank `N`) to its scalar value.
 ///
 /// Generalises the adjoint-only union-find + sparse-`f`-backtracking to also handle fundamental
@@ -279,6 +329,7 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
     maxlbl = std::max({maxlbl, f->a, f->b});
     if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) maxlbl = std::max(maxlbl, f->c);
   }
+  if (maxlbl < 0) return Cx{1.0, 0.0}; // empty colour net: no factor ⇒ identity (avoids UnionFind(-1))
   UnionFind uf(maxlbl);
   auto find = [&](int x) { return uf.find(x); };
   for (const SUNFac *f : net)
@@ -332,40 +383,9 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
     if (!fClasses.count(c)) genOnly.push_back(c);
 
   // ---- fundamental-cycle extraction (generator traces) ----
-  // build the fundamental cycles: each generator is a directed edge rowClass -> colClass; a closed
-  // contraction makes these disjoint cycles. Walk each into an ordered list of adjoint classes —
-  // one tr(T^{a_1}…T^{a_m}) per cycle.
-  std::map<int, std::size_t> rowToGen; // rowClass(i) -> generator index
-  for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
-  std::vector<char> seen(gens.size(), 0);
-  std::vector<std::vector<int>> cycles; // each: ordered adjoint classes of the generators in the loop
-  for (std::size_t start = 0; start < gens.size(); ++start) {
-    if (seen[start]) continue;
-    std::vector<int> cycle;
-    std::size_t curGen = start;
-    do {
-      seen[curGen] = 1;
-      cycle.push_back(gens[curGen][0]); // adjoint class of this generator
-      auto it = rowToGen.find(gens[curGen][2]); // next generator: its row == this col
-      if (it == rowToGen.end())
-        throw std::runtime_error("sun_net: open fundamental chain (only closed traces supported)");
-      curGen = it->second;
-    } while (curGen != start);
-    cycles.push_back(std::move(cycle));
-  }
-
+  const std::vector<std::vector<int>> cycles = extract_cycles(gens);
   // the product of generator traces for a fully-pinned adjoint assignment (`classVal`: class -> 0..Adim-1).
-  auto loopProd = [&](const std::map<int, int> &classVal) -> Cx {
-    Cx prod{1.0, 0.0};
-    for (const auto &cycle : cycles) {
-      DynMat m = dat.gens[classVal.at(cycle[0])];
-      for (std::size_t k = 1; k < cycle.size(); ++k)
-        m = dmatmul(m, dat.gens[classVal.at(cycle[k])]);
-      const std::complex<double> tr = dtrace(m);
-      prod = prod * Cx{tr.real(), tr.imag()};
-    }
-    return prod;
-  };
+  auto loopProd = [&](const std::map<int, int> &classVal) { return loop_prod(dat, cycles, classVal); };
 
   // dense sum over the gen-only adjoint classes (after the f-classes are pinned).
   Cx total{0.0, 0.0};
@@ -407,7 +427,7 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
 
 // ---- SUNPoly helpers (dressed contraction) --------------------------------------------------
 /// @brief Add `c · Π D_{dress}` into `p`, merging into an existing term with the same dress key.
-inline void poly_add_term(SUNPoly &p, Cx c, std::vector<std::pair<int, int>> key) {
+inline void poly_add_term(SUNPoly &p, Cx c, std::vector<int> key) {
   if (c.re == 0.0 && c.im == 0.0) return; // adding 0 changes nothing
   std::sort(key.begin(), key.end());
   for (auto &t : p)
@@ -419,7 +439,7 @@ inline SUNPoly poly_mul(const SUNPoly &a, const SUNPoly &b) {
   SUNPoly r;
   for (const auto &s : a)
     for (const auto &t : b) {
-      std::vector<std::pair<int, int>> key;
+      std::vector<int> key;
       key.reserve(s.dress.size() + t.dress.size());
       key.insert(key.end(), s.dress.begin(), s.dress.end());
       key.insert(key.end(), t.dress.begin(), t.dress.end());
@@ -429,14 +449,16 @@ inline SUNPoly poly_mul(const SUNPoly &a, const SUNPoly &b) {
 }
 
 /// @brief Dressed single-group contraction: like @ref contract_group but folds **group-diagonal
-///        dressing** factors (kinds 4/5) into a @ref SUNPoly `Σ_a c_a D^{dr}_a` instead of one number.
+///        dressing** factors (kinds 4/5) into a @ref SUNPoly `Σ_a c_a D_a` instead of one number.
 ///
-/// A `diag_adj`/`diag_fund` factor is a δ that also pins a per-component dressing on its (closed)
-/// index class: a diag-dressed *closed loop* becomes `Σ_a Π D^{dr}_a` (replacing `δ^{aa}=N²−1` /
+/// A `diag_adj`/`diag_fund` factor is a δ that also pins a per-component dressing map (@ref
+/// SUNFac::comp2dr, component → dressing-id, `-1` = drop) on its (closed) index class: a diag-dressed
+/// *closed loop* becomes `Σ_a Π D_a` over the components its factors keep (replacing `δ^{aa}=N²−1` /
 /// `δ^{ii}=N`); a diag-dressed *adjoint index that is summed/pinned* by the `f`/generator algebra
-/// attaches the tag `(dr, value)` to each assignment's contribution. The plain (kinds 0–3) algebra
-/// is identical to @ref contract_group, so a net with no diag factor yields a single constant term
-/// equal to `contract_group` (the @ref sun_value_dressed gate routes such nets to the fast path).
+/// attaches each factor's `comp2dr[value]` to that assignment's contribution (and drops the assignment
+/// when any factor drops that value). The plain (kinds 0–3) algebra is identical to @ref contract_group,
+/// so a net with no diag factor yields a single constant term equal to `contract_group` (the @ref
+/// sun_value_dressed gate routes such nets to the fast path).
 ///
 /// A per-component *fundamental* dressing on a **generator** line (a `diag_fund` whose index is also
 /// a generator row/col) is not yet supported and throws — the flavour use case is a generator-free
@@ -451,6 +473,9 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     maxlbl = std::max({maxlbl, f->a, f->b});
     if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) maxlbl = std::max(maxlbl, f->c);
   }
+  // empty net: no factor ⇒ constant-1 polynomial (avoids UnionFind(-1)). In practice unreachable —
+  // sun_value_dressed routes non-diagonal nets to sun_value_cx — but kept symmetric with contract_group.
+  if (maxlbl < 0) return SUNPoly{SUNTerm{Cx{1.0, 0.0}, {}}};
   UnionFind uf(maxlbl);
   auto find = [&](int x) { return uf.find(x); };
   for (const SUNFac *f : net)
@@ -461,7 +486,9 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
   // ---- classify, recording the per-component dressings sitting on each class ----
   std::set<int> adjClasses, fClasses, genAdjClasses, fundClasses, genFundClasses;
   std::vector<std::array<int, 3>> fTriples, gens;
-  std::map<int, std::vector<int>> adjDiag, fundDiag; // class -> dressing ids
+  // class -> the per-component dressing maps of every diag factor sitting on it. Each map is
+  // component → dressing-id (`-1` = drop that component); the class value is the product over factors.
+  std::map<int, std::vector<const std::vector<int> *>> adjDiag, fundDiag;
   for (const SUNFac *f : net) {
     switch (f->kind) {
     case SUNFacKind::DeltaAdj:
@@ -488,13 +515,13 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     case SUNFacKind::DiagFund: { // diag_fund: δ^{ij} with a per-component fundamental dressing
       const int i = find(f->a);
       fundClasses.insert(i); fundClasses.insert(find(f->b));
-      fundDiag[i].push_back(f->dr);
+      fundDiag[i].push_back(&f->comp2dr);
       break;
     }
     case SUNFacKind::DiagAdj: { // diag_adj: δ^{ab} with a per-component adjoint dressing
       const int a = find(f->a);
       adjClasses.insert(a); adjClasses.insert(find(f->b));
-      adjDiag[a].push_back(f->dr);
+      adjDiag[a].push_back(&f->comp2dr);
       break;
     }
     default: throw std::runtime_error("sun_net: unknown SUNFac kind");
@@ -508,11 +535,19 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
   // ---- closed-loop factors: plain loops fold to a scalar; diag-dressed loops to a Σ_a SUNPoly ----
   double factorScalar = 1.0;
   SUNPoly closedPoly{SUNTerm{Cx{1.0, 0.0}, {}}};
-  auto diagLoop = [](int dim, const std::vector<int> &drs) {
+  // A diag-dressed closed loop `Σ_v Π_factor D^{factor}_v`. Component `v` contributes only if *every*
+  // factor on the loop keeps it (`comp2dr[v] != -1`); a component any factor drops vanishes entirely.
+  auto diagLoop = [](int dim, const std::vector<const std::vector<int> *> &factors) {
     SUNPoly fac;
     for (int v = 0; v < dim; ++v) {
-      std::vector<std::pair<int, int>> key;
-      for (int dr : drs) key.push_back({dr, v});
+      std::vector<int> key;
+      bool drop = false;
+      for (const std::vector<int> *m : factors) {
+        const int dr = (*m)[v];
+        if (dr < 0) { drop = true; break; }
+        key.push_back(dr);
+      }
+      if (drop) continue;
       poly_add_term(fac, Cx{1.0, 0.0}, std::move(key));
     }
     return fac;
@@ -534,49 +569,28 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
   std::vector<int> genOnly;
   for (int c : genAdjClasses)
     if (!fClasses.count(c)) genOnly.push_back(c);
-  std::map<int, std::vector<int>> asgDiag; // diag-dressed adjoint classes whose value is set in the assignment
+  std::map<int, std::vector<const std::vector<int> *>> asgDiag; // diag-dressed adjoint classes pinned in the assignment
   for (const auto &kv : adjDiag)
     if (fClasses.count(kv.first) || genAdjClasses.count(kv.first)) asgDiag[kv.first] = kv.second;
 
-  // ---- fundamental-cycle extraction (generator traces) — identical to contract_group ----
-  std::map<int, std::size_t> rowToGen;
-  for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
-  std::vector<char> seen(gens.size(), 0);
-  std::vector<std::vector<int>> cycles;
-  for (std::size_t start = 0; start < gens.size(); ++start) {
-    if (seen[start]) continue;
-    std::vector<int> cycle;
-    std::size_t curGen = start;
-    do {
-      seen[curGen] = 1;
-      cycle.push_back(gens[curGen][0]);
-      auto it = rowToGen.find(gens[curGen][2]);
-      if (it == rowToGen.end())
-        throw std::runtime_error("sun_net: open fundamental chain (only closed traces supported)");
-      curGen = it->second;
-    } while (curGen != start);
-    cycles.push_back(std::move(cycle));
-  }
-  auto loopProd = [&](const std::map<int, int> &classVal) -> Cx {
-    Cx prod{1.0, 0.0};
-    for (const auto &cycle : cycles) {
-      DynMat m = dat.gens[classVal.at(cycle[0])];
-      for (std::size_t k = 1; k < cycle.size(); ++k)
-        m = dmatmul(m, dat.gens[classVal.at(cycle[k])]);
-      const std::complex<double> tr = dtrace(m);
-      prod = prod * Cx{tr.real(), tr.imag()};
-    }
-    return prod;
-  };
+  // ---- fundamental-cycle extraction (generator traces) — shared with contract_group ----
+  const std::vector<std::vector<int>> cycles = extract_cycles(gens);
+  auto loopProd = [&](const std::map<int, int> &classVal) { return loop_prod(dat, cycles, classVal); };
 
   // ---- assignment sum (sparse f-backtracking + dense gen-only), tagging diag-dressed values ----
   SUNPoly total; // 0
   std::map<int, int> classVal; // adjoint class -> its pinned/summed component value
   auto emit = [&](Cx fProd) {
     const Cx c = fProd * loopProd(classVal);
-    std::vector<std::pair<int, int>> key;
-    for (const auto &kv : asgDiag)
-      for (int dr : kv.second) key.push_back({dr, classVal.at(kv.first)});
+    std::vector<int> key;
+    for (const auto &kv : asgDiag) {
+      const int val = classVal.at(kv.first);
+      for (const std::vector<int> *m : kv.second) {
+        const int dr = (*m)[val];
+        if (dr < 0) return; // this assignment lands on a dropped component ⇒ contributes 0
+        key.push_back(dr);
+      }
+    }
     poly_add_term(total, c, std::move(key));
   };
   auto sumGen = [&](auto &&self, std::size_t gi, Cx fProd) -> void {
@@ -615,13 +629,20 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
 }
 
 } // namespace sun_net_detail
+#endif // NUMTRACER_DEFINE_BODIES
 
+// Public SU(N) entry points: declared always, defined once (library TU / header-only build).
+NUMTRACER_FUNC Cx sun_value_cx(const SUNNet &net);
+NUMTRACER_FUNC double sun_value(const SUNNet &net);
+NUMTRACER_FUNC SUNPoly sun_value_dressed(const SUNNet &net);
+
+#if NUMTRACER_DEFINE_BODIES
 /// @brief Contract a (possibly two-group) SU(N) colour/flavour network to its complex scalar value.
 ///
 /// The factors are partitioned by their group rank `g`; each group has a disjoint label space, so
 /// the value is the product of the per-group contractions. An empty network is the identity (value 1).
 /// Works for any rank `g ≥ 1` (@ref sun_net_detail::contract_group builds the SU(g) data on demand).
-inline Cx sun_value_cx(const SUNNet &net) {
+NUMTRACER_FUNC Cx sun_value_cx(const SUNNet &net) {
   std::set<int> groups;
   for (const SUNFac &f : net) groups.insert(f.g);
   Cx r{1.0, 0.0};
@@ -638,16 +659,16 @@ inline Cx sun_value_cx(const SUNNet &net) {
 ///
 /// Kept returning `double` so existing generator call sites are untouched; adjoint SU(3) colour
 /// nets are real, so taking the real part is exact.
-inline double sun_value(const SUNNet &net) { return sun_value_cx(net).re; }
+NUMTRACER_FUNC double sun_value(const SUNNet &net) { return sun_value_cx(net).re; }
 
 /// @brief Contract a (possibly two-group) SU(N) network carrying **group-diagonal dressings** to a
-///        @ref SUNPoly — `Σ_t coeff_t · Π D^{dr}_{component}`.
+///        @ref SUNPoly — `Σ_t coeff_t · Π D^{dr}`.
 ///
 /// If the net carries no kind-4/5 (diagonal-dressing) factor this returns the single constant term
 /// `{sun_value_cx(net), {}}` — *byte-identical* to the undressed fold, so existing flows are
 /// unaffected. Otherwise each group is contracted with @ref sun_net_detail::contract_group_dressed
 /// and the per-group polynomials are multiplied (disjoint label spaces, so the value factorises).
-inline SUNPoly sun_value_dressed(const SUNNet &net) {
+NUMTRACER_FUNC SUNPoly sun_value_dressed(const SUNNet &net) {
   bool hasDiag = false;
   for (const SUNFac &f : net)
     if (f.kind == SUNFacKind::DiagFund || f.kind == SUNFacKind::DiagAdj) { hasDiag = true; break; }
@@ -664,5 +685,6 @@ inline SUNPoly sun_value_dressed(const SUNNet &net) {
   }
   return r;
 }
+#endif // NUMTRACER_DEFINE_BODIES
 
 } // namespace numtracer::network

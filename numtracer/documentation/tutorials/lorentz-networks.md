@@ -16,7 +16,7 @@ We apply it to the warm-up $p\cdot P(l)\cdot p$ and recover the angular factor $
 #include <vector>
 
 namespace nm = numtracer::numeric;
-namespace inv = numtracer::network;
+namespace net = numtracer::network;
 using numtracer::Cx;
 
 // Name the Lorentz axis labels with a single unscoped enum (every label auto-numbered, so all
@@ -44,13 +44,13 @@ int main() {
   // The Lorentz network as one product term (coefficient 1) of three factors. Sharing index mu
   // (p with the projector) and index nu (projector with the second p) sums both Lorentz indices
   // away -> a scalar network: p.P(l).p.
-  nm::NNet net = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}),
+  nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}),
                                        nm::nprojT(mu, nu, {{1.0, 1}}, 0),
                                        nm::nvec(nu, {{1.0, 0}})}}};
 
   // Contract: empty Dirac chain (this is a pure-Lorentz network). The result is one MPoly =
   // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2, a polynomial in the component vars with the 1/l^2 atom.
-  nm::MPoly poly = nm::numeric_value(nsym, inv::DiracNet{}, net, comp, atomDen);
+  nm::MPoly poly = nm::numeric_value(nsym, net::DiracNet{}, lor, comp, atomDen);
 
   // A concrete one-angle frame: p along axis 0, l at angle theta in the 0-1 plane.
   const double Pm = 1.3, l0 = 0.5, l1 = 0.7;
@@ -104,8 +104,8 @@ monomial optionally carrying inverse-propagator **atoms**. For $p\cdot P(l)\cdot
 monomials: $\mathrm{sp}(p,p)$ and $-\mathrm{sp}(p,l)^2\cdot(1/l^2)$ — exactly
 $p^2 - (p\cdot l)^2/l^2 = p^2(1-\cos^2\theta)$. `eval(poly, x, atomVal)` then substitutes the
 component values `x` and the atom values `atomVal` to get the number. The contraction stays bounded
-— it never expands the projector mask into a $2^k$ component blow-up — which is why this engine
-reaches FORM. See [the numeric engine](../internals/numeric-engine.md).
+— it never expands the projector mask into a $2^k$ component blow-up — which is what keeps the
+kernel small and fast. See [the numeric engine](../internals/numeric-engine.md).
 
 Next, [a full diagram](full-diagram.md): the projector contracting the Dirac trace's free legs,
 assembled and validated end to end.

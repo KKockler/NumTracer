@@ -1,5 +1,10 @@
 # Finite temperature
 
+The engine-level point of this page is simple — a momentum can carry an independent temporal
+component, and there are extra projector heads for it — so if the thermal-field-theory vocabulary
+below (*heat bath*, *Matsubara*, *electric/magnetic*) is unfamiliar, skim the
+[Glossary](../getting_started/glossary.md) and focus on the frame and the new builders.
+
 At finite temperature the Euclidean $O(4)$ rotation symmetry breaks to spatial $O(3)$: the
 heat bath singles out a rest frame $u^\mu = (1,0,0,0)$, and the **zeroth (Euclidean-time /
 Matsubara) component** of every momentum becomes physically distinct from the spatial three. In
@@ -41,8 +46,7 @@ so that $P^E + P^M = P^T$, with $\operatorname{tr}P^M = 2$ and $\operatorname{tr
 magnetic projector uses the **spatial** denominator $|\vec k|^2 = k^2 - k_0^2$; the electric one uses
 both $1/k^2$ and $1/|\vec k|^2$. In the numeric engine these are the factors `nprojE` and `nprojM`,
 each carrying the loop momentum and the relevant inverse-atom ids (see
-[`numeric_contract.hpp`](../internals/index.md)); in the dense oracle they are
-`electric_projector` / `magnetic_projector`.
+[`numeric_contract.hpp`](../internals/index.md)).
 
 ## The example: a finite-$T$ quark self-energy
 
@@ -56,7 +60,7 @@ N(p,q,l) = \mathrm{tr}\!\big[\slashed p\,\gamma^\mu\,\slashed q\,\gamma^\nu\big]
 $$
 
 with the external quark at the lowest fermionic Matsubara frequency $p_0 = \pi T$. The runnable
-program is [`tests/test_finiteT_quark.cpp`](https://github.com/) — its core builds the trace through
+program is `numtracer/tests/test_finiteT_quark.cpp` — its core builds the trace through
 the numeric engine and checks it against the closed-form trace identity:
 
 ```cpp
@@ -111,15 +115,14 @@ ntk = NumTrace[net, "Frame" -> frame, "Args" -> {p0, p, l0, l1, cos1}];
   automatically takes the general frame path (the compact unit-loop optimisation applies only to the
   $O(4)$-symmetric vacuum frames).
 * `ntElectricProj` / `ntMagneticProj` are the new projector heads (lowered to `eproj`/`mproj` in the
-  numeric backend and `electric_projector`/`magnetic_projector` in the dense one, each allocating the
-  spatial $1/|\vec q|^2$ env slot automatically).
+  numeric backend, each allocating the spatial $1/|\vec q|^2$ env slot automatically).
 * `ntSPS[a, b]` is the spatial scalar product $\vec a\cdot\vec b$, resolved by the frame as the
   components-`1..3` dot — a scalar coefficient like `ntSP`.
 * `ntVec[q, 0]` — an **integer** second argument — is the scalar component $q_0$ (here the temporal /
   Matsubara component), resolved by the frame; a *symbolic* label (`ntVec[q, mu]`) is still the usual
   tensor leg. A FunKit flow's `sps[...]` and `vec[q,0]` import straight through `FromFunKit`.
 
-The generated kernel is validated numeric-vs-dense by the `ftproj_num` test
+The generated kernel is validated by the `ftproj_num` test
 (`tests/gen/gen_ftproj_numeric.wls`).
 
 ```{admonition} Physics dressings

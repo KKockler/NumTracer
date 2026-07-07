@@ -1,17 +1,21 @@
-// Validate the NUMERIC backend for the Zq quark wave-function flow vs the Dense oracle (1 angle).
-#include "Zq_num_dense_kernel.hh"
-#include "Zq_num_kernel.hh"
+// Validate the NUMERIC (matrix-product) backend for the QCD Zq quark wave-function flow against the
+// independent FormTracer (FORM) oracle — the two tensor-trace engines computing the SAME quark
+// self-energy loop (1 angle). As for the other vacuum flows the pointwise value can differ by a
+// loop-routing term odd in cos1 that integrates to zero, so the physical check is the cos1-integrated
+// value.
+#include "Zq_form_kernel.hh" // FormTracer oracle (refshim/)
+#include "Zq_num_kernel.hh"  // numeric backend (gen/)
 #include "shim.hpp"
 #include <cmath>
 #include <cstdio>
 #include <random>
 
 int main() {
-  using Dense = DiFfRG::Zq_num_dense_kernel<DiFfRG::ShimRegulator>;
+  using Form = DiFfRG::Zq_form_kernel<DiFfRG::ShimRegulator>;
   using Num = DiFfRG::Zq_num_kernel<DiFfRG::ShimRegulator>;
   DressingSet d;
-  auto cD = [&](double l1, double c1, double p, double k) {
-    return std::real(Dense::kernel(l1, c1, p, k, d.ZA, d.Zq, d.Mq, d.ZAqbq1, d.dtZA, d.dtZq));
+  auto cF = [&](double l1, double c1, double p, double k) {
+    return std::real(Form::kernel(l1, c1, p, k, d.ZA, d.Zq, d.Mq, d.ZAqbq1, d.dtZA, d.dtZq));
   };
   auto cN = [&](double l1, double c1, double p, double k) {
     return std::real(Num::kernel(l1, c1, p, k, d.ZA, d.Zq, d.Mq, d.ZAqbq1, d.dtZA, d.dtZq));
@@ -21,7 +25,7 @@ int main() {
   double pw = 0;
   for (int i = 0; i < 200000; ++i) {
     double l1 = U(rng), c1 = Uc(rng), p = U(rng), k = U(rng);
-    double r = cD(l1, c1, p, k);
+    double r = cF(l1, c1, p, k);
     pw = std::max(pw, std::fabs(cN(l1, c1, p, k) - r) / (1e-300 + std::fabs(r)));
   }
   auto ang = [&](auto fn, double l1, double p, double k) {
@@ -31,15 +35,11 @@ int main() {
   };
   double ie = 0;
   for (double l1 : {0.6, 1.3, 2.4}) for (double p : {0.7, 1.8}) for (double k : {0.5, 1.4}) {
-    double r = ang(cD, l1, p, k);
+    double r = ang(cF, l1, p, k);
     ie = std::max(ie, std::fabs(ang(cN, l1, p, k) - r) / (1e-300 + std::fabs(r)));
   }
-  std::printf("Zq numeric vs dense:  pointwise=%.3e  cos1-integrated=%.3e\n", pw, ie);
-  // Cross-compiler round-off bound: this compares the numeric kernel against the dense oracle in
-  // one binary, so the gate measures FP evaluation-order round-off, not physics. Legal FMA/
-  // reassociation differs by compiler (GCC ~6e-11, clang ~2e-10), so use the documented numeric
-  // tolerance 1e-8 rather than a gratuitously tight bound that one compiler happens to clear.
-  bool ok = pw < 1e-8 && ie < 1e-8;
+  std::printf("Zq numeric vs FORM:  pointwise=%.3e  cos1-integrated=%.3e (physical check)\n", pw, ie);
+  bool ok = ie < 1e-8;
   std::printf(ok ? "ALL TESTS PASSED\n" : "TESTS FAILED\n");
   return ok ? 0 : 1;
 }

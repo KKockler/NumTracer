@@ -32,18 +32,28 @@ The colour factor and the trace $T_{\text{num}}$ are the two pieces NumTracer co
 Read [**Key concepts**](../getting_started/concepts.md) first — it defines how a network is described (indices contract when they share a label; the frame fixes each momentum's components; scalar products are the kernel's symbols).
 ```
 
+```{admonition} Not here for QCD?
+:class: note
+These tutorials use one physics example, but the engine is general. For a domain-neutral starting
+point see [**Bring your own network**](../getting_started/bring-your-own-network.md) (a hello-world
+with no physics vocabulary and the DSL↔C++ dictionary), and keep the
+[**Glossary**](../getting_started/glossary.md) open — every QCD term below (*dressing*, *regulator*,
+*colour*, …) is defined there as *example* vocabulary, not something the engine knows about.
+```
+
 ## Building the programs
 
 To directly compile the programs presented in the tutorials, you can find them in the repository's `Tutorials/` folder. There is a standalone CMake project that consumes NumTracer like any external user would:
 
 ```bash
 cd Tutorials
-cmake .                # configure once
-make -j4               # build every tutorial
-ctest --test-dir build # run them all as a self-checking test suite
+cmake -S . -B build            # configure once
+cmake --build build -j4        # build every tutorial
+ctest --test-dir build         # run them all as a self-checking test suite
 ```
 
-Each page below also gives the one-target command (`make <name>`) and the program's real output.
+Each page below also gives the one-target command
+(`cmake --build build --target <name>`) and the program's real output.
 
 ## The path through these pages
 

@@ -1,17 +1,16 @@
 // DEMONSTRATION + validation — dressing u and d quarks differently WITHIN the SU(2) flavour group.
 //
 // The in-group kernel (gen/gen_flavour_ingroup.wls) is a SINGLE quark loop carrying an SU(2) flavour
-// index whose propagators carry a flavour-DIAGONAL dressing diag(G[0],G[1]); the flavour trace folds
-// (via sun_value_dressed) to Σ_{f∈{u,d}} of the per-flavour dressing product, with the Dirac/colour
-// trace computed ONCE. It must reproduce the separate-per-flavour-diagram kernel flow_flavour_split
-// (gen/gen_flavour_split.wls) EXACTLY: feeding G = {gu, gd}, Gdot = {guDot, gdDot} reproduces the
-// (Gu/Gd, GuDot/GdDot) split kernel. This is an exact equivalence oracle (no dense backend needed):
-// the two completely different codegen paths must agree to round-off.
+// index whose propagators carry a flavour-DIAGONAL dressing diag(Gu, Gd) (components u=1, d=2 named);
+// the flavour trace folds (via sun_value_dressed) to Σ_{f∈{u,d}} of the per-flavour dressing product,
+// with the Dirac/colour trace computed ONCE. It must reproduce the separate-per-flavour-diagram
+// kernel flow_flavour_split (gen/gen_flavour_split.wls) EXACTLY — both kernels now share the same
+// (Gu, Gd, GuDot, GdDot) scalar signature. This is an exact equivalence oracle (no dense backend
+// needed): the two completely different codegen paths must agree to round-off.
 #include "Flavour_ingroup_num_kernel.hh" // in-group (SU(2)-diagonal dressing)   (gen/)
 #include "Flavour_split_num_kernel.hh"   // separate per-flavour diagrams         (gen/)
 #include "shim.hpp"                        // DiFfRG::Fn, ShimRegulator
 
-#include <array>
 #include <cmath>
 #include <cstdio>
 #include <random>
@@ -30,8 +29,6 @@ int main()
   using Split = DiFfRG::Flavour_split_num_kernel<DiFfRG::ShimRegulator>;
 
   const DiFfRG::Fn Gu{&gu}, Gd{&gd}, GuDot{&guDot}, GdDot{&gdDot};
-  // component 0 = u, component 1 = d — matches ntSUNDiagFund's diag(name[0], name[1]).
-  const std::array<DiFfRG::Fn, 2> G{Gu, Gd}, Gdot{GuDot, GdDot};
 
   std::mt19937_64 rng(31337);
   std::uniform_real_distribution<double> U(0.05, 3.0), Uc(-0.999, 0.999);
@@ -40,7 +37,7 @@ int main()
   const int N = 200000;
   for (int i = 0; i < N; ++i) {
     const double l1 = U(rng), c1 = Uc(rng), p = U(rng);
-    const double ig = static_cast<double>(InGroup::kernel(l1, c1, p, G, Gdot));
+    const double ig = static_cast<double>(InGroup::kernel(l1, c1, p, Gu, Gd, GuDot, GdDot));
     const double sp = static_cast<double>(Split::kernel(l1, c1, p, Gu, Gd, GuDot, GdDot));
     maxRel = std::max(maxRel, std::fabs(ig - sp) / (1e-300 + std::fabs(sp)));
     maxAbs = std::max(maxAbs, std::fabs(ig));

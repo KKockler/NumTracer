@@ -112,7 +112,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] := Module[
 
   (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel *)
   MakeNTKernel[ntk, genFile, kernelFile, tracesFile,
-    "Backend" -> "Numeric", "Name" -> name <> "_kernel", "Namespace" -> nsTag,
+    "Name" -> name <> "_kernel", "Namespace" -> nsTag,
     "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor,
     "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams,
     "Constant" -> OptionValue["Constant"],

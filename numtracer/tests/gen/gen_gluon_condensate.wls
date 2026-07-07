@@ -1,17 +1,22 @@
 #!/usr/bin/env wolframscript
 (* DEMONSTRATION — a per-component ADJOINT dressing (the gluon-condensation use case): a loop whose
-   internal line carries an SU(3)-ADJOINT index dressed component-by-component, diag(Z[0],..,Z[7]),
-   instead of the colour-blind δ^{ab}. The adjoint trace folds (via sun_value_dressed) to
-   Σ_{a=0}^{7} (per-component dressing product) — a runtime adjoint-sum token — with the Dirac trace
-   computed ONCE, NOT 8 separate diagrams. This is exactly how a condensed gluon Z_A^a would enter.
+   internal line carries an SU(3)-ADJOINT index dressed only along the CARTAN directions (λ3, λ8),
+   with the other 6 colours dropped — instead of the colour-blind δ^{ab}. The adjoint trace folds
+   (via sun_value_dressed) to Σ over the surviving components of the per-component dressing product —
+   a runtime adjoint-sum token — with the Dirac trace computed ONCE, NOT one diagram per component.
+   This is exactly how a gluon condensed in the Cartan subalgebra (Z_A^{a=3}, Z_A^{a=8}) enters.
 
    Built as a scalar (sigma) two-point from a loop carrying a Dirac index AND an SU(3)-adjoint index
-   (the adjoint slot stands in for the gluon colour), so the adjoint structure exercises the
-   N^2-1 = 8 -dimensional diagonal-dressing codegen path end to end. Two kernels are emitted:
-     * _diag : the adjoint propagators carry ntSUNDiagAdj[3, a, b, ZA, scale]  (per-component);
-     * _plain: the adjoint propagators carry the colour-blind ntSUNDeltaAdj[3, a, b] × ZAflat[scale].
-   compare_gluon_condensate.cpp validates the COLLAPSE: feeding the _diag kernel an array whose 8
-   components are all the same function ZAflat reproduces the _plain kernel exactly (Σ_a Z^2 = 8 Z^2).
+   (the adjoint slot stands in for the gluon colour). Three kernels are emitted, exercising the named
+   / Default-collapse / drop paths of the new spec-based diagonal dressing:
+     * _plain : the adjoint propagators carry the colour-blind ntSUNDeltaAdj[3, a, b] × ZAflat[scale].
+     * _diag  : ntSUNDiagAdj[3, a, b, {3 -> ZA3, 8 -> ZA8, Default -> ZAoff}, scale] — 3 & 8 named
+                (distinct scalar dressings), the other 6 collapsed into a shared ZAoff.
+     * _cartan: ntSUNDiagAdj[3, a, b, {3 -> ZA3, 8 -> ZA8}, scale] — only 3 & 8 survive, the other 6
+                DROP (no dead terms). This is the headline use case.
+   compare_gluon_condensate.cpp validates: (1) COLLAPSE — feeding _diag one function for all of
+   ZA3/ZA8/ZAoff reproduces _plain (Σ over 8 = 8 Z^2); (2) DROP — _cartan equals _diag with ZAoff≡0;
+   (3) per-component independence.
 
    Run from numtracer/:   wolfram -script tests/gen/gen_gluon_condensate.wls *)
 
@@ -60,8 +65,16 @@ mkNet[propAdj_, rdotAdj_] := Module[{d},
   d = UseLorentzLinearity[expr /. {vtx, prop[propAdj], rdot[rdotAdj]}] //. {lf1 -> l1};
   FromFunKit[d]];
 
-(* per-component diagonal dressings ZA[a], ZAdot[a] (the condensed-gluon dressings). *)
-netDiag = mkNet[diagAdj[#1, #2, Global`ZA, #3] &, diagAdj[#1, #2, Global`ZAdot, #3] &];
+(* Cartan-dressed (3 & 8 named, other 6 via a shared Default ZAoff) — covers all 8 components. *)
+specDiag[nm3_, nm8_, off_]  := {3 -> nm3, 8 -> nm8, Default -> off};
+(* Cartan-only: name 3 & 8, DROP the other 6 (no Default). *)
+specCartan[nm3_, nm8_]      := {3 -> nm3, 8 -> nm8};
+netDiag = mkNet[
+  diagAdj[#1, #2, specDiag[Global`ZA3, Global`ZA8, Global`ZAoff], #3] &,
+  diagAdj[#1, #2, specDiag[Global`ZA3dot, Global`ZA8dot, Global`ZAoffdot], #3] &];
+netCartan = mkNet[
+  diagAdj[#1, #2, specCartan[Global`ZA3, Global`ZA8], #3] &,
+  diagAdj[#1, #2, specCartan[Global`ZA3dot, Global`ZA8dot], #3] &];
 (* colour-blind reference: δ^{ab} × a scalar dressing ZAflat / ZAflatDot. *)
 netPlain = mkNet[(aAdj[#1, #2] Global`ZAflat[Sqrt[sp[#3, #3]]]) &,
                  (aAdj[#1, #2] Global`ZAflatDot[Sqrt[sp[#3, #3]]]) &];
@@ -69,15 +82,20 @@ netPlain = mkNet[(aAdj[#1, #2] Global`ZAflat[Sqrt[sp[#3, #3]]]) &,
 frame = NumTracer`propFrame[Global`p, Global`l1, Global`cos1, Global`p1, Global`l1];
 args  = {Global`l1, Global`cos1, Global`p};
 
-ntkDiag  = NumTrace[netDiag,  "Frame" -> frame, "Args" -> args];
-ntkPlain = NumTrace[netPlain, "Frame" -> frame, "Args" -> args];
+ntkDiag   = NumTrace[netDiag,   "Frame" -> frame, "Args" -> args];
+ntkCartan = NumTrace[netCartan, "Frame" -> frame, "Args" -> args];
+ntkPlain  = NumTrace[netPlain,  "Frame" -> frame, "Args" -> args];
 
 MakeNTKernel[ntkDiag, FileNameJoin[{$gen, "gen_gluon_condensate_diag.cpp"}],
   FileNameJoin[{$gen, "Gluon_condensate_diag_kernel.hh"}], FileNameJoin[{$gen, "Gluon_condensate_diag_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Gluon_condensate_diag_kernel", "Namespace" -> "gluon_condensate_diag",
-  "Dressings" -> {Global`ZA, Global`ZAdot}];
+  "Name" -> "Gluon_condensate_diag_kernel", "Namespace" -> "gluon_condensate_diag",
+  "Dressings" -> {Global`ZA3, Global`ZA8, Global`ZAoff, Global`ZA3dot, Global`ZA8dot, Global`ZAoffdot}];
+MakeNTKernel[ntkCartan, FileNameJoin[{$gen, "gen_gluon_condensate_cartan.cpp"}],
+  FileNameJoin[{$gen, "Gluon_condensate_cartan_kernel.hh"}], FileNameJoin[{$gen, "Gluon_condensate_cartan_kernels.hh"}],
+  "Name" -> "Gluon_condensate_cartan_kernel", "Namespace" -> "gluon_condensate_cartan",
+  "Dressings" -> {Global`ZA3, Global`ZA8, Global`ZA3dot, Global`ZA8dot}];
 MakeNTKernel[ntkPlain, FileNameJoin[{$gen, "gen_gluon_condensate_plain.cpp"}],
   FileNameJoin[{$gen, "Gluon_condensate_plain_kernel.hh"}], FileNameJoin[{$gen, "Gluon_condensate_plain_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Gluon_condensate_plain_kernel", "Namespace" -> "gluon_condensate_plain",
+  "Name" -> "Gluon_condensate_plain_kernel", "Namespace" -> "gluon_condensate_plain",
   "Dressings" -> {Global`ZAflat, Global`ZAflatDot}];
-Print["gluon-condensate (per-component ADJOINT dressing) diag + plain kernels generated."];
+Print["gluon-condensate (Cartan-dressed ADJOINT) plain + diag + cartan kernels generated."];

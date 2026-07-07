@@ -1,5 +1,10 @@
 # Colour factors
 
+We start with colour because it is the piece that folds all the way to a *pure number* — no
+momenta, no free indices — so it is the simplest sector to see the engine's "contract and fold"
+in isolation. (If the QCD vocabulary is unfamiliar, the
+[Glossary](../getting_started/glossary.md) defines every term.)
+
 A colour factor in QCD arises through a contraction of SU(N) generators $T^a$ and structure constants $f^{abc}$ with no free indices and no momenta — so it is usually **just a number**, known before any grid point is evaluated. Both quark-self-energy diagrams exchange one gluon, so both carry the same colour structure
 
 $$
@@ -36,8 +41,8 @@ $f^{abc}f^{abc} = 24$.
 #include <cmath>
 #include <cstdio>
 
-using namespace numtracer;
-using namespace numtracer::network;
+using namespace numtracer;          // Cx, approx
+namespace net = numtracer::network; // SUNNet, sun_value_cx, SUN — the same alias the other tutorials use
 
 // A single unscoped enum keeps every colour label distinct (auto-numbered), so the adjoint and
 // fundamental indices never collide (axes contract iff their labels are equal).
@@ -49,12 +54,12 @@ enum {
 int main() {
   // SUN::T(g, a, A, B) = (T^a)_{AB} in SU(g). Sharing the gluon index a sums it; the
   // fundamental labels A -> B -> A close the quark line. Closed: tr(T^a T^a) = (N^2-1)/2.
-  SUNNet trTT = {SUN::T(3, a, A, B), SUN::T(3, a, B, A)};
-  const Cx t = sun_value_cx(trTT); // = 4 for SU(3)
+  net::SUNNet trTT = {net::SUN::T(3, a, A, B), net::SUN::T(3, a, B, A)};
+  const Cx t = net::sun_value_cx(trTT); // = 4 for SU(3)
   const double CF = t.re / 3.0;        // C_F = tr / N = 4 / 3
 
   // f^{abc} f^{abc} = N(N^2-1) = 24 for SU(3). SUN::f(g, a, b, c) = f^{abc}.
-  const Cx ff = sun_value_cx({SUN::f(3, a, b, c), SUN::f(3, a, b, c)});
+  const Cx ff = net::sun_value_cx({net::SUN::f(3, a, b, c), net::SUN::f(3, a, b, c)});
 
   std::printf("tr(T^a T^a)      = %g   (expect 4)\n", t.re);
   std::printf("C_F = tr / N     = %g   (expect 4/3 = %g)\n", CF, 4.0 / 3.0);

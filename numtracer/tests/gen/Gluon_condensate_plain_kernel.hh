@@ -2,7 +2,6 @@
 
 #include "shim.hpp"
 #include "numtracer/sun/sun_data.hpp"
-#include "numtracer/expr/real_cse.hpp"
 #include "Gluon_condensate_plain_kernels.hh"
 
 namespace DiFfRG
@@ -16,7 +15,7 @@ namespace DiFfRG
       using namespace DiFfRG;
       using namespace DiFfRG::compute;
       using namespace numtracer;
-      double fenv[DiFfRG::gluon_condensate_plain::nenv];
+      double fenv[(DiFfRG::gluon_condensate_plain::nenv) > 0 ? (DiFfRG::gluon_condensate_plain::nenv) : 1];
       DiFfRG::gluon_condensate_plain::fill(fenv, l1, cos1, p);
       const auto _interp1 = ZAflat(sqrt(powr<2>(l1)));
       const auto _interp2 = ZAflat(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));

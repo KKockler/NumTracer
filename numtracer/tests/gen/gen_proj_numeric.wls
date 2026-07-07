@@ -28,12 +28,8 @@ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_proj_num.cpp"}],
   FileNameJoin[{$gen, "Proj_num_kernel.hh"}],
   FileNameJoin[{$gen, "Proj_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Proj_num_kernel", "Namespace" -> "proj_num",
+  "Name" -> "Proj_num_kernel", "Namespace" -> "proj_num",
   "Dressings" -> {}];
-
-Print["[gen] Dense oracle ..."];
-MakeNTKernel[ntk, FileNameJoin[{$gen, "Proj_num_dense_kernel.hh"}],
-  "Backend" -> "Dense", "Name" -> "Proj_num_dense_kernel", "Dressings" -> {}];
 
 (* assert the new longitudinal leaf actually reached the emitted generator source (the lproj<...>()
    net-builder leaf lives in the generator .cpp / its net units; the final kernel is straight-line
@@ -42,5 +38,5 @@ gsrc = StringJoin[(Import[#, "Text"] &) /@
    Select[FileNames["gen_proj_num*.cpp", $gen], FileExistsQ]];
 If[! StringContainsQ[gsrc, "lproj<"],
   Print["FAIL: emitted generator source does not contain an lproj<...>() leaf"]; Exit[1]];
-Print["[gen] ok: generator source contains lproj<...>() and longitudinal_projector<> (dense)"];
+Print["[gen] ok: generator source contains the lproj<...>() longitudinal-projector leaf"];
 Print["Projector codegen kernels generated."];

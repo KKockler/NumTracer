@@ -1,5 +1,5 @@
 #!/usr/bin/env wolframscript
-(* Pure-YM ZAcbc (ghost-gluon vertex) via the NUMERIC matrix-product backend, plus the Dense oracle.
+(* Pure-YM ZAcbc (ghost-gluon vertex) via the NUMERIC matrix-product backend (validated against the FORM oracle from gen_zacbc_form.wls).
    This vertex has a diagram with a DISCONNECTED Lorentz network (two index-disjoint trace factors that
    MULTIPLY) — the regression guard for the "components summed instead of multiplied" codegen bug.
    Run from numtracer/:  wolfram -script tests/gen/gen_ym_zacbc_numeric.wls                          *)
@@ -41,11 +41,7 @@ tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_ym_zacbc_num.cpp"}],
   FileNameJoin[{$gen, "ZAcbc_num_kernel.hh"}],
   FileNameJoin[{$gen, "ZAcbc_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZAcbc_num_kernel", "Namespace" -> "zacbc_num",
+  "Name" -> "ZAcbc_num_kernel", "Namespace" -> "zacbc_num",
   "Dressings" -> dress, "AngleDefs" -> spAngles] ];
 Print["[time] Numeric backend (contract+compile+run): ", tN, " s"];
-
-tD = First @ AbsoluteTiming[ MakeNTKernel[ntk, FileNameJoin[{$gen, "ZAcbc_num_dense_kernel.hh"}],
-  "Name" -> "ZAcbc_num_dense_kernel", "Dressings" -> dress, "Backend" -> "Dense", "AngleDefs" -> spAngles] ];
-Print["[time] Dense oracle: ", tD, " s"];
 Print["ZAcbc numeric kernels generated."];

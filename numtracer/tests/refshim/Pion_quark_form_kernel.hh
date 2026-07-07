@@ -1,22 +1,25 @@
 #pragma once
 
-#include "DiFfRG/physics/interpolation.hh"
-#include "DiFfRG/physics/physics.hh"
+#include "shim.hpp"
 
 namespace DiFfRG {
   template<typename _Regulator>
-  class ZA_kernel
+  class Pion_quark_form_kernel
   {
     public:
     using Regulator = _Regulator;
 
-    static KOKKOS_FORCEINLINE_FUNCTION auto kernel(const double& l1, const double& p, const Spline& ZA)
+    static KOKKOS_FORCEINLINE_FUNCTION auto kernel(const double& l1, const double& cos1, const double& p, const double& k)
     {
-      using namespace DiFfRG;using namespace DiFfRG::compute;
-      return 0.;
+      using namespace DiFfRG;using namespace DiFfRG::compute;const auto _interp1 = RF(powr<2>(k), powr<2>(l1));
+      const auto _interp2 = RF(powr<2>(k), powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p));
+      const auto _interp3 = RFdot(powr<2>(k), powr<2>(l1));
+      const auto _den1 = powr<-2>(_interp1 + powr<2>(l1));
+      const auto _den2 = powr<-1>(_interp2 + powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p));
+      return 12. * fma(-1., _den1 * _den2 * _interp3 * powr<4>(l1), fma(_den1, _den2 * _interp3 * cos1 * powr<3>(l1) * p, 0.));
     }
 
-    static KOKKOS_FORCEINLINE_FUNCTION auto constant(const double& p, const Spline& ZA)
+    static KOKKOS_FORCEINLINE_FUNCTION auto constant(const double& p, const double& k)
     {
       using namespace DiFfRG;using namespace DiFfRG::compute;
       return 0.;
@@ -50,4 +53,4 @@ namespace DiFfRG {
       return Regulator::dq2RF(k2, p2);
     }
   };
-} using DiFfRG::ZA_kernel;
+} using DiFfRG::Pion_quark_form_kernel;

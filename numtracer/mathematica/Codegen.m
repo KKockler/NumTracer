@@ -1,8 +1,8 @@
 (* ::Package:: *)
 
-(* Code generation. NumTracer owns ONLY the tensor part — turning each contraction
-   component into an `et` builder chain whose pruned scalar is read out by
-   expr::eval_real. Everything scalar (the dressing/regulator coefficients, CSE,
+(* Code generation. NumTracer owns ONLY the tensor part — contracting each
+   component numerically to a polynomial (MPoly) that is Horner-lowered to a real
+   straight-line kernel. Everything scalar (the dressing/regulator coefficients, CSE,
    powr<n>, the function/class/header boilerplate, clang-format, write-if-changed)
    is delegated to FunKit's mature COEN emitter (CppForm / MakeCppFunction /
    MakeCppClass / MakeCppHeader / WriteCodeToFile), which produces the flat
@@ -13,100 +13,9 @@
    in the Mathematica integrand `Σ coeff_i × trace_i`, which FunKit's CppForm emits
    verbatim (CExpression[a_String] := a) while CSE-ing the coefficients around it. *)
 
-(* The symbolic ET expression-tensor backend (`builder`/`compileT`/`compileDiagram`, emitting
-   `numtracer::et::` calls) has been REMOVED. Generation goes through the numeric matrix-product
-   backend (`builderInv`/`compileTInv` + the generator below); the Dense `numtracer::dense::` oracle
-   path remains for cross-checking. *)
-
-(* ============================================================================ *)
-(* ==== DENSE path: the brute-force numeric backend. Same tensor structure as  === *)
-(* ==== compileT, but emitting `numtracer::dense::` DTensor builder calls that  === *)
-(* ==== contract NUMBERS (all index combinations, no structural-zero pruning).  === *)
-(* ==== The momentum builders read the same `double renv[]` the et path fills;  === *)
-(* ==== a component's scalar is read directly via `.scalar_value().re` (constexpr *)
-(* ==== for a colour/gamma constant, else a runtime const). This is the naive    *)
-(* ==== dense-matrix baseline benchmarked against the pruned et / reduced inv.    *)
-(* ============================================================================ *)
-
-builderDense[ntMetric[mu_, nu_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::metric<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ">()";
-builderDense[ntVec[q_, mu_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::vector<" <> ToString[ids[mu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[mask[q]] <> ">(renv)";
-builderDense[ntTransProj[q_, mu_, nu_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::transverse_projector<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <>
-    ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[mask[q]] <> ", " <> ToString[env[q]["Inv"]] <> ">(renv)";
-builderDense[ntLongProj[q_, mu_, nu_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::longitudinal_projector<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <>
-    ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[mask[q]] <> ", " <> ToString[env[q]["Inv"]] <> ">(renv)";
-builderDense[ntMagneticProj[q_, mu_, nu_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::magnetic_projector<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <>
-    ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[mask[q]] <> ", " <> ToString[env[q]["InvS"]] <> ">(renv)";
-builderDense[ntElectricProj[q_, mu_, nu_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::electric_projector<" <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <>
-    ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[mask[q]] <> ", " <> ToString[env[q]["Inv"]] <>
-    ", " <> ToString[env[q]["InvS"]] <> ">(renv)";
-builderDense[ntSUNf[n_, a_, b_, c_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::f<" <> ToString[n] <> ", " <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ", " <> ToString[ids[c]] <> ">()";
-builderDense[ntSUNDeltaAdj[n_, a_, b_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::delta_adj<" <> ToString[n] <> ", " <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ">()";
-builderDense[ntGamma[mu_, din_, dout_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::gamma_axis<" <> ToString[ids[mu]] <> ", " <> ToString[ids[din]] <> ", " <> ToString[ids[dout]] <> ">()";
-builderDense[ntGamma5[din_, dout_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::gamma5<" <> ToString[ids[din]] <> ", " <> ToString[ids[dout]] <> ">()";
-builderDense[ntDeltaDirac[din_, dout_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::identity<" <> ToString[ids[din]] <> ", " <> ToString[ids[dout]] <> ">()";
-builderDense[ntSUNT[n_, a_, i_, j_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::T<" <> ToString[n] <> ", " <> ToString[ids[a]] <> ", " <> ToString[ids[i]] <> ", " <> ToString[ids[j]] <> ">()";
-builderDense[ntSUNDeltaFund[n_, i_, j_], ids_, env_, mask_, nc_] :=
-  "numtracer::dense::delta_fund<" <> ToString[n] <> ", " <> ToString[ids[i]] <> ", " <> ToString[ids[j]] <> ">()";
-
-scaleStrDense[str_, 1] := str;
-scaleStrDense[str_, 1.] := str;
-scaleStrDense[str_, s_] := "numtracer::dense::scale<numtracer::Cx{" <> ToString[CForm[N[s, 17]]] <> ", 0.0}>(" <> str <> ")";
-wrapContractDense[{one_}] := one;
-wrapContractDense[many_] := "numtracer::dense::contract_all(" <> StringRiffle[many, ", "] <> ")";
-
-compileTDense[e_, ids_, env_, mask_, nc_] := Which[
-  tensorQ[e],
-    {builderDense[e, ids, env, mask, nc], 1},
-  Head[e] === Times,
-    Module[{parts = List @@ e, sc, tn, cs},
-      sc = Select[parts, scalarQ]; tn = Select[parts, ! scalarQ[#] &];
-      cs = compileTDense[#, ids, env, mask, nc] & /@ orderFactors[tn];
-      {wrapContractDense[cs[[All, 1]]], (Times @@ sc) (Times @@ cs[[All, 2]])}],
-  Head[e] === Plus,
-    Module[{cs = compileTDense[#, ids, env, mask, nc] & /@ (List @@ e)},
-      If[! AllTrue[cs[[All, 2]], NumericQ], Message[MakeNTKernel::eagernn, e]; Abort[]];
-      {"numtracer::dense::add_all(" <> StringRiffle[MapThread[scaleStrDense, {cs[[All, 1]], cs[[All, 2]]}], ", "] <> ")", 1}],
-  True, {"", e}];
-
-(* One diagram, dense backend. Same shape as compileDiagram, but the scalar is read
-   straight off the numeric DTensor — no escalar_t/eval_real. When `cplx` (the kernel has
-   imaginary projector/propagator coefficients), the momentum-dependent trace tokens keep
-   their FULL complex value (`.scalar_cplx()`); colour/gamma constants stay real doubles, and
-   the kernel takes the real part of the assembled integrand. *)
-compileDiagramDense[diag_, tag_, frame_, env_, mask_, nc_, cplx_] := Module[{ids = diag["Ids"], coeff, decls = {}, toks = {}},
-  coeff = diag["Coeff"] /. {
-    ntSP[x_, y_] :> resolveComponents[x, frame] . resolveComponents[y, frame],
-    ntSPS[x_, y_] :> Rest[resolveComponents[x, frame]] . Rest[resolveComponents[y, frame]],
-    ntVec[q_, i_Integer] :> resolveComponents[q, frame][[i + 1]]};
-  MapIndexed[Function[{comp, ci},
-    Module[{str, scal, ct, trVar},
-      {str, scal} = compileTDense[Times @@ comp["Factors"], ids, env, mask, nc];
-      coeff *= scal;
-      ct = tag <> "_" <> ToString[ci[[1]] - 1];  trVar = "_tr" <> ct;
-      decls = Join[decls, {
-        Which[
-          (* complex kernel: keep EVERY component complex. The colour factor of a non-abelian
-             vertex diagram (f^{abc} T^b T^c = (iN/2) T^a) is IMAGINARY — taking its real part
-             drops the diagram entirely. Its i pairs with the projector's i to give a real flow. *)
-          cplx && comp["Constant"], "const std::complex<double> " <> trVar <> " = " <> str <> ".scalar_cplx();",
-          comp["Constant"],         "constexpr double " <> trVar <> " = " <> str <> ".scalar_value().re;",
-          cplx,                     "const std::complex<double> " <> trVar <> " = " <> str <> ".scalar_cplx();",
-          True,                     "const double " <> trVar <> " = " <> str <> ".scalar_value().re;"]}];
-      toks = Append[toks, trVar]]], diag["Components"]];
-  {decls, coeff, toks}
-];
+(* Generation goes through the numeric matrix-product backend (`builderInv`/`compileTInv` + the
+   generator below); generated kernels are validated against FormTracer (FORM) oracles in the
+   test suite. *)
 
 (* ============================================================================ *)
 (* ==== INVARIANT-BASIS path: contract in scalar-product symbols, not frame  === *)
@@ -182,7 +91,7 @@ builderInv[ntEpsilon[a_, b_, c_, d_], ids_, env_, mask_, nc_] :=
 
 scaleStrInv[str_, 1] := str;
 scaleStrInv[str_, 1.] := str;
-scaleStrInv[str_, s_] := "sc<numtracer::expr::Lit<numtracer::Cx{" <> cppNum[s] <> ", 0.0}>>(" <> str <> ")";
+scaleStrInv[str_, s_] := "sc<numtracer::Lit<numtracer::Cx{" <> cppNum[s] <> ", 0.0}>>(" <> str <> ")";
 wrapContractInv[{one_}] := one;
 wrapContractInv[many_] := "contract(" <> StringRiffle[many, ", "] <> ")";
 
@@ -231,20 +140,31 @@ mergeColNet[a_, "SUNNet{}"] := a;
 mergeColNet[a_, b_] := "SUNNet{" <> StringDrop[StringDrop[a, 7], -1] <> "," <> StringDrop[StringDrop[b, 7], -1] <> "}";
 
 (* ---- per-component diagonal-dressing registry (ntSUNDiag{Fund,Adj}) ------------------------
-   A diag-dressed group δ carries a runtime per-component dressing `name` (a kernel std::array)
-   evaluated at a kinematic `scale`. colFacG registers each distinct (name, scale) under a small
-   integer dressing id `dr` (baked into the emitted SUN::diag{Fund,Adj}(...,dr) factor). The C++
-   seam then folds the net to a SUNPoly over these ids, and the integrand multiplies in the runtime
-   sum Σ_t coeff_t Π name[comp](scale) via the ntDiagDress(arr,comp,scale) -> arr[comp](scale)
-   helper. Reset per generation. *)
+   A diag-dressed group δ dresses SELECTED components with distinctly-named scalar dressings (e.g.
+   the Cartan directions of a condensate) and DROPS the rest. Its `spec` is a rules list
+   {c1 -> name1, …, Default -> defName}: `ci` are 1-based component indices, `namei` scalar dressing
+   symbols; components with no rule (and no Default) vanish. colFacG registers each distinct
+   (name, scale) leaf under a small integer id `dr` and bakes a per-component id vector
+   (component → dr, -1 = drop) into the emitted SUN::diag{Fund,Adj}(...,{d0,…}) factor. The C++ seam
+   folds the net to a SUNPoly over these ids, and the integrand multiplies in the runtime sum
+   Σ_t coeff_t Π name(scale) — an ordinary scalar-dressing token, no array. Reset per generation. *)
 $diagDrTable = <||>; $diagDrByKey = <||>; $diagDrCounter = 0;
 resetDiagDr[] := ($diagDrTable = <||>; $diagDrByKey = <||>; $diagDrCounter = 0;);
-diagDrId[name_, scale_, dim_, kind_] := Module[{key = {name, scale}},
+diagDrId[name_, scale_] := Module[{key = {name, scale}},
   If[! KeyExistsQ[$diagDrByKey, key],
     $diagDrByKey[key] = $diagDrCounter;
-    $diagDrTable[$diagDrCounter] = <|"Name" -> name, "Scale" -> scale, "Dim" -> dim, "Kind" -> kind|>;
+    $diagDrTable[$diagDrCounter] = <|"Name" -> name, "Scale" -> scale|>;
     $diagDrCounter++];
   $diagDrByKey[key]];
+(* Parse a diag-dressing spec into a per-component id vector of length `dim` (component 0..dim-1;
+   1-based physics index = v+1). Named components get diagDrId[name, scale]; a Default -> name rule
+   fills the rest; unmatched components are -1 (dropped). *)
+diagComp2Dr[spec_, scale_, dim_] := Module[{rules = Flatten[{spec}], named, def},
+  named = Association[Cases[rules, (c_Integer -> nm_) :> (c -> diagDrId[nm, scale])]];
+  def = Cases[rules, (Default -> nm_) :> diagDrId[nm, scale]];
+  def = If[def === {}, -1, First[def]];
+  Table[Lookup[named, v + 1, def], {v, 0, dim - 1}]];
+diagVecStr[vec_] := "{" <> StringRiffle[ToString /@ vec, ","] <> "}";
 
 (* ---- scalar-dressing registry (symbolic dressing collection: ntDressedNum slots) -------------
    Each DISTINCT dressing atom — a maximal non-numeric multiplicative factor in a dressed numerator's
@@ -462,11 +382,12 @@ colFacG[ntSUNDeltaAdj[n_, a_, b_], ids_] :=
   "SUN::deltaAdj(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> ")";
 colFacG[ntSUNT[n_, a_, i_, j_], ids_]      := "SUN::T(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
 colFacG[ntSUNDeltaFund[n_, i_, j_], ids_]  := "SUN::deltaFund(" <> ToString[n] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
-(* per-component diagonal dressings: register the (name, scale) -> dressing id, emit a diag factor. *)
-colFacG[ntSUNDiagFund[n_, i_, j_, name_, scale_], ids_] :=
-  "SUN::diagFund(" <> ToString[n] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> ToString[diagDrId[name, scale, n, "fund"]] <> ")";
-colFacG[ntSUNDiagAdj[n_, a_, b_, name_, scale_], ids_] :=
-  "SUN::diagAdj(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> ToString[diagDrId[name, scale, n^2 - 1, "adj"]] <> ")";
+(* per-component diagonal dressings: parse the spec into a per-component dressing-id vector
+   (component → dr, -1 = drop; 1-based physics indices) and emit a diag factor carrying it. *)
+colFacG[ntSUNDiagFund[n_, i_, j_, spec_, scale_], ids_] :=
+  "SUN::diagFund(" <> ToString[n] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n]] <> ")";
+colFacG[ntSUNDiagAdj[n_, a_, b_, spec_, scale_], ids_] :=
+  "SUN::diagAdj(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n^2 - 1]] <> ")";
 compileColG[e_, ids_] := Module[{parts = If[Head[e] === Times, List @@ e, {e}], sc, tn},
   (* a colour/flavour factor raised to an integer power (e.g. deltaAdjFlav^2 from a CLOSED meson
      loop: delta_adj(a,b)^2 -> the flavour trace N^2-1) must be expanded into repeated SUNNet
@@ -555,8 +476,8 @@ diracTrace[toks_] := Module[{n5 = Count[toks, $g5], gammas = DeleteCases[toks, $
 
 (* expand a Dirac-trace component (factor list) to a pure-Lorentz expression; non-Dirac
    components pass through unchanged. The tr(1)=4 is the explicit leading factor.
-   LEGACY: the inv backend now traces in C++ (compileDirac → network::dirac_value); this symbolic
-   path is kept for the ET/Dense backends and for cross-validation. *)
+   LEGACY: the numeric backend traces in C++ (compileDirac → network::dirac_value); this symbolic
+   path is retained only for cross-validation. *)
 expandDiracComponent[factors_List] := Module[{dir, rest},
   dir = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntDeltaDirac] &];
   rest = DeleteCases[factors, _ntGamma | _ntGamma5 | _ntDeltaDirac];
@@ -862,7 +783,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }\n" <>
     "inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }\n" <>
     "template<class L> struct litco;\n" <>
-    "template<numtracer::Cx C> struct litco<numtracer::expr::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <>
+    "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <>
     "template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }\n";
   (* per net: a colour group is a SUM of sub-terms. invNets[i] = {core_b…} (each a DiracNet literal
      for a gamma branch, or a Lorentz NetVal for a gamma-free branch); invRest[i] = {{rest_b,scal_b}…}
@@ -887,7 +808,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n",
     "#include \"numtracer/codegen/gen.hpp\"\n#include \"numtracer/network/sun_net.hpp\"\n",
     "#include \"numtracer/numeric/numeric_contract.hpp\"\n#include \"numtracer/numeric/numeric_driver.hpp\"\n",
-    "#include \"numtracer/expr/expr.hpp\"\n",
+    "#include \"numtracer/core/lit.hpp\"\n",
     "#include <iostream>\n#include <string>\n#include <utility>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
     "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
     "#include <sstream>\n#include <unordered_map>\n",
@@ -895,7 +816,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "namespace numtracer::network {\n", tmpl, "}\n",
     "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n"];
   unitPre = "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <>
-    "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/expr/expr.hpp\"\n#include <utility>\n" <>
+    "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
     (* dressed nets emit dch<i>()/dsl<i>() builders here (the big DChainTok/DSlot literals — moved OFF
        the single -O1 main TU onto these parallel -O0 units, since a 100k+-char braced-init is ~quadratic
        even at -O0); they need the dressed-token types from numeric_contract.hpp. Non-dressed units don't
@@ -1134,140 +1055,6 @@ ntRuntimeIncludes[runInc_] := If[runInc === None || runInc === "", {}, {runInc}]
    else the given concrete type string (e.g. a consumer's interpolator type). *)
 ntDressType[dressTy_] := If[dressTy === Automatic, "auto", dressTy];
 
-(* ---- direct (single-header) backend, the MakeNTKernel "Dense" path ---------------
-   "Dense" (brute-force numeric DTensor oracle): emits `numtracer::dense::` builder calls read via
-   `.scalar_value().re`, used to cross-check the numeric matrix-product backend. *)
-Options[mkDirectKernel] = {"Name" -> "nt_kernel",
-  "Dressings" -> {}, "ScalarParams" -> {}, "Backend" -> "Dense", "Decorator" -> "static inline", "AngleDefs" -> {},
-  "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {},
-  "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer",
-  "DressingType" -> Automatic, "RegulatorAlias" -> False, "Constant" -> 0.};
-(* "Constant" -> expr (default 0.): loop-independent flat-added term -> body of constant(); see
-   the matching option on mkGenerateKernel / MakeNTKernel. *)
-(* "Decorator" -> "<prefix>": the function prefix emitted on kernel/constant and the regulator
-   wrappers (e.g. "static __host__ __device__ inline" so the kernel is CUDA-device-callable).
-   The default keeps the emitted header byte-identical to before the option existed. *)
-
-(* Single-header kernel emitter for the ET / Dense backends (NOT the build-time generator path —
-   that is mkGenerateKernel). Algorithm:
-     1. unpack the NTKernel `k0` and resolve options (name, dressings, backend, namespaces, decorator).
-     2. rebuild the fundamental-symbol env (`env`/`mask`) by packing each diagram's momentum components,
-        and build the per-symbol fill formulas.
-     3. walk the diagrams (compileDiagram / compileDiagramDense) to collect the kernel-body preamble
-        (the per-component trace declarations) and the integrand `Σ coeff_i × trace_i`.
-     4. hand the preamble + integrand + fill to FunKit's COEN (MakeCppClass) to emit the C++ class with
-        kernel()/constant() methods, and write the header (write-if-changed). *)
-mkDirectKernel[NTKernel[k0_], file_, OptionsPattern[]] := Module[
-  {name, dress, scalarParams, backend, complexQ, args, frame, env, nenv, nc, mask, fills, preamble, integrand,
-   kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, decor, angleDefs, angleDecls,
-   kns, sns, runInc, extraInc, interpTy, k},
-  Needs["FunKit`"];
-  (* The DENSE backend cannot fold an eager dressed sum (it contracts numerically, no runtime-dressing
-     atoms), so if the kernel was built with symbolic dressing collection (ntDressedNum tokens), expand
-     them back to the distributed Dirac structure sum and RE-DISTRIBUTE each diagram (collection OFF) —
-     reproducing exactly what the dense oracle saw before collection. The numeric backend keeps the
-     collected form; only this dense path re-distributes. *)
-  k = If[FreeQ[k0["Diagrams"], _ntDressedNum], k0,
-    <|k0, "Diagrams" -> Flatten[redistDiagram /@ k0["Diagrams"]]|>];
-  name  = OptionValue["Name"];  dress = OptionValue["Dressings"];
-  scalarParams = OptionValue["ScalarParams"];  (* loop-independent scalar doubles threaded into the signature *)
-  angleDefs = OptionValue["AngleDefs"];  (* symbolic kinematic angles (cosl1pj) defined once in the body *)
-  backend = OptionValue["Backend"];  decor = OptionValue["Decorator"];
-  kns = OptionValue["KernelNamespace"];  sns = OptionValue["SupportNamespace"];
-  runInc = OptionValue["RuntimeInclude"];  extraInc = OptionValue["ExtraIncludes"];
-  interpTy = ntDressType[OptionValue["DressingType"]];
-  (* a Dirac-vertex projector carries an `i`: the kernel computes complex intermediates whose
-     SUM is real (FORM shows this). In the dense backend we keep the momentum trace tokens
-     complex and take Re of the assembled integrand. (The et backend is dropped for such
-     vertices — its symbolic type is too big to compile.) *)
-  complexQ = backend === "Dense" && ! FreeQ[k["Diagrams"], Complex];
-  args  = k["Args"];  frame = k["Frame"];  env = k["Env"];  nenv = k["NEnv"];
-  (* Vestigial compile-chain salt: every SU(N) head now carries its own rank N, so the dense/inv
-     builders read it from the head and never consult this positional arg (kept only to avoid
-     re-threading the recursion). *)
-  nc = 0;
-
-  mask = Association @ KeyValueMap[#1 -> frameMask[resolveComponents[#1, frame]] &, env];
-
-  (* Pack renv: each momentum keeps only its structurally-nonzero components (popcount[mask]
-     slots instead of a fixed 4); the 1/q^2 slots follow all component slots. This repack is
-     LOCAL to the Dense path — buildEnv (shared with the numeric backend, which never emits
-     renv) keeps its 4-per-Base layout. The dense builders read the k-th present component (in
-     Lorentz order) from renv[Base+k]; `mask` still carries the Lorentz placement. *)
-  Module[{base = 0, inv},
-    env = Association @ Map[
-      Function[q, q -> <|env[q], "Base" -> With[{b = base}, base += DigitCount[mask[q], 2, 1]; b]|>],
-      Keys[env]];
-    inv = base;
-    env = Association @ Map[
-      Function[q, q -> <|env[q], "Inv" -> If[env[q]["Inv"] === None, None, inv++]|>],
-      Keys[env]];
-    env = Association @ Map[                                  (* spatial 1/|q⃗|² slots (finite-T E/M) *)
-      Function[q, q -> <|env[q], "InvS" -> If[Lookup[env[q], "InvS", None] === None, None, inv++]|>],
-      Keys[env]];
-    nenv = inv];
-
-  (* renv fill: each structurally-nonzero momentum component (packed), then the 1/q^2 slots *)
-  fills = Flatten @ {
-    KeyValueMap[Function[{q, info}, Module[{comps = resolveComponents[q, frame], b = info["Base"], kk = 0},
-      Table[If[comps[[i + 1]] =!= 0 && comps[[i + 1]] =!= 0.,
-        "renv[" <> ToString[b + kk++] <> "] = " <> FunKit`CppForm[comps[[i + 1]]] <> ";", Nothing], {i, 0, 3}]]], env],
-    KeyValueMap[Function[{q, info}, If[info["Inv"] =!= None,
-      "renv[" <> ToString[info["Inv"]] <> "] = 1.0 / (" <> FunKit`CppForm[normSqExpr[q, frame]] <> ");", Nothing]], env],
-    KeyValueMap[Function[{q, info}, If[Lookup[info, "InvS", None] =!= None,
-      "renv[" <> ToString[info["InvS"]] <> "] = 1.0 / (" <> FunKit`CppForm[spatialNormSqExpr[q, frame]] <> ");", Nothing]], env]};
-
-  (* walk the diagrams: collect preamble lines + build the integrand with placeholders.
-     Each diagram is ONE eager-summed contraction per component (no monomial blow-up). *)
-  preamble = {}; integrand = 0;
-  MapIndexed[Function[{diag, di}, Module[{decls, coeff, toks},
-    {decls, coeff, toks} = compileDiagramDense[diag, ToString[di[[1]] - 1], frame, env, mask, nc, complexQ];
-    preamble = Join[preamble, decls];
-    integrand += coeff * Times @@ toks]], k["Diagrams"]];
-  (* complex dense kernel: the integrand is left COMPLEX (a Dirac-vertex projector carries an
-     `i`; the physical flow is its real part). We do NOT take Re in Mathematica — wrapping the
-     CSE'd integrand in Re[] triggers a pathological ComplexExpand/Simplify. Instead the kernel
-     returns std::complex<double> and the caller takes std::real(...) (which also passes a plain
-     double through unchanged, so real kernels are unaffected). *)
-
-  (* kinematic angle defs (kept symbolic in the dressing): emit once as named temporaries, exactly
-     like the Generate path, so a Dense baseline for a symmetric-point flow (cosl1pj symbols) compiles. *)
-  angleDecls = ("const double " <> SymbolName[First[#]] <> " = " <> cppFlat[Last[#]] <> ";") & /@ angleDefs;
-  preamble = StringRiffle[Join[
-    ntSupportUsings[sns],
-    {If[complexQ, "using std::complex;", Nothing],
-     "double renv[" <> ToString[Max[nenv, 1]] <> "] = {};"}, angleDecls, fills, preamble], "\n"];
-
-  mkParam[nm_, ty_] := <|"Name" -> If[StringQ[nm], nm, SymbolName[nm]], "Type" -> ty, "Const" -> True, "Reference" -> True|>;
-  (* scalar doubles (etaPiL, d1V, rhoL, ...) sit between args and dressings, matching the order
-     DiFfRG's integrator forwards them (k, scalars, interpolators); they appear in the kernel /
-     constant BODY (propagator masses, anomalous-dim constants) but never in the fill. *)
-  kernelParams = Join[mkParam[#, "double"] & /@ args, mkParam[#, "double"] & /@ scalarParams, mkParam[#, interpTy] & /@ dress];
-  constParams  = Join[mkParam[#, "double"] & /@ Select[args, # === Global`p || # === Global`k &],
-                      mkParam[#, "double"] & /@ scalarParams,
-                      mkParam[#, interpTy] & /@ dress];
-
-  kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor,
-    "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
-  constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
-
-  classStr = FunKit`MakeCppClass["TemplateTypes" -> {"REG"}, "Name" -> name,
-    "MembersPublic" -> If[TrueQ[OptionValue["RegulatorAlias"]],
-      Prepend[{kernelFn, constFn}, "using Regulator = REG;"], {kernelFn, constFn}],
-    "MembersPrivate" -> {privDefs[decor]}];
-
-  header = FunKit`MakeCppHeader[
-    (* the dense umbrella pulls in the axis planner + dirac_data + sun_data + cx transitively *)
-    "Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/dense/dtensor.hpp"}],
-    "Body" -> ntWrapBody[kns, classStr, name]];
-
-  (* header is already clang-formatted by MakeCppHeader; write-if-changed *)
-  If[FileExistsQ[file] && Import[file, "Text"] === header,
-    Print["unchanged: ", file],
-    Export[file, header, "Text"]; Print["wrote: ", file]];
-  file
-];
-
 (* ---- numeric matrix-product kernel, the MakeNTKernel "Numeric" path: emit the build-time
         generator program + the kernel header that calls its output. ---------------------- *)
 
@@ -1370,6 +1157,23 @@ resolveIncludeDir[] := Module[{envDir, dir, pathsFile},
   dir = FileNameJoin[{$HomeDirectory, ".local", "share", "NumTracer", "include"}];
   If[DirectoryQ[dir], Return[dir]];
   Message[resolveIncludeDir::nodir]; Abort[]];
+
+(* Locate the compiled engine library `libNumTracer.a` for the generator LINK. NumTracer ships as a
+   compiled static library by default: the heavy engine bodies (numeric contraction / SU(N) fold /
+   lowering) are compiled ONCE into this archive, so the emitted generator only parses the declaration
+   headers and links the archive instead of re-instantiating and -O2-optimising the whole engine on
+   every generation run. Searched: the NT_GEN_LIB environment variable (a full path), the installed
+   `<prefix>/lib` sibling of the include dir, and the in-tree `<repo>/numtracer/build` default build
+   dir. Returns the path, or $Failed — in which case the generator falls back to a self-contained
+   header-only compile (`-DNUMTRACER_HEADER_ONLY=1`), which still works but pays the old compile floor. *)
+resolveGenLib[incDir_] := Module[{env, base, cands},
+  env = Environment["NT_GEN_LIB"];
+  If[StringQ[env] && FileExistsQ[env], Return[env]];
+  base = DirectoryName[incDir];   (* <prefix> (installed) or <repo>/numtracer (in-tree): parent of include/ *)
+  cands = {
+    FileNameJoin[{base, "lib", "libNumTracer.a"}],      (* installed layout *)
+    FileNameJoin[{base, "build", "libNumTracer.a"}]};   (* in-tree default build dir *)
+  SelectFirst[cands, FileExistsQ, $Failed]];
 
 (* ---- semantic complexQ: probe whether the imaginary part actually vanishes -------------------
    The syntactic `complexQ = !FreeQ[Diagrams, Complex]` only sees that SOME diagram coefficient carries
@@ -1484,11 +1288,11 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
         True, "RePart"]];
 
 (* ---- group-diagonal dressing fold: SUNPoly via the validated C++ engine ---------------------
-   Each diag-dressed colour-net STRING (carrying SUN::diag{Fund,Adj}(...,dr) factors) is folded by
-   sun_value_dressed in a tiny build-time program (the same emit/compile/run seam as the imaginary
-   probe), returning per net a list of terms {coeffRe, coeffIm, {{dr, component}...}}. Reuses the
-   numeric engine verbatim, so the per-component colour weights are byte-identical to the typed-out
-   SU(N) tables — no Mathematica reimplementation of the group algebra. *)
+   Each diag-dressed colour-net STRING (carrying SUN::diag{Fund,Adj}(...,{d0,…}) factors) is folded
+   by sun_value_dressed in a tiny build-time program (the same emit/compile/run seam as the imaginary
+   probe), returning per net a list of terms {coeffRe, coeffIm, {dr, ...}} (a flat list of dressing
+   ids, repetition = power). Reuses the numeric engine verbatim, so the per-component colour weights
+   are byte-identical to the typed-out SU(N) tables — no Mathematica reimplementation of the algebra. *)
 diagColPolys[colnetStrs_, includeDir_] := Module[
   {cxx = resolveGenCxx[], src, cppFile, bin, rc, out, lines, res = {}, cur = Null, num},
   num[s_] := ToExpression[StringReplace[s, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]];
@@ -1501,7 +1305,7 @@ diagColPolys[colnetStrs_, includeDir_] := Module[
     "    std::printf(\"NET %zu %zu\\n\", n, p.size());\n",
     "    for(const auto& t : p){\n",
     "      std::printf(\"T %.17g %.17g %zu\", t.coeff.re, t.coeff.im, t.dress.size());\n",
-    "      for(const auto& d : t.dress) std::printf(\" %d %d\", d.first, d.second);\n",
+    "      for(int d : t.dress) std::printf(\" %d\", d);\n",
     "      std::printf(\"\\n\"); } }\n  return 0;\n}\n"];
   cppFile = FileNameJoin[{$TemporaryDirectory, "ntdiagpoly.cpp"}];
   bin = StringReplace[cppFile, ".cpp" -> ""];
@@ -1519,7 +1323,7 @@ diagColPolys[colnetStrs_, includeDir_] := Module[
        tk[[1]] === "NET", If[cur =!= Null, AppendTo[res, cur]]; cur = {},
        tk[[1]] === "T",
          Module[{re = num[tk[[2]]], im = num[tk[[3]]], m = ToExpression[tk[[4]]]},
-           AppendTo[cur, {re, im, If[m === 0, {}, Partition[ToExpression /@ tk[[5 ;; 4 + 2 m]], 2]]}]]]],
+           AppendTo[cur, {re, im, If[m === 0, {}, ToExpression /@ tk[[5 ;; 4 + m]]]}]]]],
     {ln, lines}];
   If[cur =!= Null, AppendTo[res, cur]];
   res];
@@ -1540,7 +1344,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run,
    hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor,
    kns, sns, runInc, extraInc, interpTy, nsHome, gc, symDefs = <||>, dmono = {}, atomStrs = {},
-   groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, diagDressDims = <||>,
+   groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {},
    factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
   Needs["FunKit`"];
   (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
@@ -1562,7 +1366,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   ns    = OptionValue["Namespace"] /. Automatic -> ToLowerCase[name];
   nsHome = kns <> "::" <> ns;  (* where the generated trace fns / nenv / fill live *)
   args  = k["Args"];  frame = k["Frame"];  env = k["Env"];
-  (* Vestigial compile-chain salt — see mkDirectKernel: SU(N) heads carry their own rank N. *)
+  (* Vestigial compile-chain salt: every SU(N) head carries its own rank N, so builders read it from
+     the head and never consult this positional arg (kept only to avoid re-threading the recursion). *)
   nc = 0;
   mask  = Association @ KeyValueMap[#1 -> frameMask[resolveComponents[#1, frame]] &, env];
 
@@ -1594,7 +1399,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   hasFund = ! FreeQ[k["Diagrams"], _ntSUNT | _ntSUNDeltaFund];
   (* Dirac VERTEX: projector i + imaginary non-abelian colour (f^abc T^b T^c = (iN/2)T^a). Per
      diagram coeff*colour is real (the i's combine), so we keep the colour constant COMPLEX and
-     take Re of the assembled integrand — exactly the dense treatment. *)
+     take Re of the assembled integrand. *)
   complexQ = ! FreeQ[k["Diagrams"], Complex];
   (* CrossTraceCSE fills a `double tarr[]` via trace_all; a complex trace would be truncated to its
      real part there, so the RePart re/im split's ntIm(tarr[i]) would read 0 and silently drop the
@@ -1639,8 +1444,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           ({str, scal} = compileColG[Times @@ comp["Factors"], diag["Ids"]]; coeff *= scal;
            col = mergeColNet[col, str]),
           (* Non-constant component. The DISCONNECTED components of ONE diagram MULTIPLY (their scalar
-             trace values) — exactly like the dense path's `Times @@ toks` (compileDiagramDense) — they
-             are NOT separate summed diagrams. Collect them so the post-loop assembly can form the
+             trace values `Times @@ toks`) — they are NOT separate summed diagrams. Collect them so
+             the post-loop assembly can form the
              product (see there). Route by structure:
                - any colour (entangled in a Plus, or a top-level T^a × …) or a gamma chain: collect the
                  component's splitColourGroupsInv entries (dirac_value net per colour branch / chunked
@@ -1654,8 +1459,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         diag["Components"]];
       (* ---- assemble the diagram's nets from its non-constant components -----------------------------
          A diagram with K disconnected non-constant components is a PRODUCT of K independent closed
-         scalars (each a Dirac/colour trace or a pure-Lorentz scalar) — exactly the dense path's
-         `coeff * Times @@ toks`. ALL pure-Lorentz components fold into ONE product factor; each
+         scalars (each a Dirac/colour trace or a pure-Lorentz scalar): `coeff * Times @@ toks`.
+         ALL pure-Lorentz components fold into ONE product factor; each
          Dirac/colour component is its own factor. Two regimes:
            - <= 1 non-constant factor: the EXISTING additive path. The single Dirac component's entries
              (colour folded, GlobalCollect-fusible) OR the single combined pure-Lorentz product net is
@@ -1696,7 +1501,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
              contributes ONE additive ANCHOR term = coeff * colv(col) * Π(component group traces).
              Crucially this does NOT force the components' many entries into singletons (which would
              defeat colour-channel fusion and explode the trace count for a four-quark-dressed loop) —
-             each component is exactly ONE trace, mirroring the dense path's per-component scalar. *)
+             each component is exactly ONE trace (one scalar per component). *)
           (factorComps = If[hasLor,
              Append[diracComps,
                {{"SUNNet{}", {#[[1]]}, #[[2]], {{"", 1}}}} &[
@@ -1712,13 +1517,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
            appendRec[{col, {"konst(1.0)"}, coeff, {{"", 1}}, factorIds, None}])]]]], k["Diagrams"]]], " s"];
     (* ---- per-component diagonal dressings (ntSUNDiag{Fund,Adj}) ----------------------------------
        A diagram whose colour net carries a diag factor folds (via the validated C++ engine,
-       sun_value_dressed, run through the build-time seam) to a SUNPoly Σ_t coeff_t Π D^{dr}_{comp}.
-       The per-component dressing values D are RUNTIME (a kernel std::array indexed by the group
-       component), so the colour can't be a compile-time constant baked into the trace: instead we
-       (a) replace the diagram's colour net by the IDENTITY (so the generator folds colv=1 and the
-       trace stays colour-free), and (b) build a runtime token `Σ_t coeff_t Π ntDiagDress[name,comp,
-       scale]` multiplied into the integrand. The Dirac/Lorentz trace is still computed ONCE — the
-       per-component sum is a handful of array lookups, not a diagram per component. *)
+       sun_value_dressed, run through the build-time seam) to a SUNPoly Σ_t coeff_t Π D^{dr}, where
+       each dr names a distinct SCALAR runtime dressing (the surviving/named components; dropped ones
+       vanish from the sum). Since the dressings are runtime, the colour can't be a compile-time
+       constant baked into the trace: instead we (a) replace the diagram's colour net by the IDENTITY
+       (so the generator folds colv=1 and the trace stays colour-free), and (b) build a runtime token
+       `Σ_t coeff_t Π name(scale)` — ordinary scalar-dressing tokens — multiplied into the integrand.
+       The Dirac/Lorentz trace is still computed ONCE, not a diagram per component. *)
     diagTokExpr = Table[1, {Length[colourNets]}];
     dressedIdx = Select[Range[Length[colourNets]], StringContainsQ[colourNets[[#]], "SUN::diag"] &];
     If[dressedIdx =!= {},
@@ -1731,9 +1536,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         polys = diagColPolys[colourNets[[dressedIdx]], incDir];
         MapThread[Function[{d, p},
           diagTokExpr[[d]] = Total[Function[term,
-             (term[[1]] + I term[[2]]) * (Times @@ (Function[dc,
-                Global`ntDiagDress[$diagDrTable[dc[[1]]]["Name"], dc[[2]],
-                   resolveScale[$diagDrTable[dc[[1]]]["Scale"]]]] /@ term[[3]]))] /@ p];
+             (term[[1]] + I term[[2]]) * (Times @@ (Function[dr,
+                $diagDrTable[dr]["Name"][resolveScale[$diagDrTable[dr]["Scale"]]]] /@ term[[3]]))] /@ p];
           colourNets[[d]] = "SUNNet{}"], {dressedIdx, polys}]];
       ntLog["[prof] diagonal-dressed diagrams: ", Length[dressedIdx],
             " (per-component colour-sum folded via sun_value_dressed seam)"]];
@@ -1774,7 +1578,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        _repl), so each group is one collected kinematic trace × its dressing — not a flat polynomial. *)
     (* Sum the ADDITIVE groups only (1..nAdd); factor groups (nAdd+1..) are referenced multiplicatively
        via lorFac. A factored (disconnected) diagram multiplies in its other components' scalars
-       Π traceRef[factor groups] (each computed ONCE, as a separate trace), exactly like the dense
+       Π traceRef[factor groups] (each computed ONCE, as a separate trace): the diagram's
        `coeff * Times @@ component-scalars`. *)
     integrand = Sum[With[{rep = g[[gi, 1]]},
         diagData[[rep + 1]] * If[colToks[[rep + 1]] === "", 1, colToks[[rep + 1]]] *
@@ -1825,11 +1629,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        Join[ntSupportUsings[sns], coreBlock, angleDecls, colDecls, preamble]], "\n"]]];
 
   mkParam[nm_, ty_] := <|"Name" -> If[StringQ[nm], nm, SymbolName[nm]], "Type" -> ty, "Const" -> True, "Reference" -> True|>;
-  (* a PER-COMPONENT dressing (ntSUNDiag{Fund,Adj}) is passed as a std::array<interp, dim> indexed by
-     the group component; a plain dressing keeps the scalar interpolator type. *)
-  diagDressDims = Association[(#["Name"] -> #["Dim"]) & /@ Values[$diagDrTable]];
-  With[{dressTy = Function[nm, If[KeyExistsQ[diagDressDims, nm],
-      "std::array<" <> interpTy <> ", " <> ToString[diagDressDims[nm]] <> ">", interpTy]]},
+  (* every dressing — including the named per-component diagonal dressings (ntSUNDiag{Fund,Adj}) —
+     is an ordinary scalar interpolator kernel parameter. *)
+  With[{dressTy = Function[nm, interpTy]},
     kernelParams = Join[mkParam[#, "double"] & /@ args, mkParam[#, "double"] & /@ scalarParams, mkParam[#, dressTy[#]] & /@ dress];
     constParams  = Join[mkParam[#, "double"] & /@ Select[args, # === Global`p || # === Global`k &],
                         mkParam[#, "double"] & /@ scalarParams,
@@ -1851,7 +1653,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     (* the numeric kernel is flat straight-line arithmetic: the generated trace functions (hdrInc) plus
        the support runtime; no tensor-engine headers. *)
     "Includes" -> Join[extraInc, ntRuntimeIncludes[runInc],
-       {"numtracer/sun/sun_data.hpp", "numtracer/expr/real_cse.hpp", hdrInc}],
+       {"numtracer/sun/sun_data.hpp", hdrInc}],
     "Body" -> ntWrapBody[kns, classStr, name]];
 
   (* emit the generator source (the numeric matrix-product backend is the single generation path). *)
@@ -1884,7 +1686,14 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        codegen runs across cores. A failed unit compile leaves its .o missing -> the link rc is nonzero,
        so the existing rc check catches it. *)
     Module[{tcc, cc, mainObj, unitObjs, pcmd, lcmd, clog = bin <> "_compile.log", cxx = resolveGenCxx[],
-            mainOpt},
+            mainOpt, libPath = resolveGenLib[incDir], useLib, hoDef, libArg},
+      (* Default: link the prebuilt libNumTracer.a (engine bodies compiled once). If it is not found,
+         fall back to a self-contained header-only compile so generation still works (older, slower
+         path — every engine body re-instantiated in the main TU). *)
+      useLib = StringQ[libPath] && FileExistsQ[libPath];
+      hoDef = If[useLib, " ", " -DNUMTRACER_HEADER_ONLY=1 "];
+      libArg = If[useLib, " '" <> libPath <> "'", ""];
+      ntLog["[time]   generator engine: ", If[useLib, "linking " <> libPath, "header-only (libNumTracer.a not found)"]];
       mainObj = bin <> "_main.o";
       unitObjs = Table[bin <> "_u" <> ToString[u - 1] <> ".o", {u, 1, Length[unitFiles]}];
       (* Main-TU optimisation level. The generator runs ONCE (~1 s), so -O2 on it is wasteful — but its
@@ -1905,10 +1714,10 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
          Both phases redirect compiler stdout+stderr to `clog` (compile truncates, link appends) so the
          genfail message can quote the actual g++ diagnostic, not just the exit code. *)
       pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"") & /@ Join[
-          {"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> " -pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"},
-          Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')",
+          {"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"},
+          Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0" <> hoDef <> "-I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')",
             {u, 1, Length[unitFiles]}]], " "] <> " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD > '" <> clog <> "' 2>&1";
-      lcmd = cxx <> " -pthread '" <> mainObj <> "' " <> StringRiffle[("'" <> # <> "'") & /@ unitObjs, " "] <> " -o '" <> bin <> "' >> '" <> clog <> "' 2>&1";
+      lcmd = cxx <> " -pthread '" <> mainObj <> "' " <> StringRiffle[("'" <> # <> "'") & /@ unitObjs, " "] <> libArg <> " -o '" <> bin <> "' >> '" <> clog <> "' 2>&1";
       {tcc, cc} = AbsoluteTiming[Run[pcmd]; Run[lcmd]];
       ntLog["[time]   generator compile (", cxx, ", ", Length[unitFiles], " parallel units + main): ", tcc, " s"];
       If[cc =!= 0,
@@ -1976,7 +1785,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           "MembersPrivate" -> Join[{privDefs[decor]}, extraPriv]];
         header = FunKit`MakeCppHeader[
           "Includes" -> Join[extraInc, ntRuntimeIncludes[runInc],
-             {"numtracer/sun/sun_data.hpp", "numtracer/expr/real_cse.hpp", hdrInc}],
+             {"numtracer/sun/sun_data.hpp", hdrInc}],
           "Body" -> ntWrapBody[kns, classStr, name]]]]];
 
   (* kernel header (write-if-changed). *)
@@ -1986,20 +1795,15 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   kernelFile
 ];
 
-(* ---- MakeNTKernel: the single public kernel emitter. ---------------------------------
-   "Backend" selects the path:
-     "Numeric"  — the matrix-product backend, the single canonical generation path: a build-time
-                  generator program (genFile, + net-builder units + decl header), run to produce the
-                  committed straight-line traces header (tracesFile), and the kernel header
-                  (kernelFile) that fills the fundamental symbols and calls the traces;
-     "Dense"    — brute-force numeric DTensor oracle (the entry-for-entry cross-check).
-   "Dense" emits ONE file; "Numeric" emits THREE. "Backend" -> Automatic (the default) resolves
-   from the argument count (one file -> Dense, three -> Numeric). The retired "ET" (symbolic) and
-   "Generate" (invariant-basis) backends now error. All other options are forwarded to the selected
-   path (see Options[mkDirectKernel] / Options[mkGenerateKernel] for the per-path sets). *)
+(* ---- MakeNTKernel: the public kernel emitter. --------------------------------------
+   MakeNTKernel[ntk, genFile, kernelFile, tracesFile] emits the numeric matrix-product kernel:
+   a build-time generator program (genFile, + net-builder units + decl header), run to produce the
+   committed straight-line traces header (tracesFile), and the kernel header (kernelFile) that fills
+   the fundamental symbols and calls the traces. Options are forwarded to the generator
+   (see Options[mkGenerateKernel] for the set). *)
 
 Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic,
-  "Dressings" -> {}, "ScalarParams" -> {}, "Backend" -> Automatic,
+  "Dressings" -> {}, "ScalarParams" -> {},
   "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True,
   "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True,
   "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>,
@@ -2010,41 +1814,16 @@ Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic,
 
 MakeNTKernel::disconnectmix = "Diagram `1` disconnects into >= 2 Dirac/colour trace components (a \
 product of independent Dirac traces, a genuine >=2-loop structure). The numeric backend handles a \
-single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored, like the \
-dense backend), but does not yet multiply two or more independent Dirac traces; the dense backend does.";
-MakeNTKernel::backend = "Unknown \"Backend\" `1`: use \"Numeric\" (production) or \"Dense\" (oracle).";
-MakeNTKernel::nfiles = "\"Backend\" -> \"`1`\" emits `2`: MakeNTKernel[ntk, `3`, ...].";
-MakeNTKernel::retired = "\"Backend\" -> \"Generate\" (the symbolic invariant-basis path) is RETIRED; \
-use \"Backend\" -> \"Numeric\" (the matrix-product backend, the single canonical generation path).";
-MakeNTKernel::etretired = "\"Backend\" -> \"ET\" (the symbolic expression-tensor path) has been REMOVED; \
-use \"Backend\" -> \"Numeric\" (production) or \"Backend\" -> \"Dense\" (the numeric oracle).";
+single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored), but does \
+not yet multiply two or more independent Dirac traces.";
+MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 
-(* Forward the RESOLVED options (explicit opts first, then MakeNTKernel's own defaults) to the
-   selected worker. Explicit opts win (first match); the defaults carry through anything not
-   passed — so `SetOptions[MakeNTKernel, ...]` (used by the test setups to opt into the shim +
-   the DiFfRG namespace) propagates to the workers without editing every call site. *)
-MakeNTKernel[ntk : NTKernel[_], file_, opts : OptionsPattern[]] := Module[
-  {be = OptionValue["Backend"] /. Automatic -> "Dense"},
-  Which[
-    be === "Dense",
-      mkDirectKernel[ntk, file, "Backend" -> be,
-        Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkDirectKernel]]],
-    be === "Numeric",
-      Message[MakeNTKernel::nfiles, be, "three files", "genFile, kernelFile, tracesFile"]; Abort[],
-    be === "Generate",
-      Message[MakeNTKernel::nfiles, be, "three files", "genFile, kernelFile, tracesFile"]; Abort[],
-    be === "ET", Message[MakeNTKernel::etretired]; Abort[],
-    True, Message[MakeNTKernel::backend, be]; Abort[]]];
+(* Explicit opts win (first match); MakeNTKernel's own defaults carry through anything not passed —
+   so `SetOptions[MakeNTKernel, ...]` (used by the test setups to opt into the shim + the DiFfRG
+   namespace) propagates to the generator without editing every call site. *)
+MakeNTKernel[ntk : NTKernel[_], file_, opts : OptionsPattern[]] := (
+  Message[MakeNTKernel::nfiles]; Abort[]);
 
-MakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[]] := Module[
-  {be = OptionValue["Backend"] /. Automatic -> "Numeric"},
-  Which[
-    be === "Numeric",
-      mkGenerateKernel[ntk, genFile, kernelFile, tracesFile, "NumericContract" -> True,
-        Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkGenerateKernel]]],
-    be === "Generate",
-      Message[MakeNTKernel::retired]; Abort[],
-    be === "ET", Message[MakeNTKernel::etretired]; Abort[],
-    be === "Dense",
-      Message[MakeNTKernel::nfiles, be, "one file", "file"]; Abort[],
-    True, Message[MakeNTKernel::backend, be]; Abort[]]];
+MakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[]] :=
+  mkGenerateKernel[ntk, genFile, kernelFile, tracesFile, "NumericContract" -> True,
+    Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkGenerateKernel]]];

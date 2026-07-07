@@ -23,9 +23,6 @@ ntk  = NumTrace[net, "Frame" -> frame, "Args" -> args];
 
 tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_zq_num.cpp"}], FileNameJoin[{$gen, "Zq_num_kernel.hh"}], FileNameJoin[{$gen, "Zq_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Zq_num_kernel", "Namespace" -> "zq_num", "Dressings" -> dress] ];
+  "Name" -> "Zq_num_kernel", "Namespace" -> "zq_num", "Dressings" -> dress] ];
 Print["[time] Numeric backend: ", tN, " s"];
-tD = First @ AbsoluteTiming[ MakeNTKernel[ntk, FileNameJoin[{$gen, "Zq_num_dense_kernel.hh"}],
-  "Name" -> "Zq_num_dense_kernel", "Dressings" -> dress, "Backend" -> "Dense"] ];
-Print["[time] Dense oracle: ", tD, " s"];
 Print["Zq numeric kernels generated."];

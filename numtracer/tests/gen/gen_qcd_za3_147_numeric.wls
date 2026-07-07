@@ -45,11 +45,7 @@ tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_qcd_za3_147_num.cpp"}],
   FileNameJoin[{$gen, "ZA3_147_num_kernel.hh"}],
   FileNameJoin[{$gen, "ZA3_147_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZA3_147_num_kernel", "Namespace" -> "za3_147_num",
+  "Name" -> "ZA3_147_num_kernel", "Namespace" -> "za3_147_num",
   "Dressings" -> dress, "AngleDefs" -> spAngles] ];
 Print["[time] Numeric backend (contract+compile+run): ", tN, " s"];
-
-tD = First @ AbsoluteTiming[ MakeNTKernel[ntk, FileNameJoin[{$gen, "ZA3_147_num_dense_kernel.hh"}],
-  "Name" -> "ZA3_147_num_dense_kernel", "Dressings" -> dress, "Backend" -> "Dense", "AngleDefs" -> spAngles] ];
-Print["[time] Dense oracle: ", tD, " s"];
 Print["ZA3 147 numeric kernels generated."];

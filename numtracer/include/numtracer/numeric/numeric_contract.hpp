@@ -18,6 +18,7 @@
 /// ready for @ref to_genprog → the shared `gdetail::best_into` CSE/Horner emission.
 #pragma once
 
+#include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/codegen/gen.hpp"   // network::GlobalEnv / GenProg / LMono / gdetail::best_into
 #include "numtracer/network/dirac.hpp" // network::DiracNet / DFac (reused chain representation)
 #include "numtracer/numeric/dpoly.hpp"      // DPoly / DMono (dressing-atom layer)
@@ -123,12 +124,19 @@ namespace numtracer::numeric
 
   } // namespace ndetail
 
+  // Public engine entry points: declared always, defined once (in the library TU, or inline in a
+  // header-only build). See core/export.hpp. Their heavy bodies live in the NUMTRACER_DEFINE_BODIES
+  // regions below so a normal consumer/generator TU only parses the declarations and links the lib.
+  NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chain,
+                                               const std::vector<std::array<MPoly, 4>> &comp);
+
   /// @brief Fold the closed Dirac chain into a tensor over its free gluon legs (the `dgamma` ids).
   ///        For each assignment of the free legs to concrete indices 0..3, build the slashed/free
   ///        γ chain as 4×4 @ref MPoly matrices and take the trace. Returns the free-leg ids and the
   ///        row-major tensor of trace polynomials (one entry per `4^f` assignment).
-  inline ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chain,
-                                       const std::vector<std::array<MPoly, 4>> &comp)
+#if NUMTRACER_DEFINE_BODIES
+  NUMTRACER_FUNC ndetail::Factor numeric_dirac(int nsym, const network::DiracNet &chain,
+                                               const std::vector<std::array<MPoly, 4>> &comp)
   {
     // Algorithm:
     //   1. Walk the chain once: record which tokens are FREE γ legs (open ids, summed below), build the
@@ -189,6 +197,12 @@ namespace numtracer::numeric
       if (d.kind == network::DFac::Gamma || d.kind == network::DFac::Slash) ++ng;
     ndetail::Factor F;
     F.ids = freeLegs;
+    // The free-leg tensor has 4^f entries; `total` is a 32-bit int, so f >= 16 (4^16 = 2^32)
+    // would silently overflow and under-size F.v, corrupting the later index writes. Such a chain
+    // is astronomically large anyway — refuse it loudly rather than miscompute.
+    if (f > 15)
+      throw std::runtime_error("numeric_dirac: Dirac chain has too many free Lorentz legs "
+                               "(4^f index space overflows a 32-bit int at f>=16)");
     int total = 1;
     for (int k = 0; k < f; ++k)
       total *= 4;
@@ -242,13 +256,12 @@ namespace numtracer::numeric
       Su = subB2(mul2(Pa, Qb), mul2(Pb, Qa));
       Sl = subB2(mul2(Qa, Pb), mul2(Qb, Pa));
     };
-    std::vector<int> legComp(f, 0); // concrete index 0..3 assigned to each free leg
-    for (int flat = 0; flat < total; ++flat) {
-      int r = flat;
-      for (int k = f - 1; k >= 0; --k) {
-        legComp[k] = r % 4;
-        r /= 4;
-      }
+    // Fold the whole chain for ONE assignment of the free legs to concrete components (`legComp`),
+    // returning the product's trace tr(m0)+tr(m1). The running product is two 2×2 Weyl blocks (m0,m1)
+    // whose upper/lower roles alternate (`antidiag`) with each block-antidiagonal factor; γ5 and bare
+    // commutators are block-diagonal and never flip the parity. `ng` is even here, so the final product
+    // is block-diagonal and its trace is tr(m0)+tr(m1).
+    auto foldChain = [&](const std::vector<int> &legComp) -> MPoly {
       B2 m0, m1;
       bool started = false, antidiag = true;
       for (std::size_t i = 0; i < chain.size(); ++i) {
@@ -312,11 +325,29 @@ namespace numtracer::numeric
         antidiag = !antidiag;
       }
       // ng (γ-count, γ5 excluded) even → block-diagonal product → trace = tr(m0)+tr(m1).
-      F.v[flat] = m0[0] + m0[3] + m1[0] + m1[3];
+      return m0[0] + m0[3] + m1[0] + m1[3];
+    };
+
+    std::vector<int> legComp(f, 0); // concrete index 0..3 assigned to each free leg
+    for (int flat = 0; flat < total; ++flat) {
+      int r = flat;
+      for (int k = f - 1; k >= 0; --k) {
+        legComp[k] = r % 4;
+        r /= 4;
+      }
+      F.v[flat] = foldChain(legComp);
     }
     return F;
   }
+#endif // NUMTRACER_DEFINE_BODIES
 
+  namespace ndetail
+  {
+    /// Externally referenced helper (test_projector_fusion): declared always, defined below.
+    NUMTRACER_FUNC void fuse_projectors(std::vector<NElem> &e, Cx &coeff);
+  } // namespace ndetail
+
+#if NUMTRACER_DEFINE_BODIES
   namespace ndetail
   {
 
@@ -391,6 +422,17 @@ namespace numtracer::numeric
       return F;
     }
 
+    /// First-seen-ordered union of all Lorentz ids carried by a factor group (duplicates dropped). The
+    /// order matters: it fixes the union-index layout the elimination decodes against.
+    inline std::vector<int> first_seen_union(const std::vector<Factor> &group)
+    {
+      std::vector<int> ids;
+      for (const Factor &F : group)
+        for (int id : F.ids)
+          if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+      return ids;
+    }
+
     /// Merge the factors @p group (all sharing the Lorentz id @p elim) into one, then SUM over @p elim
     /// (0..3) — one step of variable elimination. The result carries the union of the group's ids minus
     /// @p elim. Each factor maps its own slots onto the union positions, so an id repeated within a
@@ -407,17 +449,7 @@ namespace numtracer::numeric
       //   4. Reduce the result tensor in place (unit-constraint + monomial cancellation) so projector
       //      `k⊗k·INV` factors don't bloat the running tensor across a long chain.
       // union of ids (in first-seen order), and `elim`'s position within it.
-      std::vector<int> unionIds;
-      for (const Factor &F : group)
-        for (int id : F.ids) {
-          bool seen = false;
-          for (int u : unionIds)
-            if (u == id) {
-              seen = true;
-              break;
-            }
-          if (!seen) unionIds.push_back(id);
-        }
+      const std::vector<int> unionIds = first_seen_union(group);
       int elimPos = -1;
       for (int p = 0; p < (int)unionIds.size(); ++p)
         if (unionIds[p] == elim) {
@@ -691,7 +723,7 @@ namespace numtracer::numeric
     ///        (`…ClassTrans`) derivation as compact as the bare one: the backend cannot otherwise
     ///        re-cancel the redundant `kk/k²` of shifted lines (their multi-term `k²` denominator is not a
     ///        single monomial — see @ref divThroughMonomialAtoms). Mutates `e` (rebuilt) and `coeff`.
-    inline void fuse_projectors(std::vector<NElem> &e, Cx &coeff)
+    NUMTRACER_FUNC void fuse_projectors(std::vector<NElem> &e, Cx &coeff)
     {
       // cheap early-exit: nothing to fuse without ≥2 projector elements.
       int nproj = 0, maxIdx = -1;
@@ -762,15 +794,28 @@ namespace numtracer::numeric
     }
 
   } // namespace ndetail
+#endif // NUMTRACER_DEFINE_BODIES
 
+  // Public entry points (numeric_value / numeric_value_netval); the dressed variants, to_genprog and
+  // collect_atom_denoms are declared further below, after the dressing types they reference.
+  NUMTRACER_FUNC MPoly numeric_value(int nsym, const network::DiracNet &dirac, const NNet &lorentz,
+                                     const std::vector<std::array<MPoly, 4>> &comp,
+                                     const std::vector<MPoly> &atomDen);
+  NUMTRACER_FUNC MPoly numeric_value_netval(int nsym, const network::DiracNet &dirac,
+                                            const network::NetVal &lor,
+                                            const std::vector<std::array<MPoly, 4>> &comp,
+                                            const std::vector<MPoly> &atomDen,
+                                            const std::vector<std::vector<int>> &units = {});
+
+#if NUMTRACER_DEFINE_BODIES
   /// @brief Contract a diagram (Dirac chain ⊗ Lorentz network) to its scalar trace polynomial.
   /// @param nsym     number of user symbols (MPoly variable count)
   /// @param dirac    the closed Dirac chain (may be empty for a pure-gauge diagram)
   /// @param lorentz  the pure-Lorentz network (metrics / vectors / projectors / Levi-Civita)
   /// @param comp     component table `comp[vid]` = 4 MPoly components of fundamental momentum `vid`
   /// @param atomDen  projector denominators `atomDen[aid] = k²` (for monomial cancellation)
-  inline MPoly numeric_value(int nsym, const network::DiracNet &dirac, const NNet &lorentz,
-                             const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen)
+  NUMTRACER_FUNC MPoly numeric_value(int nsym, const network::DiracNet &dirac, const NNet &lorentz,
+                                     const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen)
   {
     // a component may hold SEVERAL independent spinor loops (e.g. a quark loop + the projection-closed
     // external line, tied only by gluon propagators) — trace each into its own Lorentz tensor; the
@@ -824,9 +869,10 @@ namespace numtracer::numeric
   /// @brief Contract a diagram given the Lorentz part as an inv-backend @ref network::NetVal (so the
   ///        generator reuses the existing net-string emission: `proj`/`met`/`vec`/`epsilon` builders).
   ///        Equivalent to @ref numeric_value but reading `network::Elem` instead of @ref NElem.
-  inline MPoly numeric_value_netval(int nsym, const network::DiracNet &dirac, const network::NetVal &lor,
-                                    const std::vector<std::array<MPoly, 4>> &comp, const std::vector<MPoly> &atomDen,
-                                    const std::vector<std::vector<int>> &units = {})
+  NUMTRACER_FUNC MPoly numeric_value_netval(int nsym, const network::DiracNet &dirac, const network::NetVal &lor,
+                                            const std::vector<std::array<MPoly, 4>> &comp,
+                                            const std::vector<MPoly> &atomDen,
+                                            const std::vector<std::vector<int>> &units)
   {
     // trace each independent spinor loop of the component (see numeric_value); the shared gluon legs
     // contract via the Lorentz net below.
@@ -863,6 +909,7 @@ namespace numtracer::numeric
     result = reduce_units(result, units);
     return divThroughMonomialAtoms(result, atomDen);
   }
+#endif // NUMTRACER_DEFINE_BODIES
 
   // ───────────────────────────── dressed structure sums (symbolic dressing collection) ────────────
   //
@@ -896,6 +943,20 @@ namespace numtracer::numeric
   inline DChainTok dtfix(network::DFac f) { return {false, std::move(f), -1}; }
   inline DChainTok dtslot(int s) { return {true, {network::DFac::Gamma, -1, {}, -1, {}}, s}; }
 
+  // Public entry points that reference the dressing types above.
+  NUMTRACER_FUNC DPoly numeric_value_dressed_netval(int nsym, const std::vector<DChainTok> &chain,
+                                                    const std::vector<DSlot> &slots, const network::NetVal &lor,
+                                                    const std::vector<std::array<MPoly, 4>> &comp,
+                                                    const std::vector<MPoly> &atomDen,
+                                                    const std::vector<std::vector<int>> &units = {});
+  NUMTRACER_FUNC DPoly numeric_value_dressed(int nsym, const std::vector<DChainTok> &chain,
+                                             const std::vector<DSlot> &slots, const NNet &lorentz,
+                                             const std::vector<std::array<MPoly, 4>> &comp,
+                                             const std::vector<MPoly> &atomDen);
+  NUMTRACER_FUNC std::vector<MPoly> collect_atom_denoms(int nsym, const std::vector<network::NetVal> &lors,
+                                                        const std::vector<std::array<MPoly, 4>> &comp);
+
+#if NUMTRACER_DEFINE_BODIES
   namespace ndetail
   {
     /// Enumerate the Cartesian product of slot-structure choices, contract each concrete Dirac chain
@@ -966,11 +1027,11 @@ namespace numtracer::numeric
   ///        dressed-numerator SLOTS, returning the collected @ref DPoly (one term per dressing monomial).
   ///        Reuses @ref numeric_value_netval per structure combination, so the Dirac/Lorentz contraction
   ///        is the exact same validated code path; only the collection over dressing atoms is new.
-  inline DPoly numeric_value_dressed_netval(int nsym, const std::vector<DChainTok> &chain,
-                                            const std::vector<DSlot> &slots, const network::NetVal &lor,
-                                            const std::vector<std::array<MPoly, 4>> &comp,
-                                            const std::vector<MPoly> &atomDen,
-                                            const std::vector<std::vector<int>> &units = {})
+  NUMTRACER_FUNC DPoly numeric_value_dressed_netval(int nsym, const std::vector<DChainTok> &chain,
+                                                    const std::vector<DSlot> &slots, const network::NetVal &lor,
+                                                    const std::vector<std::array<MPoly, 4>> &comp,
+                                                    const std::vector<MPoly> &atomDen,
+                                                    const std::vector<std::vector<int>> &units)
   {
     return ndetail::dress_collect(nsym, chain, slots, [&](const network::DiracNet &d) {
       return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
@@ -978,9 +1039,10 @@ namespace numtracer::numeric
   }
 
   /// @brief Dressed analogue of @ref numeric_value (reading the numeric @ref NNet Lorentz network).
-  inline DPoly numeric_value_dressed(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                                     const NNet &lorentz, const std::vector<std::array<MPoly, 4>> &comp,
-                                     const std::vector<MPoly> &atomDen)
+  NUMTRACER_FUNC DPoly numeric_value_dressed(int nsym, const std::vector<DChainTok> &chain,
+                                             const std::vector<DSlot> &slots, const NNet &lorentz,
+                                             const std::vector<std::array<MPoly, 4>> &comp,
+                                             const std::vector<MPoly> &atomDen)
   {
     return ndetail::dress_collect(nsym, chain, slots,
                                   [&](const network::DiracNet &d) { return numeric_value(nsym, d, lorentz, comp, atomDen); });
@@ -992,8 +1054,8 @@ namespace numtracer::numeric
   ///        and an electric / magnetic projector fills its spatial atom
   ///        `atomDen[invS] = |k⃗|² = Σ_{μ=1..3} comp[μ]²` (component 0 = temporal). The result is sized
   ///        to hold every `inv`/`invS` id seen (others are unused all-zero MPolys).
-  inline std::vector<MPoly> collect_atom_denoms(int nsym, const std::vector<network::NetVal> &lors,
-                                                const std::vector<std::array<MPoly, 4>> &comp)
+  NUMTRACER_FUNC std::vector<MPoly> collect_atom_denoms(int nsym, const std::vector<network::NetVal> &lors,
+                                                        const std::vector<std::array<MPoly, 4>> &comp)
   {
     const auto isProj = [](const network::Elem &e) {
       return e.kind == network::Elem::ProjT || e.kind == network::Elem::ProjL ||
@@ -1028,7 +1090,18 @@ namespace numtracer::numeric
           }
     return atomDen;
   }
+#endif // NUMTRACER_DEFINE_BODIES
 
+  /// @brief Relative noise-prune tolerance: a monomial whose |coefficient| is below this fraction of
+  ///        the largest coefficient is round-off from the numeric frame (a ~10-order gap separates it
+  ///        from physics), so @ref to_genprog drops it. Tuning this changes which monomials survive —
+  ///        validate against the INTEGRATED numeric-vs-FORM error, not a pointwise round-off floor.
+  inline constexpr double kNoisePruneRelTol = 1e-9;
+
+  NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly = false);
+  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
+
+#if NUMTRACER_DEFINE_BODIES
   /// @brief Lower a contracted diagram polynomial into the shared env via the existing CSE + Horner
   ///        back-end (`gdetail::best_into`). User symbols intern as env kind 3 (`var`), surviving
   ///        inverse atoms as kind 1 (`inv`). Returns an @ref network::GenProg (real, or complex when the
@@ -1037,7 +1110,7 @@ namespace numtracer::numeric
   ///        — the caller has proven only `Re(this trace)` is consumed (its assembly coefficient is
   ///        real). `Re(Σ c·mono) = Σ Re(c)·mono` for real monomials, so the imaginary half is dead;
   ///        skipping it avoids computing+returning a `std::complex` whose `.imag()` nobody reads.
-  inline network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly = false)
+  NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly)
   {
     // Prune numerically-zero monomials. A NUMERIC frame fixes the external momenta to concrete
     // components, so exact (analytic) cancellations in the trace surface as tiny residual coefficients
@@ -1048,7 +1121,7 @@ namespace numtracer::numeric
     double maxabs = 0.0;
     for (const auto &[m, c] : p.t)
       maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
-    const double tol = 1e-9 * maxabs;
+    const double tol = kNoisePruneRelTol * maxabs;
     auto keep = [&](const Cx &c) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; };
     bool cplx = false;
     if (!realOnly)
@@ -1080,7 +1153,7 @@ namespace numtracer::numeric
       }
       return monos;
     };
-    expr::rdetail::RBuilder w;
+    network::rdetail::RBuilder w;
     const int reRoot = network::gdetail::best_into(build(false), w);
     if (!cplx) return network::GenProg{std::move(w.ins), reRoot};
     const int imRoot = network::gdetail::best_into(build(true), w);
@@ -1096,7 +1169,7 @@ namespace numtracer::numeric
   ///        list so the shared CSE/Horner (`gdetail::best_into`) collects the dressing factors across
   ///        monomials — FormTracer-parity collection in one trace function. A `DPoly` with a single
   ///        empty dressing monomial reduces to exactly the @ref MPoly path (no `dress` leaves).
-  inline network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false)
+  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
   {
     // PER-DRESSING-CHANNEL noise prune (NOT one global tolerance). A DPoly is
     // Σ_d (dressing-product_d)·(kinematic-poly_d); each channel `d` is reweighted at RUNTIME by its
@@ -1114,7 +1187,7 @@ namespace numtracer::numeric
       double maxabs = 0.0;
       for (const auto &[m, c] : mp.t)
         maxabs = std::max(maxabs, std::max(std::fabs(c.re), std::fabs(c.im)));
-      return 1e-9 * maxabs;
+      return kNoisePruneRelTol * maxabs;
     };
     auto keepAt = [](const Cx &c, double tol) { return std::max(std::fabs(c.re), std::fabs(c.im)) >= tol; };
     bool cplx = false;
@@ -1162,7 +1235,7 @@ namespace numtracer::numeric
       }
       return monos;
     };
-    expr::rdetail::RBuilder w;
+    network::rdetail::RBuilder w;
     const int reRoot = network::gdetail::best_into(build(false), w);
     if (!cplx) return network::GenProg{std::move(w.ins), reRoot};
     const int imRoot = network::gdetail::best_into(build(true), w);
@@ -1170,5 +1243,6 @@ namespace numtracer::numeric
     gp.rootIm = imRoot;
     return gp;
   }
+#endif // NUMTRACER_DEFINE_BODIES
 
 } // namespace numtracer::numeric

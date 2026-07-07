@@ -67,9 +67,7 @@ net = FromFunKit[dressed, "FlavourGroup" -> 2];
 frame = NumTracer`propFrame[Global`p, Global`l1, Global`cos1, Global`p1, Global`l1];
 ntk = NumTrace[net, "Frame" -> frame, "Args" -> {Global`l1, Global`cos1, Global`p, Global`k}];
 
-MakeNTKernel[ntk, FileNameJoin[{$gen, "Pion_quark_dense_kernel.hh"}],
-  "Backend" -> "Dense", "Name" -> "Pion_quark_dense", "Namespace" -> "pion_quark_dense"];
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_pion_quark_num.cpp"}],
   FileNameJoin[{$gen, "Pion_quark_num_kernel.hh"}], FileNameJoin[{$gen, "Pion_quark_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Pion_quark_num_kernel", "Namespace" -> "pion_quark_num"];
-Print["pion->quark-loop->pion Yukawa kernels generated (Dense oracle + numeric)."];
+  "Name" -> "Pion_quark_num_kernel", "Namespace" -> "pion_quark_num"];
+Print["pion->quark-loop->pion Yukawa numeric kernel generated."];

@@ -1,6 +1,6 @@
 #!/usr/bin/env wolframscript
 (* QCD ZA (gluon self-energy, with quark loop) via the NUMERIC matrix-product backend (task #22).
-   Emits the Numeric kernel + a Dense oracle for the comparison test. Run from numtracer/:
+   Emits the Numeric kernel (validated against the FORM oracle from gen_za_form.wls). Run from numtracer/:
      wolfram -script tests/gen/gen_qcd_za_numeric.wls                                             *)
 
 If[Quiet[Needs["FunKit`"]] === $Failed,
@@ -35,11 +35,6 @@ tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_qcd_za_num.cpp"}],
   FileNameJoin[{$gen, "ZA_num_kernel.hh"}],
   FileNameJoin[{$gen, "ZA_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZA_num_kernel", "Namespace" -> "za_num", "Dressings" -> dress] ];
+  "Name" -> "ZA_num_kernel", "Namespace" -> "za_num", "Dressings" -> dress] ];
 Print["[time] Numeric backend (contract+compile+run): ", tN, " s"];
-
-(* Dense oracle for the comparison *)
-tD = First @ AbsoluteTiming[ MakeNTKernel[ntk, FileNameJoin[{$gen, "ZA_num_dense_kernel.hh"}],
-  "Name" -> "ZA_num_dense_kernel", "Dressings" -> dress, "Backend" -> "Dense"] ];
-Print["[time] Dense oracle: ", tD, " s"];
 Print["ZA numeric kernels generated."];

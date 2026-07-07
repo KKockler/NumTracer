@@ -57,7 +57,7 @@ tGen = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$TemporaryDirectory, "gen_qcd_za4_gpu_num.cpp"}],
   FileNameJoin[{$gen, "ZA4_gpu_kernel.hh"}],
   FileNameJoin[{$gen, "ZA4_gpu_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZA4_gpu_kernel", "Namespace" -> "za4_gpu", "Dressings" -> dress,
+  "Name" -> "ZA4_gpu_kernel", "Namespace" -> "za4_gpu", "Dressings" -> dress,
   "AngleDefs" -> spAngles4, "Decorator" -> "static __host__ __device__ inline"] ];
 Print["[time] MakeNTKernel (Numeric) (contract+lower+compile+run generator): ", tGen, " s"];
 Print["ZA4 GPU (__host__ __device__) invariant-basis kernel generated."];

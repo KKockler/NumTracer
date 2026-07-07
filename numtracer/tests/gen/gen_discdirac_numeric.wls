@@ -45,11 +45,7 @@ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_discdirac_num.cpp"}],
   FileNameJoin[{$gen, "Discdirac_num_kernel.hh"}],
   FileNameJoin[{$gen, "Discdirac_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Discdirac_num_kernel", "Namespace" -> "discdirac_num",
+  "Name" -> "Discdirac_num_kernel", "Namespace" -> "discdirac_num",
   "Dressings" -> {}];
-
-Print["[gen] Dense oracle ..."];
-MakeNTKernel[ntk, FileNameJoin[{$gen, "Discdirac_num_dense_kernel.hh"}],
-  "Backend" -> "Dense", "Name" -> "Discdirac_num_dense_kernel", "Dressings" -> {}];
 
 Print["Disconnected Dirac x Lorentz codegen kernels generated."];

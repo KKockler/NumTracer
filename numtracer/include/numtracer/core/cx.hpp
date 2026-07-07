@@ -6,7 +6,7 @@
 /// expression algebra and the tensor entries use this minimal complex type
 /// instead. It is a *structural type* (all members are public and of literal
 /// type), which C++20 lets us pass as a non-type template parameter — that is
-/// what makes a compile-time complex literal such as `expr::Lit<Cx{0,1}>`
+/// what makes a compile-time complex literal such as `numtracer::Lit<Cx{0,1}>`
 /// possible. This header is foundational and intentionally has no dependency on
 /// the Lorentz/Dirac/SU(N) sector headers.
 #pragma once
@@ -17,7 +17,7 @@ namespace numtracer
   /// @brief A complex number with `double` components, fully usable at compile time.
   ///
   /// Defined as a structural type so a `Cx` value can appear as a non-type template
-  /// parameter (see @ref numtracer::expr::Lit). Only addition and multiplication are
+  /// parameter (see @ref numtracer::Lit). Only addition and multiplication are
   /// provided, which is all the expression algebra needs.
   struct Cx {
     double re = 0; ///< Real part.

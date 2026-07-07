@@ -40,12 +40,8 @@ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_ftproj_num.cpp"}],
   FileNameJoin[{$gen, "FTProj_num_kernel.hh"}],
   FileNameJoin[{$gen, "FTProj_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "FTProj_num_kernel", "Namespace" -> "ftproj_num",
+  "Name" -> "FTProj_num_kernel", "Namespace" -> "ftproj_num",
   "Dressings" -> {}];
-
-Print["[gen] Dense oracle ..."];
-MakeNTKernel[ntk, FileNameJoin[{$gen, "FTProj_num_dense_kernel.hh"}],
-  "Backend" -> "Dense", "Name" -> "FTProj_num_dense_kernel", "Dressings" -> {}];
 
 (* assert the new finite-T projector leaves reached the emitted generator source (the eproj/mproj
    net-builder leaves live in the generator .cpp / its net units; the final kernel is straight-line
@@ -54,8 +50,5 @@ gsrc = StringJoin[(Import[#, "Text"] &) /@
    Select[FileNames["gen_ftproj_num*.cpp", $gen], FileExistsQ]];
 If[! (StringContainsQ[gsrc, "eproj<"] && StringContainsQ[gsrc, "mproj<"]),
   Print["FAIL: emitted generator source missing eproj<...>() / mproj<...>() leaves"]; Exit[1]];
-dsrc = Import[FileNameJoin[{$gen, "FTProj_num_dense_kernel.hh"}], "Text"];
-If[! (StringContainsQ[dsrc, "electric_projector<"] && StringContainsQ[dsrc, "magnetic_projector<"]),
-  Print["FAIL: dense kernel missing electric_projector<> / magnetic_projector<>"]; Exit[1]];
-Print["[gen] ok: eproj/mproj (numeric) and electric/magnetic_projector (dense) present."];
+Print["[gen] ok: eproj/mproj net-builder leaves present in the numeric generator source."];
 Print["Finite-T projector codegen kernels generated."];

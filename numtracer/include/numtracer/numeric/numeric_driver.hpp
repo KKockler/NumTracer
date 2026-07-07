@@ -43,12 +43,17 @@ inline std::vector<network::GenProg> run_numeric(int nsym, const std::vector<Num
 ///        and no inverse atoms). Powers are emitted as repeated multiplication.
 inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &symNames) {
   if (p.t.empty()) return "0.0";
+  if ((int)symNames.size() < p.nsym)
+    throw std::runtime_error("mpoly_to_cpp: symNames shorter than the polynomial's symbol count");
   std::ostringstream os;
   os.setf(std::ios::scientific);
   os.precision(17);
+  // an imaginary part above this is a genuine complex coefficient (not round-off): this renderer is
+  // for real-only expressions (projector denominators / component formulas), so it rejects those.
+  constexpr double kRealCoeffTol = 1e-12;
   bool first = true;
   for (const auto &[m, c] : p.t) {
-    if (std::abs(c.im) > 1e-12)
+    if (std::abs(c.im) > kRealCoeffTol)
       throw std::runtime_error("mpoly_to_cpp: complex coefficient where a real expression was expected");
     if (!m.atoms.empty())
       throw std::runtime_error("mpoly_to_cpp: monomial carries an inverse atom (not a plain expression)");

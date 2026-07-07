@@ -13,6 +13,7 @@
 /// `MakeNTKernel` — the generated code itself is agnostic to which one supplies the names.
 #pragma once
 
+#include <climits> // INT_MIN (powr exponent guard)
 #include <cmath>
 #include <complex>
 
@@ -36,8 +37,10 @@ namespace numtracer
     {
       if constexpr (n == 0)
         return NumberType(1.);
-      else if constexpr (n < 0)
+      else if constexpr (n < 0) {
+        static_assert(n != INT_MIN, "powr: exponent INT_MIN cannot be negated"); // -n would overflow
         return NumberType(1.) / powr<-n, NumberType>(x);
+      }
       else if constexpr (n == 1)
         return x;
       else if constexpr (n % 2 == 0)

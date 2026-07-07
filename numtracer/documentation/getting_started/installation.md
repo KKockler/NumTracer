@@ -11,8 +11,19 @@ Wolfram's application path.
   compiler's constexpr evaluation budget; the exported
   `NumTracer::constexpr_budget` target (see below) raises the limits.
 * CMake ≥ 3.20.
-* Optional, for the Mathematica codegen: a Wolfram installation
-  (`wolframscript`) and [FunKit](https://github.com/satfra/FunKit).
+* Optional, only for the Mathematica code generator: a Wolfram installation
+  (`wolframscript`). [FunKit](https://github.com/satfra/FunKit) is an *optional*
+  importer — you can hand-build DSL networks without it. **FORM is not required**
+  to use NumTracer or to generate your own kernels; it is used only when
+  regenerating the project's own reference-test oracles.
+
+```{admonition} Two usage paths — what each needs
+:class: tip
+**C++ API** (the whole engine): header-only, needs *nothing but a C++20 compiler* — no Wolfram, no
+FunKit, no FORM. **Mathematica DSL** (the code generator): needs only a Wolfram kernel. Everything
+else is optional and specific to the in-repo test flows. See
+[Bring your own network](bring-your-own-network.md).
+```
 
 ## Install
 
@@ -77,7 +88,7 @@ ctest --test-dir numtracer/build
 
 This builds the unit tests (the numeric contraction engine, the Dirac trace, the
 colour fold, the lowering passes), the flow-validation harnesses (each generated
-kernel compared against a FORM or dense numeric oracle over random points), and the
+kernel compared against a FORM oracle over random points), and the
 SU(N) colour-contraction helper, and runs them all through CTest. Tests are built only
 when NumTracer is the top-level project (override with `-DNUMTRACER_BUILD_TESTS=ON/OFF`).
 To run a subset by name:
@@ -96,7 +107,6 @@ ctest --test-dir numtracer/build -R numeric --output-on-failure
 | `NUMTRACER_GPU_TESTS` | `OFF` | CUDA loop-integral integration tests (needs CUDA + GSL) |
 | `NUMTRACER_KOKKOS_TESTS` | `OFF` | Kokkos twins of the GPU integration tests |
 | `NUMTRACER_BUILD_ZA4_147` | `OFF` | the ~15 MB four-gluon 1/4/7 kernel test (needs a locally generated kernel) |
-| `NUMTRACER_BUILD_ZA3_147_DENSE` | `OFF` | the dense ZA3 1/4/7 reproducer + dense timing harnesses |
 | `NumTracer_DOCUMENTATION` | `OFF` | build this documentation site (see below) |
 
 ## Build the documentation

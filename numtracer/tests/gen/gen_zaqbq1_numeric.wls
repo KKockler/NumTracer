@@ -50,7 +50,7 @@ tG = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_zaqbq1_num.cpp"}],
   FileNameJoin[{$gen, "ZAqbq1_num_kernel.hh"}],
   FileNameJoin[{$gen, "ZAqbq1_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "ZAqbq1_num_kernel", "Namespace" -> "zaqbq1_num", "Dressings" -> dress,
+  "Name" -> "ZAqbq1_num_kernel", "Namespace" -> "zaqbq1_num", "Dressings" -> dress,
   "AngleDefs" -> spAngles] ];
 Print["[time] NumTracer generation TOTAL (analyse+codegen): ", tA + tG, " s"];
 Print["ZAqbq1 numeric kernel generated."];

@@ -14,7 +14,7 @@
 #include <vector>
 
 namespace nm = numtracer::numeric;
-namespace network = numtracer::network;
+namespace net = numtracer::network;
 using numtracer::Cx;
 
 // Name the Lorentz axis labels with a single unscoped enum (every label auto-numbered, so all
@@ -44,14 +44,14 @@ int main() {
   //   nprojT(Mu, Nu, vlc, atom) : P_{Mu Nu}(l) = delta_{Mu Nu} - l_Mu l_Nu / l^2, l = sum coeff*comp(vid).
   // Sharing index mu between the first p and the projector, and index nu between the projector and
   // the second p, sums both Lorentz indices away -> a scalar network: p.P(l).p.
-  nm::NNet net = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}),
+  nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}),
                                        nm::nprojT(mu, nu, {{1.0, 1}}, 0),
                                        nm::nvec(nu, {{1.0, 0}})}}};
 
   // Contract: empty Dirac chain (this is a pure-Lorentz network). The result is one MPoly =
   // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2 = p_0^2 - p_0^2 l_0^2 / l^2 — two monomials in this frame
   // (the second carries the 1/l^2 atom).
-  nm::MPoly poly = nm::numeric_value(nsym, network::DiracNet{}, net, comp, atomDen);
+  nm::MPoly poly = nm::numeric_value(nsym, net::DiracNet{}, lor, comp, atomDen);
 
   // Evaluate the contracted polynomial at concrete values: p along axis 0, l at angle theta.
   const double Pm = 1.3, l0 = 0.5, l1 = 0.7;

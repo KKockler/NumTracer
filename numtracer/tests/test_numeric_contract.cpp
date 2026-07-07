@@ -1,7 +1,7 @@
 // Part B (task #24): correctness gate for the numeric (matrix-product) contraction backend.
 //
 // Validates the engine in et/numeric/* against independent numeric ground truth:
-//   A) all-slash Dirac chains tr(p̸₁…p̸_K), K=2..10, vs the dense oracle chiral_gamma_trace<K>;
+//   A) all-slash Dirac chains tr(p̸₁…p̸_K), K=2..10, vs the chiral γ-trace oracle chiral_gamma_trace<K>;
 //   B) a free-leg chain closed by a metric, tr(γ^μ p̸ γ_μ q̸) = Σ_μ tr(γ^μ p̸ γ^μ q̸), vs a direct
 //      numeric 4×4 contraction;
 //   C) a transverse projector P(k) contracting two free legs — the monomial-k² case (unit-direction
@@ -10,7 +10,7 @@
 //
 // Symbolic momentum components are MPoly variables; the engine result is evaluated at random points
 // and compared to the numeric truth to ≤ 1e-12. Build via the test CMake (adds -I include).
-#include "numtracer/dirac/dense_trace.hpp" // chiral_gamma_trace<K>
+#include "oracle/dense_trace.hpp"          // chiral_gamma_trace<K> (test-only γ-trace oracle)
 #include "numtracer/dirac/dirac_data.hpp"  // kGamma
 #include "numtracer/numeric/numeric_contract.hpp"
 

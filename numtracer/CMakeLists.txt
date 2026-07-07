@@ -56,13 +56,31 @@ if(NOT NUMTRACER_SANITIZE STREQUAL "OFF")
 endif()
 
 # ##############################################################################
-# The library: header-only interface targets (the installable product)
+# The library: a compiled static library by default, header-only on opt-in
 # ##############################################################################
-
-add_library(NumTracer INTERFACE)
+#
+# The build-time engine/generator (numeric contraction, SU(N) folding, lowering/CSE, polynomial
+# arithmetic) is heavy, template/constexpr-dense header code. Compiled once into this static library
+# its bodies no longer re-instantiate and -O2-optimise on every consumer/generator TU — which is what
+# made every generation run pay a multi-second compile floor regardless of kernel size. The engine
+# functions are declared in the headers and defined once in src/numtracer.cpp (see core/export.hpp).
+# This affects only how the engine ships; the kernel it *emits* stays standalone header-only C++.
+add_library(NumTracer STATIC src/numtracer.cpp)
 add_library(NumTracer::NumTracer ALIAS NumTracer)
-target_compile_features(NumTracer INTERFACE cxx_std_20)
-target_include_directories(NumTracer INTERFACE
+target_compile_features(NumTracer PUBLIC cxx_std_20)
+target_include_directories(NumTracer PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+# Header-only fallback: same headers, but every engine function is `inline` and self-contained, so no
+# `.a` link is needed. For pure-header or cross-toolchain use. A given binary must pick ONE mode across
+# all its TUs (ODR); linking NumTracer::NumTracer is the default, this is the escape hatch.
+add_library(numtracer_headeronly INTERFACE)
+set_target_properties(numtracer_headeronly PROPERTIES EXPORT_NAME NumTracer_headeronly)
+add_library(NumTracer::NumTracer_headeronly ALIAS numtracer_headeronly)
+target_compile_features(numtracer_headeronly INTERFACE cxx_std_20)
+target_compile_definitions(numtracer_headeronly INTERFACE NUMTRACER_HEADER_ONLY=1)
+target_include_directories(numtracer_headeronly INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
@@ -86,7 +104,7 @@ target_compile_options(numtracer_constexpr_budget INTERFACE
 include(CMakePackageConfigHelpers)
 
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS NumTracer numtracer_constexpr_budget EXPORT NumTracerTargets)
+install(TARGETS NumTracer numtracer_constexpr_budget numtracer_headeronly EXPORT NumTracerTargets)
 install(EXPORT NumTracerTargets NAMESPACE NumTracer::
         DESTINATION lib/cmake/NumTracer)
 
@@ -196,20 +214,19 @@ if(NUMTRACER_BUILD_TESTS)
   add_executable(test_col_numeric tests/test_col_numeric.cpp)
   target_link_libraries(test_col_numeric PRIVATE NumTracer::NumTracer)
 
-  # Packed renv layout of the dense momentum builders: a GAPPED mask (0b1001) where the k-th
-  # present component lives at renv[Base+k] != renv[Base+component]. Guards the packing the
-  # contiguous-mask kernels/tutorials don't exercise.
-  add_executable(test_dense_pack tests/test_dense_pack.cpp)
-  target_link_libraries(test_dense_pack PRIVATE NumTracer::NumTracer)
+  # Silent-corruption guards on paths no committed flow exercises: network::add refusing a complex
+  # vector-sum coefficient (real-only Elem::vlc), and the empty colour net folding to the identity.
+  add_executable(test_guards tests/test_guards.cpp)
+  target_link_libraries(test_guards PRIVATE NumTracer::NumTracer)
 
   # Phase-2 example 2: pion <- quark loop -> pion (Yukawa) — fundamental flavour x Dirac x colour.
   add_executable(compare_pion_quark tests/refshim/compare_pion_quark.cpp)
-  target_include_directories(compare_pion_quark PRIVATE tests/gen)
+  target_include_directories(compare_pion_quark PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_pion_quark PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
   # Phase-2 example 3: gluon <- quark loop -> gluon — fundamental colour via the numeric path.
   add_executable(compare_glu_quark tests/refshim/compare_glu_quark.cpp)
-  target_include_directories(compare_glu_quark PRIVATE tests/gen)
+  target_include_directories(compare_glu_quark PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_glu_quark PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
   add_executable(compare_zaqbq1 tests/refshim/compare_zaqbq1.cpp)
@@ -221,8 +238,8 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_zq_collect PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_zq_collect PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
-  # NUMERIC (matrix-product) backend validation: ZA quark loop vs Dense oracle; ZA3 quark triangle
-  # vs the FORM oracle (the headline — generates in seconds at <0.4 GB where the inv path OOMs).
+  # NUMERIC (matrix-product) backend validation: ZA gluon self-energy vs the FORM oracle; ZA3 quark
+  # triangle vs the FORM oracle (the headline — generates in seconds at <0.4 GB where the inv path OOMs).
   add_executable(compare_za_num tests/refshim/compare_za_num.cpp)
   target_include_directories(compare_za_num PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_za_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
@@ -231,7 +248,7 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_za3_num PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_za3_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
-  # pure-YM ghost-gluon vertex: numeric vs dense oracle. Guards the disconnected-Lorentz-component
+  # pure-YM ghost-gluon vertex: numeric vs the FORM oracle. Guards the disconnected-Lorentz-component
   # (product-not-sum) codegen bug — the only flow with such a diagram.
   add_executable(compare_zacbc_num tests/refshim/compare_zacbc_num.cpp)
   target_include_directories(compare_zacbc_num PRIVATE tests/gen tests/refshim)
@@ -240,7 +257,7 @@ if(NUMTRACER_BUILD_TESTS)
   # ZA3 with the FULL quark-gluon vertex {1,4,7} tensor basis (the dense struct-7 case). Gate for the
   # struct-7 codegen fix: with ZAqbq4=ZAqbq7=0 the 1/4/7 numeric kernel must reduce EXACTLY to the
   # FORM-validated struct-1 numeric kernel (ZA3_num_kernel), and differ from it with the real 4/7
-  # dressings. (The Dense oracle is impractical at this size; struct-1 is the trusted reference.)
+  # dressings. (A full oracle is impractical at this size; the struct-1 kernel is the trusted reference.)
   add_executable(compare_za3_147_num tests/refshim/compare_za3_147_num.cpp)
   target_include_directories(compare_za3_147_num PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_za3_147_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
@@ -250,29 +267,17 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_za3_147_form PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_za3_147_form PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
+  # etaPiL pion anomalous dimension: numeric kernel vs the copied FormTracer oracle (independent
+  # tensor-trace engines on the same pion two-point wave-function loop).
+  add_executable(compare_etapil_form tests/refshim/compare_etapil_form.cpp)
+  target_include_directories(compare_etapil_form PRIVATE tests/gen tests/refshim)
+  target_link_libraries(compare_etapil_form PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+
   # ns/eval timing of the 1/4/7 numeric kernel vs the FORM oracle (build on demand: not a pass/fail
   # test). `cmake --build build --target bench_147 && ./build/bench_147` reproduces the README numbers.
   add_executable(bench_147 EXCLUDE_FROM_ALL tests/refshim/bench_147.cpp)
   target_include_directories(bench_147 PRIVATE tests/gen tests/refshim)
   target_link_libraries(bench_147 PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
-
-  # Dense-backend stack-overflow reproducer + ns/eval timing on the largest committed dense kernel
-  # (ZA3 1/4/7). Cross-checks the dense oracle against the numeric backend. Build on demand (not a
-  # default pass/fail test — it is slow and exercises the heap-backed dense fold):
-  #   cmake -S . -B build -DNUMTRACER_BUILD_ZA3_147_DENSE=ON
-  #   cmake --build build --target bench_za3_147_dense && ./build/bench_za3_147_dense
-  option(NUMTRACER_BUILD_ZA3_147_DENSE "Build the dense stack-overflow reproducer + dense timing harnesses" OFF)
-  if(NUMTRACER_BUILD_ZA3_147_DENSE)
-    # Stack-overflow reproducer on the largest dense kernel (one eval is tens of seconds).
-    add_executable(bench_za3_147_dense tests/refshim/bench_za3_147_dense.cpp)
-    target_include_directories(bench_za3_147_dense PRIVATE tests/gen tests/refshim)
-    target_link_libraries(bench_za3_147_dense PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
-    # Fast dense timing on the smaller ZA kernel (~ms/eval) — the tool for measuring dense-fold
-    # changes: `NT_DENSE_NP=20000 ./build/bench_za_dense`.
-    add_executable(bench_za_dense tests/refshim/bench_za_dense.cpp)
-    target_include_directories(bench_za_dense PRIVATE tests/gen tests/refshim)
-    target_link_libraries(bench_za_dense PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
-  endif()
 
   add_executable(compare_za4_num tests/refshim/compare_za4_num.cpp)
   target_include_directories(compare_za4_num PRIVATE tests/gen tests/refshim)
@@ -300,7 +305,7 @@ if(NUMTRACER_BUILD_TESTS)
 
   # Per-flavour dressings: dressing the u-quark and d-quark DIFFERENTLY (broken flavour symmetry).
   # Two explicit flavour loops, each with its own runtime dressing (Gu/Gd, GuDot/GdDot) and NO
-  # SU(Nf) flavour group; numeric kernel vs dense oracle + the per-flavour independence/breaking
+  # SU(Nf) flavour group; numeric kernel vs the FORM oracle + the per-flavour independence/breaking
   # checks (kernels generated by tests/gen/gen_flavour_split.wls).
   add_executable(compare_flavour_split tests/refshim/compare_flavour_split.cpp)
   target_include_directories(compare_flavour_split PRIVATE tests/gen tests/refshim)
@@ -308,47 +313,46 @@ if(NUMTRACER_BUILD_TESTS)
 
   # Per-component (group-diagonal) dressings: dress u/d differently WITHIN the SU(2) flavour group
   # (no per-flavour diagram split). Validated by exact equivalence to flow_flavour_split (the
-  # separate-diagram kernel), so no dense oracle is needed (kernels by gen/gen_flavour_ingroup.wls).
+  # separate-diagram kernel), so no external oracle is needed (kernels by gen/gen_flavour_ingroup.wls).
   add_executable(compare_flavour_ingroup tests/refshim/compare_flavour_ingroup.cpp)
   target_include_directories(compare_flavour_ingroup PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_flavour_ingroup PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
   # Per-component ADJOINT dressing (gluon condensation): an SU(3)-adjoint line dressed component-by-
   # component (Z_A^a, 8 components) folded through the group. Validated by the collapse property
-  # (all components equal == the colour-blind kernel) + per-component breaking — no dense oracle
+  # (all components equal == the colour-blind kernel) + per-component breaking — no external oracle
   # needed (kernels by gen/gen_gluon_condensate.wls).
   add_executable(compare_gluon_condensate tests/refshim/compare_gluon_condensate.cpp)
   target_include_directories(compare_gluon_condensate PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_gluon_condensate PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
 
-  # Longitudinal-projector codegen gate: numeric backend vs dense oracle for a hand-built net
-  # mixing ntLongProj + ntTransProj (kernels generated by tests/gen/gen_proj_numeric.wls).
+  # Longitudinal-projector codegen gate: numeric backend vs a direct analytic oracle for a hand-built
+  # net mixing ntLongProj + ntTransProj (kernel generated by tests/gen/gen_proj_numeric.wls).
   add_executable(compare_proj_num tests/compare_proj_num.cpp)
   target_include_directories(compare_proj_num PRIVATE tests/gen)
   target_link_libraries(compare_proj_num PRIVATE NumTracer::NumTracer)
 
-  # Finite-temperature codegen gate: numeric backend vs dense oracle for a hand-built finite-T net
-  # exercising ntElectricProj/ntMagneticProj/ntTransProj + ntSPS + ntVec[q,0] over ftFrameQuark
-  # (kernels generated by tests/gen/gen_ftproj_numeric.wls).
+  # Finite-temperature codegen gate: numeric backend vs a direct analytic oracle for a hand-built
+  # finite-T net exercising ntElectricProj/ntMagneticProj/ntTransProj + ntSPS + ntVec[q,0] over
+  # propFrameFT (kernel generated by tests/gen/gen_ftproj_numeric.wls).
   add_executable(compare_ftproj_num tests/compare_ftproj_num.cpp)
   target_include_directories(compare_ftproj_num PRIVATE tests/gen)
   target_link_libraries(compare_ftproj_num PRIVATE NumTracer::NumTracer)
 
-  # Disconnected Dirac x Lorentz codegen gate: numeric backend vs dense oracle for a hand-built net
-  # whose diagrams factorize into a closed Dirac trace, a constant colour trace, and an index-disjoint
-  # pure-Lorentz scalar that MULTIPLY (kernels generated by tests/gen/gen_discdirac_numeric.wls). The
-  # regression guard for MakeNTKernel::disconnectmix (the hSigL sigma-quark vertex): the numeric backend
-  # factors the disconnected Lorentz scalar as its own trace and multiplies it in, matching dense.
+  # Disconnected Dirac x Lorentz codegen gate: numeric backend vs a direct analytic oracle for a
+  # hand-built net whose diagrams factorize into a closed Dirac trace, a constant colour trace, and an
+  # index-disjoint pure-Lorentz scalar that MULTIPLY (kernel generated by tests/gen/gen_discdirac_numeric.wls).
+  # The regression guard for MakeNTKernel::disconnectmix (the hSigL sigma-quark vertex): the numeric
+  # backend factors the disconnected Lorentz scalar as its own trace and multiplies it in.
   add_executable(compare_discdirac_num tests/compare_discdirac_num.cpp)
   target_include_directories(compare_discdirac_num PRIVATE tests/gen)
   target_link_libraries(compare_discdirac_num PRIVATE NumTracer::NumTracer)
 
   # σL δ-closed meson-loop regression: a quark line threading two pion γ5 vertices closed by a BARE
   # spinor δ external projector (the σL scalar component) — tr(δ·γ5·S·γ5·S) ∝ l1·p1. Guards the
-  # orderDiracFacs undirected-walk fix (BUG_meson_sector_dressed_collapse.md): the old directed walk
-  # collapsed this δ-closed loop to a single γ5 → tr(γ5)=0. Numeric (gamma-trace theorem) vs the Dense
-  # DTensor oracle, which contracts entry-for-entry and is immune to the walk (kernels generated by
-  # tests/gen/gen_sigl_dirac.wls).
+  # orderDiracFacs undirected-walk fix: the old directed walk collapsed this δ-closed loop to a single
+  # γ5 → tr(γ5)=0. Numeric (gamma-trace theorem) vs a direct analytic oracle for the closed-form trace
+  # (l1·p1)·G(l1²)·G(p²), which is non-vanishing (kernel generated by tests/gen/gen_sigl_dirac.wls).
   add_executable(compare_sigl_dirac tests/refshim/compare_sigl_dirac.cpp)
   target_include_directories(compare_sigl_dirac PRIVATE tests/gen)
   target_link_libraries(compare_sigl_dirac PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
@@ -373,7 +377,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_sigl_dirac COMMAND compare_sigl_dirac)
   add_test(NAME finiteT_quark COMMAND test_finiteT_quark)
   add_test(NAME col_numeric COMMAND test_col_numeric)
-  add_test(NAME dense_pack COMMAND test_dense_pack)
+  add_test(NAME guards COMMAND test_guards)
   add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)
   add_test(NAME flow_pion_quark COMMAND compare_pion_quark)
   add_test(NAME flow_glu_quark COMMAND compare_glu_quark)
@@ -382,6 +386,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_zacbc_num COMMAND compare_zacbc_num)
   add_test(NAME flow_za3_147_num COMMAND compare_za3_147_num)
   add_test(NAME flow_za3_147_form COMMAND compare_za3_147_form)
+  add_test(NAME flow_etapil_form COMMAND compare_etapil_form)
   add_test(NAME flow_za4_num COMMAND compare_za4_num)
   add_test(NAME flow_zq_num COMMAND compare_zq_num)
   add_test(NAME flow_flavour_split COMMAND compare_flavour_split)

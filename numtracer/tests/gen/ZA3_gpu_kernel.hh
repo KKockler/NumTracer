@@ -2,7 +2,6 @@
 
 #include "shim.hpp"
 #include "numtracer/sun/sun_data.hpp"
-#include "numtracer/expr/real_cse.hpp"
 #include "ZA3_gpu_kernels.hh"
 
 namespace DiFfRG

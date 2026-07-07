@@ -24,10 +24,12 @@ tensorQ[_] = False;
    flavour/isospin SU(Nf), and any further group coexist in one network at the right rank.
    Lorentz, Dirac, and the SU(N) groups contract in disjoint index spaces (matched by shared
    label), so the label sets are treated uniformly while the builders stay distinct. *)
-(* ntSUNDiag{Fund,Adj}[N, i, j, name, scale] — a group δ that carries a PER-COMPONENT dressing
-   `name` (a kernel array, indexed by the group component) evaluated at the kinematic `scale`.
-   They classify exactly like the matching plain δ (fundamental / adjoint) for index bookkeeping;
-   the per-component dressing is folded numerically by sun_value_dressed at codegen time. *)
+(* ntSUNDiag{Fund,Adj}[N, i, j, spec, scale] — a group δ that carries a PER-COMPONENT dressing.
+   `spec` is a rules list {c -> name, ..., Default -> defName} of 1-based component indices to
+   distinctly-named scalar dressing symbols (evaluated at the kinematic `scale`); unnamed components
+   collapse to Default when given, else drop. They classify exactly like the matching plain δ
+   (fundamental / adjoint) for index bookkeeping; the per-component dressing is folded numerically
+   by sun_value_dressed at codegen time. *)
 adjointSUNQ[_ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj] = True;  (* group-adjoint heads (bridge with Lorentz) *)
 adjointSUNQ[_] = False;
 fundamentalSUNQ[_ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund] = True;   (* group-fundamental heads (quark-line) *)
@@ -280,9 +282,9 @@ rewriteDressedNums[factors_List] := If[! TrueQ[$ntDressCollect], factors,
        If[r === $Failed, {f}, If[Head[r] === Times, List @@ r, {r}]]], {f}]] /@ factors]];
 
 (* Inverse of the ntDressedNum rewrite: expand a collected numerator back into its distributed Dirac
-   structure sum (Σ coeff_i · {ntDeltaDirac | ntGamma·Σc·ntVec}). Used by the DENSE backend, which
-   cannot fold an eager dressed sum and instead re-distributes the diagram. Each slash gets a fresh
-   Lorentz label for its contracted leg. *)
+   structure sum (Σ coeff_i · {ntDeltaDirac | ntGamma·Σc·ntVec}). Used when re-distributing a
+   collected diagram (the small-D gate in NumTrace). Each slash gets a fresh Lorentz label for its
+   contracted leg. *)
 expandDressedNum[ntDressedNum[opts_, din_, dout_]] := Plus @@ (Function[opt,
   opt[[1]] * Switch[opt[[2, 1]],
     "ident", ntDeltaDirac[din, dout],
@@ -292,7 +294,7 @@ expandDressedNum[ntDressedNum[opts_, din_, dout_]] := Plus @@ (Function[opt,
 (* Re-distribute ONE analysed (collected) diagram back to the non-collected path: rebuild its net,
    expand every ntDressedNum into the Dirac structure sum, distribute, drop odd-gamma traces, and
    re-analyse (with collection OFF so no ntDressedNum is recreated). Used by the small-D gate in
-   NumTrace and by the DENSE backend (mkDirectKernel) — identical logic, factored here. *)
+   NumTrace. *)
 redistDiagram[diag_] := Block[{$ntDressCollect = False},
   Module[{net = diag["Coeff"] * Times @@ Flatten[(#["Factors"] &) /@ diag["Components"]]},
     net = net /. nd_ntDressedNum :> expandDressedNum[nd];

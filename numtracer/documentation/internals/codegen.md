@@ -23,22 +23,11 @@ heads below into an `NTKernel` — a list of diagrams, each a scalar coefficient
 contraction components, plus the env-id layout and the loop frame that fixes each momentum's
 four components.
 
-`MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Backend" -> "Numeric", …]` serialises that
-into a kernel. The numeric backend emits a small C++ **generator** to `genFile`, then *compiles
-and runs* it (`RunProcess`) to produce the committed straight-line traces header `tracesFile`
-(a set of `trN(const double* f)` functions) and the kernel `kernelFile`, which fills the few
-frame symbols and calls `trN(f)`. The colour and dressing halves are emitted by FunKit COEN.
-
-The one-file form `MakeNTKernel[ntk, file, …]` defaults to `"Backend" -> "Dense"`: the
-brute-force `numtracer::dense::DTensor` mirror, read via `.scalar_value().re`. It carries no
-optimisation and is the **numeric oracle** the generated kernel is cross-checked against — a
-driver can emit both from one `ntk`.
-
-```{note}
-The earlier backends are retired and now error: `"Backend" -> "ET"` (the symbolic
-expression-tensor path) and `"Backend" -> "Generate"` (the symbolic invariant-basis generator)
-both point at `"Numeric"`, the single canonical generation path.
-```
+`MakeNTKernel[ntk, genFile, kernelFile, tracesFile, …]` serialises that into a kernel. It emits a
+small C++ **generator** to `genFile`, then *compiles and runs* it (`RunProcess`) to produce the
+committed straight-line traces header `tracesFile` (a set of `trN(const double* f)` functions) and
+the kernel `kernelFile`, which fills the few frame symbols and calls `trN(f)`. The colour and
+dressing halves are emitted by FunKit COEN.
 
 ## What the generator does
 
@@ -70,14 +59,16 @@ Open-index tensor heads, native to NumTracer but mirroring the FunKit/FormTracer
 | `ntSUNf[N, a, b, c]` | SU(N) structure constant $f^{abc}$ (rank $N$) |
 | `ntSUNT[N, a, i, j]` | SU(N) fundamental generator $(T^a)_{ij}$ |
 | `ntSUNDeltaAdj[N, a, b]` / `ntSUNDeltaFund[N, i, j]` | SU(N) adjoint / fundamental $\delta$ |
-| `ntSUNDiagFund[N, i, j, Z, s]` / `ntSUNDiagAdj[N, a, b, Z, s]` | group-diagonal $\delta$ carrying a per-component dressing $Z[a](s)$ |
+| `ntSUNDiagFund[N, i, j, spec, s]` / `ntSUNDiagAdj[N, a, b, spec, s]` | group-diagonal $\delta$ dressing selected components via a rules-list `spec` |
 | `ntSP[q1, q2]` / `ntDress[h, args]` | scalar coefficients (dot product, opaque dressing) |
 
 The SU(N) heads are one $N$-parameterized family (rank $N$ first), so colour SU($N_c$) and
 flavour SU($N_f$) coexist in one network. The group-diagonal heads `ntSUNDiagFund` /
-`ntSUNDiagAdj` fold (via `sun_value_dressed`) to $\sum_a c_a Z_a(s)$ over a runtime
-per-component dressing array — dressing each colour/flavour component differently *without*
-splitting into one diagram per component; the Dirac trace is still computed once. See the
+`ntSUNDiagAdj` take a `spec` rules list `{c -> name, …, Default -> defName}` (1-based component
+indices → distinctly-named scalar dressings; unnamed components collapse to `Default` or drop)
+and fold (via `sun_value_dressed`) to $\sum_a c_a Z_a(s)$ over those named runtime scalar
+dressings — dressing selected colour/flavour components differently *without* splitting into one
+diagram per component; the Dirac trace is still computed once. See the
 [dressed-flavour tutorial](../tutorials/dressed-flavour.md).
 
 A contraction is a product of heads with repeated index labels summed (Einstein); the top-level
@@ -113,7 +104,7 @@ A single diagram can disconnect into several index-disjoint closed pieces (a qua
 flavour trace, or two independent traces). Their scalar values **multiply**. When a diagram has
 two or more non-constant components, the generator emits one as the additive base and each other
 as its own fused trace group, and the assembly forms the product $\prod_k \text{trace}_k$ — each
-$P$ computed once, no trace-polynomial blow-up. This mirrors the dense path's
+$P$ computed once, no trace-polynomial blow-up, matching the factored form
 $\text{coeff}\times\prod \text{toks}$. (`discdirac_num`, `flow_zacbc_num` validate it; flows
 without a disconnected diagram are unaffected.)
 
@@ -129,9 +120,11 @@ load the field-space setup, run `FromFunKit → NumTrace → MakeNTKernel`, and 
 `tests/gen/*.hh` kernels.
 
 ```{note}
-Generation runs under `wolframscript` and reuses FunKit's COEN, so it needs a Wolfram kernel and
-FunKit (and, for the YM/QCD flows, a FORM executable — FunKit uses FORM to compute the tensor
-*bases*, not to do NumTracer's trace). The generated kernels are committed under `tests/gen/`, so
+Generation runs under `wolframscript` (a Wolfram kernel) and reuses FunKit's COEN for the scalar
+half. The *derivation* of the flow is separate and optional: `FromFunKit` imports one, but a
+hand-built DSL network needs no FunKit derivation. **FORM is not part of the trace or the general
+path** — it enters only when regenerating the committed YM/QCD reference-test flows, where FunKit
+uses it to compute the tensor *bases*. The generated kernels are committed under `tests/gen/`, so
 the ordinary C++ build and tests stay dependency-free; regenerate only when the flows or the
 codegen change.
 ```

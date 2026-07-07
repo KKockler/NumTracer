@@ -1,7 +1,8 @@
 /// @file dirac.hpp
 /// @brief Numeric Dirac gamma-trace for the **build-time generator** — contracts a closed spinor
 ///        (gamma) loop into a Lorentz @ref NetVal (metrics / vectors / Levi-Civita over the free
-///        gluon legs), at codegen time, so the Mathematica front-end no longer expands the trace.
+///        gluon legs), at codegen time — the trace is contracted here numerically, not expanded
+///        symbolically in the Mathematica front-end.
 ///
 /// This is the Dirac analogue of @ref sun_net.hpp's `SUNNet`: colour folds to a scalar `Cx`, but a
 /// Dirac trace `tr(γ^{μ1} … γ^{μn})` is a **Lorentz tensor** over the free legs `μ_i` whose

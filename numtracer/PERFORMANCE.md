@@ -38,7 +38,7 @@ genuine terms.
 
 ## Other flows
 
-All committed numeric kernels match their FORM / dense / equivalence oracle — the full ctest
+All committed numeric kernels match their FORM / equivalence oracle — the full ctest
 suite passes, including the per-flavour / per-component / disconnected flows
 (`flow_flavour_split`, `flow_flavour_ingroup`, `flow_gluon_condensate`, `discdirac_num`,
 `flow_sigl_dirac`). For indicative ratios of the larger gluon kernels (quark box `ZA4` ≈ 1.15×,

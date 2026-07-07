@@ -67,10 +67,9 @@ only on `codegen/runtime.hpp`.
 
 ## How it is validated
 
-The same network is also emitted through the `"Dense"` backend — the brute-force
-`dense::DTensor` numeric mirror, with no optimisation — and the two kernels are evaluated against
-a copied FormTracer oracle over a large set of random phase-space points; they agree to many
-significant figures. Because the scalar scaffolding is shared, any disagreement could only come
+The generated kernel is evaluated against a copied FormTracer oracle over a large set of random
+phase-space points; they agree to many significant figures. Because the scalar scaffolding is
+shared, any disagreement could only come
 from the parts NumTracer computes independently — the colour contraction and the Dirac trace — so
 the match pins down the engine's algebra. The colour fold is additionally checked against
 $C_F = 4/3$, and the bare trace against its analytic scalar-product polynomial.
@@ -84,11 +83,10 @@ This example touches every layer:
 2. **[The numeric engine](numeric-engine.md)** — the colour fold, the matrix-product Dirac
    trace, and the Lorentz reduction.
 3. **[Sector data](sectors.md)** — the typed-out gamma and SU(N) tables the contraction reads.
-4. **[The expression algebra](expression-algebra.md)** and **[CSE + lowering](cse-and-lowering.md)**
+4. **[Cx](expression-algebra.md)** and **[CSE + Horner lowering](cse-and-lowering.md)**
    — turn each diagram's polynomial into straight-line real code.
 
 That is the complete picture: describe the network, contract and fold it numerically at build
-time, and lower the result to straight-line real arithmetic — reproducing a FORM-generated kernel
-without a symbolic-algebra runtime.
+time, and lower the result to a flat, straight-line real kernel — with no symbolic-algebra runtime.
 
 For per-symbol API details, see the [C++ API reference](../doxygen/NumTracer/html/index).

@@ -12,6 +12,7 @@
 #include "numtracer/core/cx.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -147,12 +148,22 @@ namespace numtracer::network
       Elem c;
       c.kind = Elem::Vector;
       c.a = ia;
-      for (const PTerm &t : a)
-        for (const auto &pr : t.e[0].vlc)
-          c.vlc.push_back({pr.first * t.coeff.re, pr.second});
-      for (const PTerm &t : b)
-        for (const auto &pr : t.e[0].vlc)
-          c.vlc.push_back({pr.first * t.coeff.re, pr.second});
+      // `vlc` coefficients are real by design (Elem::vlc is std::pair<double,int>): a momentum
+      // linear combination has real weights. Fold each term's scalar coefficient into them — and
+      // refuse a complex coefficient rather than silently dropping its imaginary part, which would
+      // corrupt the contraction (the trap is a complex `scale` applied to a momentum vecsum
+      // before this `add`).
+      auto absorb = [&c](const NetVal &nv) {
+        for (const PTerm &t : nv) {
+          if (t.coeff.im != 0.0)
+            throw std::runtime_error("network::add: complex coefficient on a vector-sum term "
+                                     "(vlc weights are real-only)");
+          for (const auto &pr : t.e[0].vlc)
+            c.vlc.push_back({pr.first * t.coeff.re, pr.second});
+        }
+      };
+      absorb(a);
+      absorb(b);
       return {PTerm{Cx{1, 0}, {c}}};
     }
     a.insert(a.end(), b.begin(), b.end());

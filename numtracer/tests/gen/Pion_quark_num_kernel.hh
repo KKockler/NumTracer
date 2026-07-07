@@ -2,7 +2,6 @@
 
 #include "numtracer/codegen/runtime.hpp"
 #include "numtracer/sun/sun_data.hpp"
-#include "numtracer/expr/real_cse.hpp"
 #include "Pion_quark_num_kernels.hh"
 
 namespace numtracer_kernels

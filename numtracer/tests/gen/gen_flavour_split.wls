@@ -84,8 +84,6 @@ dress = {Gu, Gd, GuDot, GdDot};
 
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_flavour_split_num.cpp"}],
   FileNameJoin[{$gen, "Flavour_split_num_kernel.hh"}], FileNameJoin[{$gen, "Flavour_split_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Flavour_split_num_kernel", "Namespace" -> "flavour_split_num",
+  "Name" -> "Flavour_split_num_kernel", "Namespace" -> "flavour_split_num",
   "Dressings" -> dress];
-MakeNTKernel[ntk, FileNameJoin[{$gen, "Flavour_split_num_dense_kernel.hh"}],
-  "Backend" -> "Dense", "Name" -> "Flavour_split_num_dense_kernel", "Dressings" -> dress];
 Print["flavour-split (u vs d distinct dressings) kernels generated."];

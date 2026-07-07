@@ -226,6 +226,7 @@ namespace numtracer::numeric
                 e[k] -= d[k];
               // coeff /= dc   (complex division: z / w = z·conj(w) / |w|²)
               const double den = dc.re * dc.re + dc.im * dc.im;
+              assert(den != 0.0); // a stored monomial denominator never has a zero coefficient
               coeff = Cx{(coeff.re * dc.re + coeff.im * dc.im) / den, (coeff.im * dc.re - coeff.re * dc.im) / den};
               cancelled = true;
             }
@@ -250,6 +251,10 @@ namespace numtracer::numeric
   inline MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups)
   {
     if (groups.empty()) return p;
+    // every group entry is a symbol index, so it must address a valid component slot `e[idx]`
+    for (const auto &g : groups)
+      for (int idx : g)
+        assert(idx >= 0 && idx < p.nsym);
     std::vector<std::pair<Mono, Cx>> out;
     std::vector<std::tuple<std::vector<int>, std::vector<int>, Cx>> work;
     for (const auto &[m, c] : p.t)

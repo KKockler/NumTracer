@@ -10,8 +10,8 @@
    external δ ran parallel to the chain, collided on the shared in/out keys and broke the walk, so the
    trace collapsed to a single γ5 → tr(γ5)=0 → the whole diagram vanished. The fixed walk is undirected
    and closes the cycle. This flow has NO other in-repo coverage of a δ-closed loop; it is the permanent
-   guard. The Dense DTensor oracle contracts the network entry-for-entry (no ordering walk), so its
-   value is unaffected by the bug — numeric (the gamma-trace theorem) must match it.
+   guard. compare_sigl_dirac.cpp checks the numeric kernel (the gamma-trace theorem) against a direct
+   analytic oracle for the closed-form trace (l1·p1)·G(l1²)·G(p²), which is non-vanishing.
 
    Hand-built (no FunKit derivation): a closed σL-style δ loop expressed directly in the FunKit-token
    vocabulary and lowered through FromFunKit + NumTrace, exactly like a real traced flow.
@@ -50,9 +50,7 @@ net   = FromFunKit[myTrace, "FlavourGroup" -> 2, "DressingCollection" -> True];
 frame = NumTracer`propFrame[Global`p, Global`l1, Global`cos1, Global`p1, Global`l1];
 ntk   = NumTrace[net, "Frame" -> frame, "Args" -> {Global`l1, Global`cos1, Global`p, Global`k}];
 
-MakeNTKernel[ntk, FileNameJoin[{$gen, "Sigl_dirac_dense_kernel.hh"}],
-  "Backend" -> "Dense", "Name" -> "Sigl_dirac_dense", "Namespace" -> "sigl_dirac_dense"];
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_sigl_dirac_num.cpp"}],
   FileNameJoin[{$gen, "Sigl_dirac_num_kernel.hh"}], FileNameJoin[{$gen, "Sigl_dirac_num_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Sigl_dirac_num_kernel", "Namespace" -> "sigl_dirac_num"];
-Print["σL δ-closed meson-loop regression kernels generated (Dense oracle + numeric)."];
+  "Name" -> "Sigl_dirac_num_kernel", "Namespace" -> "sigl_dirac_num"];
+Print["σL δ-closed meson-loop regression kernel generated (numeric)."];

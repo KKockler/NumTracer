@@ -21,11 +21,13 @@ $$
 a committed C++ header.
 
 ```{note}
-**Requirements.** The codegen runs under `wolframscript` and reuses FunKit's COEN emitter for the
-scalar half, so it needs a Wolfram kernel and FunKit (and, for the YM/QCD flows, a FORM executable
-— FunKit uses FORM to compute the tensor *bases*, not to do NumTracer's trace). The generated
-`tests/gen/*.hh` are committed, so the ordinary C++ build and `ctest` never need any of this —
-regenerate only when a flow or the codegen changes.
+**Requirements.** The code generator runs under `wolframscript`, so it needs a Wolfram kernel.
+Deriving the flow is *your* business — `FromFunKit` (below) is one optional importer, but you can
+build the DSL network any way you like and hand it to `NumTrace` directly, as the minimal driver
+does. **FORM is not needed** for your own kernels; it enters only when regenerating the project's
+committed reference-test flows (there FunKit uses FORM to compute the tensor *bases* — never to do
+NumTracer's trace). The generated `tests/gen/*.hh` are committed, so the ordinary C++ build and
+`ctest` never need any of this — regenerate only when a flow or the codegen changes.
 ```
 
 ## A minimal driver
@@ -45,7 +47,9 @@ frame = NumTracer`propFrame[p, l1, cos1, qp, ql];          (* symmetric-point, 1
 net   = (1/ntSP[qp, qp]) ntVec[qp, mu] ntTransProj[ql, mu, nu] ntVec[qp, nu];
 ntk   = NumTrace[net, "Frame" -> frame, "Args" -> {l1, cos1, p}];
 
-MakeNTKernel[ntk, "selftest_kernel.hh", "Name" -> "selftest_kernel", "Dressings" -> {}];
+(* Three-file form -> the production "Numeric" backend (generator, kernel, traces). *)
+MakeNTKernel[ntk, "gen_selftest.cpp", "selftest_kernel.hh", "selftest_kernel_nets.hh",
+             "Name" -> "selftest_kernel", "Dressings" -> {}];
 ```
 
 Reading the network `(1/ntSP[qp, qp]) ntVec[qp, mu] ntTransProj[ql, mu, nu] ntVec[qp, nu]`:
@@ -59,9 +63,8 @@ and the entry points are on the [codegen page](../internals/codegen.md).
 
 ## The generated kernel
 
-The emitted header is a flat, templated kernel — the same shape as a FORM reference kernel: a
-namespace, a class templated on the regulator, and a `kernel(args…)` that fills the frame symbols
-once and returns the value. The kernel arguments are exactly the `"Args"` list, in order; a flow
+The emitted header is a flat, templated kernel: a namespace, a class templated on the regulator,
+and a `kernel(args…)` that fills the frame symbols once and returns the value. The kernel arguments are exactly the `"Args"` list, in order; a flow
 with dressings takes them as extra arguments after the scalars. By default the header is
 self-contained (it includes only `numtracer/codegen/runtime.hpp`); the in-repo flows emit against
 the test shim so they can be compared to the FormTracer oracles.
@@ -101,12 +104,6 @@ the `"Args"` scalars, exactly like a FormTracer kernel.
 default): it emits a small generator, compiles and runs it, and writes the committed straight-line
 kernel plus its trace functions. This is the canonical — and only — generation path.
 
-```{note}
-The earlier symbolic backends are retired: `"Backend" -> "ET"` (the expression-tensor path) and
-`"Backend" -> "Generate"` (the symbolic invariant-basis generator) now error and point at
-`"Numeric"`.
-```
-
 ## Verify
 
 ```bash
@@ -116,5 +113,5 @@ cd numtracer && wolfram -script tests/gen/gen_zq_numeric.wls
 cmake --build build -j4 && ctest -R "numeric|flow" --output-on-failure
 ```
 
-Each generated kernel is checked against a FORM or dense numeric oracle over random points; the
+Each generated kernel is checked against a FORM oracle over random points; the
 two agree to many significant figures, which pins down the engine's algebra.

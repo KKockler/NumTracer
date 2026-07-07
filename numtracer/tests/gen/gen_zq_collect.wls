@@ -29,6 +29,6 @@ ntk  = NumTrace[net, "Frame" -> frame, "Args" -> args, "DressingCollection" -> T
    zq_num kernel in one compare TU (compare_zq_collect.cpp asserts they agree). *)
 tN = First @ AbsoluteTiming[ MakeNTKernel[ntk,
   FileNameJoin[{$gen, "gen_zq_collect.cpp"}], FileNameJoin[{$gen, "Zq_collect_kernel.hh"}], FileNameJoin[{$gen, "Zq_collect_kernels.hh"}],
-  "Backend" -> "Numeric", "Name" -> "Zq_collect_kernel", "Namespace" -> "zq_collect", "Dressings" -> dress] ];
+  "Name" -> "Zq_collect_kernel", "Namespace" -> "zq_collect", "Dressings" -> dress] ];
 Print["[time] Numeric (collected) backend: ", tN, " s"];
 Print["Zq collected kernel generated."];
