@@ -14,7 +14,7 @@ namespace numtracer_kernels
     {
       using namespace numtracer;
       using namespace numtracer::compute;
-      double fenv[numtracer_kernels::ftproj_num::nenv];
+      double fenv[(numtracer_kernels::ftproj_num::nenv) > 0 ? (numtracer_kernels::ftproj_num::nenv) : 1];
       numtracer_kernels::ftproj_num::fill(fenv, p0, p, l0, l1, cos1);  return fma(numtracer_kernels::ftproj_num::tr1(fenv), cos1 * l0 * l1 * p, numtracer_kernels::ftproj_num::tr0(fenv));
     }
 

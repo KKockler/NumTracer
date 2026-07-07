@@ -8,12 +8,12 @@ template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i
 //   f[1] = var(2)
 //   f[2] = var(1)
 static inline constexpr int nenv = 3;
-static inline void fill(double *f, double l1, double cos1, double cos2, double p) {
+static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double cos2, [[maybe_unused]] double p) {
   f[0] = p;
   f[1] = sqrt(1. - powr<2>(cos1)) * cos2;
   f[2] = cos1;
 }
-static inline double tr0(const double *f) {
+static inline double tr0([[maybe_unused]] const double *f) {
   const double s0 = -0.74999999999999989;
   const double s1 = 0.8660254037844386;
   const double s2 = f[2];

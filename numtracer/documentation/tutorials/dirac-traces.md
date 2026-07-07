@@ -104,7 +104,7 @@ tokens and let `numeric_value` contract it — the form the code generator emits
 
 ```cpp
 #include "numtracer/numeric/numeric_contract.hpp" // numeric_value, NNet/NTerm, nmet, dslash, dgamma
-// … MPoly comp table for p (0..3), q (4..7) as in 3a …
+// … MPoly comp table for p (0..3), q (4..7) as in 2a …
 
 enum { mu, nu }; // name the free gamma legs' Lorentz indices (one unscoped enum, all distinct)
 
@@ -140,7 +140,7 @@ The tokens:
 | `nmet(a, b)`         | the metric $\delta_{ab}$, one factor of a Lorentz network term                                                                     |
 | `NNet` / `NTerm`     | a Lorentz network: a sum of terms, each a coefficient times a product of factors                                                   |
 
-Chain (1) has no free legs, so it is a scalar — the same $4\,p\cdot q$ as 3a. Chain (2) has two
+Chain (1) has no free legs, so it is a scalar — the same $4\,p\cdot q$ as 2a. Chain (2) has two
 free gamma legs contracted by the metric, giving $\mathrm{tr}(\gamma^\mu\slashed p\,\gamma_\mu
 \slashed q) = -2\,\mathrm{tr}(\slashed p\,\slashed q) = -8\,p\cdot q$ (the 4D identity
 $\gamma^\mu\slashed a\,\gamma_\mu = -2\slashed a$). The `MPoly` result is symbolic — `numeric_value`

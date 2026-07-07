@@ -1,9 +1,9 @@
 # Installation
 
-NumTracer is a header-only C++20 library with a CMake package: build once,
-`cmake --install`, and consume it from any project on the system via
-`find_package`. The same install also places the Mathematica front-end on
-Wolfram's application path.
+NumTracer builds as a small static C++20 library (header-only on opt-in via
+`NUMTRACER_HEADER_ONLY`) with a CMake package: build once, `cmake --install`,
+and consume it from any project on the system via `find_package`. The same
+install also places the Mathematica front-end on Wolfram's application path.
 
 ## Requirements
 
@@ -19,8 +19,8 @@ Wolfram's application path.
 
 ```{admonition} Two usage paths — what each needs
 :class: tip
-**C++ API** (the whole engine): header-only, needs *nothing but a C++20 compiler* — no Wolfram, no
-FunKit, no FORM. **Mathematica DSL** (the code generator): needs only a Wolfram kernel. Everything
+**C++ API** (the whole engine): needs *nothing but a C++20 compiler* — no external libraries, no
+Wolfram, no FunKit, no FORM. **Mathematica DSL** (the code generator): needs only a Wolfram kernel. Everything
 else is optional and specific to the in-repo test flows. See
 [Bring your own network](bring-your-own-network.md).
 ```

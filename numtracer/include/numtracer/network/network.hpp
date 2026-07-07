@@ -19,8 +19,6 @@
 namespace numtracer::network
 {
 
-  inline constexpr int kDim = 4; ///< Lorentz dimension (Euclidean here).
-
   /// @brief splitmix64 finaliser (local copy so this header has no heavy dependency; used by the
   ///        codegen env's open-addressed symbol index — constexpr-friendly).
   constexpr std::uint64_t splitmix64_finalise(std::uint64_t x)
@@ -38,21 +36,20 @@ namespace numtracer::network
     return splitmix64_finalise(a ^ (b + 0x9e3779b97f4a7c15ULL + (a << 6) + (a >> 2)));
   }
 
-  /// @brief A flattened network factor: kind 0 = metric(a,b), 1 = vector(a=index, vlc),
-  ///        2 = transverse projector `P_T(l)`, 3 = Levi-Civita `ε_{a b c d}` (the γ5 trace's
-  ///        totally-antisymmetric tensor), 4 = longitudinal projector `P_L(l)`.
+  /// @brief A flattened network factor, tagged by @ref Elem::Kind:
+  ///   - `Metric`  — δ_{a b}
+  ///   - `Vector`  — a linear combination `Σ coeff·vec(vid)` of momenta on index `a` (held in `vlc`)
+  ///   - `Epsilon` — Levi-Civita ε_{a b c d} (the γ5 trace's antisymmetric tensor; the only kind using c,d)
+  ///   - `ProjT` / `ProjL` — transverse / longitudinal projectors `P_T(l)`, `P_L(l)`
+  ///   - `ProjE` / `ProjM` — finite-T electric / magnetic projectors (use `invS`)
   ///
-  /// A `vector` factor carries a **linear combination** of momenta on one Lorentz index `a`
-  /// (`vlc` = list of `(coeff, vid)`), not a single momentum. This is the eager-summation handle:
-  /// a vertex sub-sum like `2·p_A − p_B` on a shared index is one compound vector leaf, so
-  /// @ref contract never distributes it into separate product terms — the distribution that made
-  /// the A4 reduction explode (21840 terms/net → ~81). The combination is expanded only at
-  /// sp-extraction, after the (now far fewer) union-finds.
+  /// A `Vector` factor carries a linear combination, not a single momentum, so a vertex sub-sum like
+  /// `2·p_A − p_B` on a shared index stays one compound leaf and @ref contract never distributes it
+  /// into separate terms — the distribution that made the A4 reduction explode (21840 terms/net → ~81).
+  /// It is expanded only at scalar-product extraction, after the (now far fewer) union-finds.
   ///
-  /// An `epsilon` factor (kind 3) carries **four** Lorentz indices `a,b,c,d` (the `c`/`d` fields are
-  /// used only by this kind). A closed Dirac trace has at most one γ5, hence at most one ε per
-  /// product term — so the reduction never has to expand an ε·ε product (which would be a metric
-  /// determinant); each ε's four indices simply contract with four momenta to a single antisymmetric
+  /// A closed Dirac trace has at most one γ5, hence at most one `Epsilon` per term, so the reduction
+  /// never expands an ε·ε product; each ε's four indices contract with four momenta to a single
   /// invariant `eps(p_a,p_b,p_c,p_d)`. See @ref numtracer::numeric for the contraction.
   struct Elem {
     enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM };

@@ -148,7 +148,7 @@ int main()
       break;
     }
     const double err = cdiff(sym, num);
-    std::printf("  K=%2d  monomials=%-4zu |sym-num|=%.2e  %s\n", K, tr.size(), err, err < 1e-12 ? "ok" : "FAIL");
+    std::printf("  K=%2d  monomials=%-4d |sym-num|=%.2e  %s\n", K, tr.size(), err, err < 1e-12 ? "ok" : "FAIL");
     if (!(err < 1e-12)) ++fails;
   }
 
@@ -177,7 +177,7 @@ int main()
     for (int mu = 0; mu < 4; ++mu)
       num = num + nTrace(nMul(nMul(nMul(nGamma(mu), nSlash(p)), nGamma(mu)), nSlash(q)));
     const double err = cdiff(sym, num);
-    std::printf("  monomials=%zu |sym-num|=%.2e  %s\n", tr.size(), err, err < 1e-12 ? "ok" : "FAIL");
+    std::printf("  monomials=%d |sym-num|=%.2e  %s\n", tr.size(), err, err < 1e-12 ? "ok" : "FAIL");
     if (!(err < 1e-12)) ++fails;
   }
 
@@ -233,7 +233,7 @@ int main()
       }
     const double err = cdiff(sym, num);
     const bool atomOk = monomial ? !hasAtom : hasAtom;
-    std::printf("  %-13s monomials=%-3zu hasAtom=%d (expect %d) |sym-num|=%.2e  %s\n",
+    std::printf("  %-13s monomials=%-3d hasAtom=%d (expect %d) |sym-num|=%.2e  %s\n",
                 monomial ? "monomial-k2" : "nonmono-k2", tr.size(), hasAtom, monomial ? 0 : 1, err,
                 (err < 1e-12 && atomOk) ? "ok" : "FAIL");
     if (!(err < 1e-12 && atomOk)) ++fails;
@@ -276,7 +276,7 @@ int main()
         num = num + nTrace(nMul(nMul(nMul(nGamma(mu), nSlash(p)), nGamma(nu)), nSlash(q))) * Cx{proj, 0};
       }
     const double err = cdiff(sym, num);
-    std::printf("  monomials=%zu |sym-num|=%.2e  %s\n", tr.size(), err, err < 1e-12 ? "ok" : "FAIL");
+    std::printf("  monomials=%d |sym-num|=%.2e  %s\n", tr.size(), err, err < 1e-12 ? "ok" : "FAIL");
     if (!(err < 1e-12)) ++fails;
   }
 
@@ -310,7 +310,7 @@ int main()
       av[static_cast<std::size_t>(a)] = dv != 0 ? 1.0 / dv : 0.0;
     }
     double err = cdiff(nm::eval(mine, x, av), nm::eval(ref, x, av));
-    std::printf("  monomials mine=%zu ref=%zu  |mine-ref|=%.2e  %s\n", mine.size(), ref.size(), err,
+    std::printf("  monomials mine=%d ref=%d  |mine-ref|=%.2e  %s\n", mine.size(), ref.size(), err,
                 err < 1e-10 ? "ok" : "FAIL");
     if (!(err < 1e-10)) ++fails;
   }
@@ -336,7 +336,7 @@ int main()
         P[m][mu] = x[static_cast<std::size_t>(4 * m + mu)];
     Cx num = buildTruth(P);
     const double err = cdiff(sym, num);
-    std::printf("  %-22s monomials=%-3zu |sym|=%.2e |sym-num|=%.2e  %s\n", tag, tr.size(),
+    std::printf("  %-22s monomials=%-3d |sym|=%.2e |sym-num|=%.2e  %s\n", tag, tr.size(),
                 std::abs(sym.re) + std::abs(sym.im), err, err < 1e-12 ? "ok" : "FAIL");
     if (!(err < 1e-12)) ++fails;
   };
@@ -382,7 +382,7 @@ int main()
                                  nSlash(P[2])),
                             nSlash(P[3])));
     const double err = cdiff(sym, num);
-    std::printf("  %-22s monomials=%-3zu |sym|=%.2e |sym-num|=%.2e  %s\n", "g5 g^mu p g_mu q r s", tr.size(),
+    std::printf("  %-22s monomials=%-3d |sym|=%.2e |sym-num|=%.2e  %s\n", "g5 g^mu p g_mu q r s", tr.size(),
                 std::abs(sym.re) + std::abs(sym.im), err, err < 1e-12 ? "ok" : "FAIL");
     if (!(err < 1e-12)) ++fails;
   }

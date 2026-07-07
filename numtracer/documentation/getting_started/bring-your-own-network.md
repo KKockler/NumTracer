@@ -9,7 +9,7 @@ assumes — this is how you contract it.
 
 ## Hello, tensor network
 
-The smallest possible use, in pure C++ against the header-only library. It contracts two index
+The smallest possible use, in pure C++ against the library. It contracts two index
 networks over plain 4-vectors and checks each against its closed form:
 
 $$
@@ -80,7 +80,7 @@ chain or SU($N$) factors and nothing else changes — the sectors compose (see t
 
 | Path | You write | Needs | Good for |
 |---|---|---|---|
-| **C++ API** | the network with `nvec`/`nmet`/`nprojT`/`dgamma`/`SUN::T`… and call `numeric_value` | nothing but a C++20 compiler — the library is header-only | hand-built traces, embedding in your own code, the numeric oracle |
+| **C++ API** | the network with `nvec`/`nmet`/`nprojT`/`dgamma`/`SUN::T`… and call `numeric_value` | nothing but a C++20 compiler — no external libraries | hand-built traces, embedding in your own code, the numeric oracle |
 | **Mathematica DSL** | the network with `ntVec`/`ntMetric`/`ntTransProj`/… and call `NumTrace` + `MakeNTKernel` | a Wolfram kernel | generating a committed, lowered C++ kernel from a symbolic network |
 
 Two things are worth stating plainly, because it is easy to assume otherwise:

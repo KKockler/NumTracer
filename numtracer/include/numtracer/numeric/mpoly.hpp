@@ -1,7 +1,7 @@
 /// @file mpoly.hpp
 /// @brief Multivariate polynomial over an arbitrary user-symbol set, carrying surviving inverse
 ///        (`1/k²`) atoms in the monomial key. The arithmetic core of the **numeric contraction
-///        backend** (task #22): contract a diagram as 4×4 spinor matrix products whose entries are
+///        backend**: contract a diagram as 4×4 spinor matrix products whose entries are
 ///        these polynomials, so γ/metric/projector stay numeric and only the user's symbolic
 ///        momentum data enters the result — bounded by the matrix structure, not the `(2n−1)!!`
 ///        sp-monomial blowup of the symbolic `reduce_product` path.
@@ -253,7 +253,7 @@ namespace numtracer::numeric
     if (groups.empty()) return p;
     // every group entry is a symbol index, so it must address a valid component slot `e[idx]`
     for (const auto &g : groups)
-      for (int idx : g)
+      for ([[maybe_unused]] int idx : g)
         assert(idx >= 0 && idx < p.nsym);
     std::vector<std::pair<Mono, Cx>> out;
     std::vector<std::tuple<std::vector<int>, std::vector<int>, Cx>> work;

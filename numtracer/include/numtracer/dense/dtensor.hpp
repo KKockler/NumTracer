@@ -150,25 +150,15 @@ namespace numtracer::dense
   /// @brief View a dynamic intermediate in place.
   constexpr detail::View view_of(const DynTensor &d) { return {d.data.data(), d.rank, d.ids.data(), d.dims.data()}; }
 
-// GCC 16.1.1 -O3 miscompiles the complex-`Cx` std::vector fold loops below when -march=native
-// enables AVX-512VL: the loop vectorizer emits incorrect masked AVX-512 code, so the variadic
-// `contract_all` returns a DynTensor with an empty `data` buffer → a later `own()` dereferences a
-// null pointer (SIGSEGV). It is a compiler bug, not UB here — clang -O3 -march=native, GCC -O2,
-// GCC -O3 without -march=native, -mno-avx512vl, -fno-tree-loop-vectorize, and ASan+UBSan are all
-// clean (and -fno-strict-aliasing still crashes).
-//
-// Why disable loop vectorization for the whole fold block rather than narrow or keep AVX2:
-//   - Cost is within run-to-run noise: the hot inner loop is `acc = acc + a*b` over `Cx`, a
-//     loop-carried complex reduction GCC can't vectorize without -ffast-math anyway (measured
-//     ~30-35 us/eval whether vectorized or not; -ffast-math neither fixes the crash nor helps).
-//   - A function-scoped `target("no-avx512vl")` (which would keep AVX2 vectorization) does NOT
-//     compile — a target attribute poisons the std::vector template instantiation these use.
-//   - Bisection pins the miscompile to the variadic `contract_all`, but this is the *validation
-//     oracle*: a silent miscompile is the worst failure mode (it would mask a real numeric-vs-dense
-//     disagreement), so we de-vectorize the whole fold block rather than leave siblings exposed to
-//     the same GCC bug class for a perf delta that is within measurement noise.
-// Remove once the GCC bug is fixed. The portable region macros (gcc pragmas / clang + default
-// no-op) live in core/config.hpp.
+// GCC 16.1.1 at -O3 -march=native (AVX-512VL) miscompiles the complex-`Cx` std::vector fold loops below:
+// the loop vectorizer emits bad masked code, so the variadic `contract_all` returns a DynTensor with an
+// empty `data` buffer and a later `own()` dereferences null (SIGSEGV). It is a compiler bug, not UB here —
+// clang -O3 -march=native, GCC -O2, GCC -O3 without -march=native, -mno-avx512vl, -fno-tree-loop-vectorize,
+// and ASan+UBSan are all clean. We disable loop vectorization for the whole fold block: the hot loop is a
+// loop-carried complex reduction GCC won't vectorize without -ffast-math anyway (cost is within run-to-run
+// noise), a function-scoped target("no-avx512vl") breaks the std::vector instantiation, and this is the
+// validation ORACLE where a silent miscompile — masking a real numeric-vs-dense disagreement — is the worst
+// failure mode. Remove once the GCC bug is fixed; the region macros live in core/config.hpp.
 NT_BEGIN_NO_LOOP_VECTORIZE
 
   /// @brief Contract views `a`,`b` over their shared axis identities, writing the result into
@@ -186,9 +176,8 @@ NT_BEGIN_NO_LOOP_VECTORIZE
       b_ids[i] = b.ids[i];
       b_dims[i] = b.dims[i];
     }
-    // Make a contraction plan
+    // Build the contraction plan (also yields the result tensor's layout).
     const core::EPlan plan = core::make_eplan(a_ids, a_dims, a.rank, b_ids, b_dims, b.rank);
-    // , which also gives us the resulting tensors layout
     out.rank = plan.RR;
     for (int t = 0; t < plan.RR; ++t) {
       out.ids[t] = plan.rid[t];

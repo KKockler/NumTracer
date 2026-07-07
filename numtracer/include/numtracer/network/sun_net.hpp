@@ -61,9 +61,8 @@ namespace numtracer::network {
 /// dressing-id for component `v`, or `-1` to *drop* that component (it contributes nothing). This lets
 /// the front-end dress only selected components (e.g. the Cartan directions of a condensate) and drop
 /// the rest — no dead terms. `comp2dr` is empty for the plain (kinds 0–3) factors.
-/// @brief The structure a @ref SUNFac selects. Underlying values are pinned to `int` literals 0–5:
-///        relied upon nowhere outside this header, but pinning keeps the switch/order stable and
-///        self-documenting.
+/// @brief The structure a @ref SUNFac selects. The explicit 0–5 values are only for self-documentation;
+///        no code outside this header depends on the specific numbers.
 enum class SUNFacKind : int {
   DeltaAdj = 0,  ///< `δ^{ab}` (adjoint Kronecker)
   F = 1,         ///< `f^{abc}` (structure constant)

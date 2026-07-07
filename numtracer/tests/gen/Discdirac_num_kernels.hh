@@ -9,22 +9,22 @@ template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i
 //   f[2] = var(4)
 //   f[3] = var(2)
 static inline constexpr int nenv = 4;
-static inline void fill(double *f, double l1, double cos1, double cos2, double p) {
+static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double cos2, [[maybe_unused]] double p) {
   f[0] = l1;
   f[1] = cos1;
   f[2] = p;
   f[3] = sqrt(1. - powr<2>(cos1)) * cos2;
 }
-static inline double tr0(const double *f) {
+static inline double tr0([[maybe_unused]] const double *f) {
   const double s0 = 3;
   return s0;
 }
-static inline double tr1(const double *f) {
+static inline double tr1([[maybe_unused]] const double *f) {
   const double s0 = 1;
   return s0;
 }
 static inline double tr2(const double *f) { return tr1(f); }
-static inline double tr3(const double *f) {
+static inline double tr3([[maybe_unused]] const double *f) {
   const double s0 = 4;
   const double s1 = f[2];
   const double s2 = s0*s1;
@@ -34,7 +34,7 @@ static inline double tr3(const double *f) {
   const double s6 = s4*s5;
   return s6;
 }
-static inline double tr4(const double *f) {
+static inline double tr4([[maybe_unused]] const double *f) {
   const double s0 = -0.74999999999999989;
   const double s1 = -0.8660254037844386;
   const double s2 = f[1];
@@ -54,7 +54,7 @@ static inline double tr4(const double *f) {
   const double s16 = s13*s15;
   return s16;
 }
-static inline double tr5(const double *f) {
+static inline double tr5([[maybe_unused]] const double *f) {
   const double s0 = 3.4641016151377544;
   const double s1 = -2;
   const double s2 = f[1];
@@ -68,8 +68,8 @@ static inline double tr5(const double *f) {
   const double s10 = s8*s9;
   return s10;
 }
-static inline double tr6(const double *f) {
-  const double s0 = 1;
+static inline double tr6([[maybe_unused]] const double *f) {
+  [[maybe_unused]] const double s0 = 1;
   const double s1 = f[2];
   const double s2 = s1*s1;
   const double s3 = f[1];
@@ -78,7 +78,7 @@ static inline double tr6(const double *f) {
   return s5;
 }
 static inline double tr7(const double *f) { return tr3(f); }
-static inline double tr8(const double *f) {
+static inline double tr8([[maybe_unused]] const double *f) {
   const double s0 = -1.9999999999999996;
   const double s1 = f[2];
   const double s2 = s1*s1;

@@ -1,6 +1,6 @@
 # NumTracer
 
-**NumTracer** is a header-only C++20 engine that builds and contracts tensor networks —
+**NumTracer** is a C++20 engine that builds and contracts tensor networks —
 metrics, momentum vectors, projectors, Dirac gamma matrices, and SU($N$) colour/flavour factors —
 and **generates flat, straight-line C++ kernels** from them, with no symbolic-algebra runtime and
 no external dependency.

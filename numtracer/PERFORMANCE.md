@@ -44,7 +44,7 @@ suite passes, including the per-flavour / per-component / disconnected flows
 `flow_sigl_dirac`). For indicative ratios of the larger gluon kernels (quark box `ZA4` ≈ 1.15×,
 three-gluon `ZA3` 1/4/7 within a small factor of FORM), see the per-flow `compare_*` drivers and
 `tests/refshim/`. The generation pipeline (the disposable build-time generator program) is
-described in the top-level `CLAUDE.md` and `numtracer/README.md`.
+described in the repo's top-level `README.md` (the *Architecture* section).
 
 ## Reproducing
 

@@ -1,5 +1,5 @@
 /// @file numeric_contract.hpp
-/// @brief The numeric (matrix-product) contraction engine (task #22): fold a diagram's Dirac trace
+/// @brief The numeric (matrix-product) contraction engine: fold a diagram's Dirac trace
 ///        by 4×4 spinor matrix **products** over @ref MPoly entries (γ numeric, momenta symbolic),
 ///        then contract the surviving free gluon legs against the pure-Lorentz network (projectors /
 ///        metrics / vectors / Levi-Civita) by a bounded index sum. Neither step suffers the
@@ -37,23 +37,28 @@ namespace numtracer::numeric
 {
 
 
-  /// @brief A pure-Lorentz network factor (numeric counterpart of @ref network::Elem).
-  ///   - kind 0 `nmet(a,b)`            : metric δ_{ab}
-  ///   - kind 1 `nvec(a, vlc)`         : vector leg `Σ coeff·comp(vid)` on Lorentz id `a`
-  ///   - kind 2 `nprojT(a,b, vlc, atom)`: transverse projector `P_T(k)_{ab}=δ_{ab}−k_a k_b·INV(k)`,
-  ///                                     `k=Σ coeff·comp(vid)`, `INV(k)` = inverse atom `atom`
-  ///   - kind 3 `neps(a,b,c,d)`        : Levi-Civita ε_{abcd}
-  ///   - kind 4 `nprojL(a,b, vlc, atom)`: longitudinal projector `P_L(k)_{ab}=k_a k_b·INV(k)`
-  ///   - kind 5 `nprojE(a,b, vlc, atom, atomS)`: finite-T electric projector `P_E = P_T − P_M`
-  ///   - kind 6 `nprojM(a,b, vlc, atomS)`: finite-T magnetic projector `P_M_{ij}=δ_{ij}−k_i k_j·INVS(k)`
-  ///     (i,j spatial; rows/cols of the temporal component 0 vanish). `INVS(k)=1/|k⃗|²` is atom `atomS`.
+  /// @brief A pure-Lorentz network factor (numeric counterpart of @ref network::Elem), tagged by
+  ///        @ref NElem::Kind and built by the nXxx() helpers below:
+  ///   - `Metric`  `nmet(a,b)`                     — δ_{ab}
+  ///   - `Vector`  `nvec(a, vlc)`                  — vector leg `Σ coeff·comp(vid)` on Lorentz id `a`
+  ///   - `Epsilon` `neps(a,b,c,d)`                 — Levi-Civita ε_{abcd}
+  ///   - `ProjT`   `nprojT(a,b, vlc, atom)`        — transverse `P_T(k)_{ab}=δ_{ab}−k_a k_b·INV(k)`
+  ///   - `ProjL`   `nprojL(a,b, vlc, atom)`        — longitudinal `P_L(k)_{ab}=k_a k_b·INV(k)`
+  ///   - `ProjE`   `nprojE(a,b, vlc, atom, atomS)` — finite-T electric `P_E = P_T − P_M`
+  ///   - `ProjM`   `nprojM(a,b, vlc, atomS)`       — finite-T magnetic `P_M_{ij}=δ_{ij}−k_i k_j·INVS(k)`
+  ///                                                 (i,j spatial; the temporal row/col 0 vanishes)
+  /// where `k = Σ coeff·comp(vid)`, `INV(k)=1/k²` is inverse atom `atom`, `INVS(k)=1/|k⃗|²` is `atomS`.
+  ///
+  /// Members are non-const so NElem stays movable in its std::vector (const members would delete
+  /// move-assignment and copy the vlc vector on every reallocation); the nXxx() builders are the only
+  /// constructors, so the values are still effectively immutable in practice.
   struct NElem {
     enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM };
-    const Kind kind = Metric;
-    const int a = 0, b = 0, c = 0, d = 0;
-    const std::vector<std::pair<double, int>> vlc; ///< momentum (kind 1 vector / kind 2/4/5/6 projector)
-    const int atom = -1;                           ///< full inverse-atom id `1/k²` (kind 2/4/5)
-    const int atomS = -1;                          ///< spatial inverse-atom id `1/|k⃗|²` (kind 5/6)
+    Kind kind = Metric;
+    int a = 0, b = 0, c = 0, d = 0;
+    std::vector<std::pair<double, int>> vlc; ///< momentum (Vector leg, or any projector's `k`)
+    int atom = -1;                           ///< full inverse-atom id `1/k²` (ProjT / ProjL / ProjE)
+    int atomS = -1;                          ///< spatial inverse-atom id `1/|k⃗|²` (ProjE / ProjM)
   };
   struct NTerm {
     Cx coeff{1, 0};
@@ -209,9 +214,8 @@ namespace numtracer::numeric
     F.v.assign(total, MPoly(nsym));
     if (ng % 2 == 1) return F; // odd → all zero
 
-    // CHIRAL 2×2 BLOCK fold (4× fewer MPoly multiplies than the full 4×4, tr(odd)=0 free): every γ^μ and
-    // slash is block-antidiagonal in the Weyl basis, so the running product is two 2×2 blocks whose roles
-    // alternate. Precompute each factor's (P=upper-right, Q=lower-left) 2×2 blocks once.
+    // Precompute each factor's Weyl 2×2 blocks (P = upper-right, Q = lower-left) once. The fold carries
+    // only these two blocks rather than the full 4×4 (4× fewer MPoly multiplies); see the algorithm note.
     using B2 = std::array<MPoly, 4>; // row-major 2×2
     auto blocksOf = [&](const Mat4 &M, B2 &P, B2 &Q) {
       for (int rr = 0; rr < 2; ++rr)
@@ -239,28 +243,24 @@ namespace numtracer::numeric
         if (commAslash[i]) blocksOf(commA[i], cAP[i], cAQ[i]);
         if (commBslash[i]) blocksOf(commB[i], cBP[i], cBQ[i]);
       }
-    // γ5 = diag(+I,−I) in the Weyl basis: block-DIAGONAL, so it never toggles the antidiag parity and
-    // costs no matrix multiply — it just negates one running block (the upper when the product is
-    // antidiagonal, the lower when diagonal; derived from R·diag(+I,−I)). A leading γ5 seeds the
-    // product as the diagonal diag(+I,−I) itself.
+    // γ5 = diag(+I,−I) (Weyl): block-diagonal, so it costs no multiply and never flips the parity — it just
+    // negates one running block (upper when the product is antidiagonal, lower when diagonal). A leading γ5
+    // seeds the product as diag(+I,−I).
     const B2 id2 = {MPoly::constant(nsym, Cx{1, 0}), MPoly(nsym), MPoly(nsym), MPoly::constant(nsym, Cx{1, 0})};
     auto neg2 = [&](const B2 &x) {
       return B2{MPoly(nsym) - x[0], MPoly(nsym) - x[1], MPoly(nsym) - x[2], MPoly(nsym) - x[3]};
     };
-    // BARE commutator [A,B] = A·B − B·A is block-DIAGONAL in the Weyl basis (A,B antidiagonal ⇒ A·B
-    // diagonal): upper = P_a Q_b − P_b Q_a, lower = Q_a P_b − Q_b P_a, where (P_a,Q_a)/(P_b,Q_b) are the
-    // (upper-right, lower-left) blocks of leg A / leg B. Like γ5, a diagonal factor — it never toggles the
-    // antidiag parity. The σ^{μν}=(i/2)[γ^μ,γ^ν] normalization (i/2 and sign) lives in the emitted SCALAR.
+    // BARE commutator [A,B] = A·B − B·A is block-diagonal (A,B antidiagonal ⇒ A·B diagonal), like γ5 so it
+    // never flips the parity: upper = P_a Q_b − P_b Q_a, lower = Q_a P_b − Q_b P_a, from the (upper-right,
+    // lower-left) blocks of legs A,B. (The σ^{μν}=(i/2)[γ^μ,γ^ν] normalization is applied in the scalar.)
     auto subB2 = [&](const B2 &x, const B2 &y) { return B2{x[0] - y[0], x[1] - y[1], x[2] - y[2], x[3] - y[3]}; };
     auto commBlocks = [&](const B2 &Pa, const B2 &Qa, const B2 &Pb, const B2 &Qb, B2 &Su, B2 &Sl) {
       Su = subB2(mul2(Pa, Qb), mul2(Pb, Qa));
       Sl = subB2(mul2(Qa, Pb), mul2(Qb, Pa));
     };
-    // Fold the whole chain for ONE assignment of the free legs to concrete components (`legComp`),
-    // returning the product's trace tr(m0)+tr(m1). The running product is two 2×2 Weyl blocks (m0,m1)
-    // whose upper/lower roles alternate (`antidiag`) with each block-antidiagonal factor; γ5 and bare
-    // commutators are block-diagonal and never flip the parity. `ng` is even here, so the final product
-    // is block-diagonal and its trace is tr(m0)+tr(m1).
+    // Fold the chain for ONE assignment of the free legs to concrete components (`legComp`). The running
+    // product is two Weyl blocks (m0,m1) with alternating roles (`antidiag`); ng is even, so the result is
+    // block-diagonal and its trace is tr(m0)+tr(m1).
     auto foldChain = [&](const std::vector<int> &legComp) -> MPoly {
       B2 m0, m1;
       bool started = false, antidiag = true;
@@ -969,15 +969,12 @@ namespace numtracer::numeric
     {
       DPoly out(nsym);
       const int nSlots = static_cast<int>(slots.size());
-      // The dressed chain is always a quark line, so it carries ≥1 closed spinor loop; the loop count is
-      // (LoopSep markers)+1. A combination that collapses a WHOLE loop to the identity — every slot on it
-      // picks the δ option and the loop carries no fixed γ — leaves that loop's segment empty. split_loops
-      // drops empty segments and close_loops returns 1 for an empty factor set, so the loop's tr(1)=4
-      // would be silently lost (a 4× undercount, e.g. the all-mass channel of a scalar/Yukawa self-energy
-      // quark loop). Count the loops up front so we can restore 4^(#collapsed loops) per combination. This
-      // path is reached ONLY for dressed quark lines (≥1 loop): pure-gauge diagrams have no slots and never
-      // arrive here, and an existing dressed flow whose every loop keeps a fixed γ (Zq/ZAqbq{1,4,7}, …)
-      // never collapses ⇒ nEmpty==0 ⇒ byte-identical.
+      // The dressed chain is a quark line with ≥1 closed spinor loop ((LoopSep markers)+1). A combination
+      // that collapses a WHOLE loop to the identity (every slot on it takes the δ option, no fixed γ) leaves
+      // an empty segment: split_loops drops it and close_loops returns 1, silently losing that loop's
+      // tr(1)=4 — a 4× undercount (e.g. the all-mass channel of a Yukawa self-energy quark loop). Count the
+      // loops up front so each combination can restore 4^(#collapsed loops). Flows whose every loop keeps a
+      // fixed γ (Zq/ZAqbq{1,4,7}, …) never collapse ⇒ nEmpty==0 ⇒ output byte-identical.
       int nloops = 1;
       for (const DChainTok &tok : chain)
         if (!tok.isSlot && tok.fac.kind == network::DFac::LoopSep) ++nloops;
@@ -1171,18 +1168,14 @@ namespace numtracer::numeric
   ///        empty dressing monomial reduces to exactly the @ref MPoly path (no `dress` leaves).
   NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
   {
-    // PER-DRESSING-CHANNEL noise prune (NOT one global tolerance). A DPoly is
-    // Σ_d (dressing-product_d)·(kinematic-poly_d); each channel `d` is reweighted at RUNTIME by its
-    // dressing product `dr_d` (regulators/Z-factors), which can swing by many orders across the loop
-    // domain. A single global `1e-9·max|c|` would set the tolerance from the largest-coefficient channel
-    // and DELETE a small-coefficient channel's GENUINE terms at generation time — silently fine while
-    // that channel's runtime weight is small, but WRONG the moment a dressing suppresses the large
-    // channel (dr→~0) where the small one should dominate. So prune each channel against ITS OWN max,
-    // exactly as the @ref MPoly overload does within one trace — which is also what the distributed
-    // (collection-off) path does, since there each channel is a separate MPoly trace pruned on its own
-    // scale. The "clean ~10-order gap between round-off and physics" holds WITHIN a channel, not across
-    // channels at different scales. (`dmonoTol(mp) ≤ global tol`, so this only KEEPS more, never wrongly
-    // drops — strictly safer, and identical when all channels share a scale.)
+    // PER-DRESSING-CHANNEL noise prune (not one global tolerance). A DPoly is Σ_d (dressing_d)·(kinematic_d);
+    // each channel `d` is reweighted at runtime by its dressing product, which can swing by many orders across
+    // the loop domain. A single global tolerance, taken from the largest-coefficient channel, would delete a
+    // small channel's GENUINE terms — fine while that channel is runtime-small, but wrong the moment a dressing
+    // suppresses the large one (dr→0) and the small one should dominate. So prune each channel against ITS OWN
+    // max, exactly as the @ref MPoly overload does and as the distributed (collection-off) path already does
+    // per trace. `dmonoTol(mp) ≤` any global tol, so this only ever KEEPS more — strictly safer, and identical
+    // when all channels share a scale.
     auto dmonoTol = [](const MPoly &mp) {
       double maxabs = 0.0;
       for (const auto &[m, c] : mp.t)

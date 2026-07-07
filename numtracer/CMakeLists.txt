@@ -181,6 +181,16 @@ endif()
 option(NUMTRACER_BUILD_TESTS "Build the NumTracer tests and benchmarks" ${NT_IS_TOP_LEVEL})
 
 if(NUMTRACER_BUILD_TESTS)
+  # The tests compile committed machine-generated kernels (tests/gen/, tests/refshim/). NumTracer's own
+  # emitter now marks the unused-by-construction bits [[maybe_unused]] (see codegen/gen.hpp and
+  # mathematica/Codegen.m), so freshly regenerated NumTracer kernels are -Wunused clean. This fallback
+  # covers the two remaining sources that are NOT fixable at build time: committed NumTracer kernels not
+  # yet regenerated against the current emitter, and the FormTracer/FunKit-emitted oracle kernels
+  # (external — we don't own their emitter). Silence just these two warnings for the internal test/bench
+  # targets only — directory-scoped and CXX-only, so it never reaches the shipped library (added above),
+  # the installed package, or nvcc; -Wall -Wextra otherwise stays in force.
+  add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter;-Wno-unused-variable>")
+
   # On-the-fly color-contraction.
   add_executable(sun_contract tests/sun_contract.cpp)
   target_link_libraries(sun_contract PRIVATE NumTracer::NumTracer)

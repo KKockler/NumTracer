@@ -16,6 +16,7 @@
 #include "numtracer/numeric/mpoly.hpp"    // MPoly
 
 #include <array>
+#include <utility> // std::move
 
 namespace numtracer::numeric
 {

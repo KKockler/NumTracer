@@ -11,7 +11,7 @@ template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i
 //   f[4] = var(0)
 //   f[5] = var(2)
 static inline constexpr int nenv = 6;
-static inline void fill(double *f, double p0, double p, double l0, double l1, double cos1) {
+static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] double p, [[maybe_unused]] double l0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1) {
   f[0] = p0;
   f[1] = p;
   f[2] = l0;
@@ -19,13 +19,13 @@ static inline void fill(double *f, double p0, double p, double l0, double l1, do
   f[4] = cos1;
   f[5] = l1;
 }
-static inline double tr0(const double *f) {
+static inline double tr0([[maybe_unused]] const double *f) {
   const double s0 = -2;
   const double s1 = f[5];
   const double s2 = s0*s1;
   const double s3 = f[4];
   const double s4 = s2*s3;
-  const double s5 = -1;
+  [[maybe_unused]] const double s5 = -1;
   const double s6 = f[2];
   const double s7 = -s6;
   const double s8 = f[0];

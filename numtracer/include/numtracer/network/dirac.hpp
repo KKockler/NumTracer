@@ -45,14 +45,17 @@ namespace numtracer::network
   ///                           distributed into two separate traces. The σ^{μν}=(i/2)[γ^μ,γ^ν]
   ///                           normalization (the i/2 and any sign) lives in the emitted SCALAR, not the
   ///                           token — the front-end's Plus is already a bare bracket.
+  // Members are non-const so DFac stays movable in the std::vector chains it lives in (const members
+  // would delete move-assignment and force the vlc vectors to be copied on every reallocation). The
+  // builder functions below are the only constructors, so the values are still effectively immutable.
   struct DFac {
     enum Kind { Gamma, Gamma5, Slash, Comm, LoopSep };
-    const Kind kind = Gamma;
-    const int mu = -1; ///< kind 0: open Lorentz id; kind 3: leg-A FREE id (or -1 ⇒ leg-A is a slash, use `vlc`)
-    const std::vector<std::pair<double, int>>
-        vlc;           ///< kind 1: momentum lin. comb.; kind 3: leg-A slash momentum (when mu<0)
-    const int nu = -1; ///< kind 3: leg-B FREE id (or -1 ⇒ leg-B is a slash, use `vlc2`)
-    const std::vector<std::pair<double, int>> vlc2; ///< kind 3: leg-B slash momentum (when nu<0)
+    Kind kind = Gamma;
+    int mu = -1; ///< kind 0: open Lorentz id; kind 3: leg-A FREE id (or -1 ⇒ leg-A is a slash, use `vlc`)
+    std::vector<std::pair<double, int>>
+        vlc;     ///< kind 1: momentum lin. comb.; kind 3: leg-A slash momentum (when mu<0)
+    int nu = -1; ///< kind 3: leg-B FREE id (or -1 ⇒ leg-B is a slash, use `vlc2`)
+    std::vector<std::pair<double, int>> vlc2; ///< kind 3: leg-B slash momentum (when nu<0)
   };
   /// @brief A closed gamma chain in trace order (loop closes implicitly).
   using DiracNet = std::vector<DFac>;

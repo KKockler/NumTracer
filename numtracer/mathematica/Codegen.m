@@ -1383,7 +1383,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        True, Append[polyFrameSpec[frame], {}]];                               (* finite-T / general frame *)
     symDefs = Join[ad, ud];
     numericComponents[env, pf, symDefs, ug]];
-  fillArgSig = StringRiffle[("double " <> SymbolName[#]) & /@ fillArgs, ", "];
+  (* [[maybe_unused]]: a frame may not reference every fill() argument (e.g. an angle or dressing atom
+     that only some diagrams use), so mark each parameter to keep the emitted kernel -Wunused-clean. *)
+  fillArgSig = StringRiffle[("[[maybe_unused]] double " <> SymbolName[#]) & /@ fillArgs, ", "];
 
   (* walk diagrams: each one is a Lorentz trace x a colour factor x a dressing/kinematic coeff. The
      bridge distribution split each 4-gluon vertex into colour channels, so MANY diagrams share the
@@ -1639,7 +1641,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes
        the atom's value (regulators / interpolators in scope there) and passes it. Matches fm.dress. *)
     If[! FreeQ[invNets, _ntDressedCore],
-       fillArgSig = fillArgSig <> StringJoin[(", double dr_" <> ToString[#]) & /@ Sort[Keys[$drTable]]]]];
+       fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] double dr_" <> ToString[#]) & /@ Sort[Keys[$drTable]]]]];
 
   kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor,
     "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];

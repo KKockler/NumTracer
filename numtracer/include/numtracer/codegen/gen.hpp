@@ -236,14 +236,12 @@ namespace numtracer::network
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor)
   {
-    // Compile-time escape hatch (NT_GEN_NOINLINE_TRACES): force the per-diagram trace functions
-    // OUT-OF-LINE. The default all-inlined emission is the runtime-optimal one — the register
-    // spill it can cause once many large traces fuse into one kernel (≈four-gluon scale) is benign
-    // (the loop is fp64-pipe-bound, not occupancy/memory-bound, and inlining keeps cross-trace CSE),
-    // so out-of-lining is measurably SLOWER (≈7–19%). But a 100k+-line all-inlined kernel is
-    // expensive to compile: out-of-lining the traces roughly halves the nvcc compile time and RAM
-    // of the 147k-line ZA4_147 kernel. `__attribute__((noinline))` is honoured by both g++ (host)
-    // and nvcc (device); fill()/powr stay inline. See tests/gpu/README.md for the measurements.
+    // Compile-time escape hatch (NT_GEN_NOINLINE_TRACES): force the per-diagram trace functions OUT-OF-LINE.
+    // The default all-inlined emission is runtime-optimal — any register spill on a huge fused kernel is
+    // benign (the loop is fp64-pipe-bound, and inlining keeps cross-trace CSE), so out-of-lining is measurably
+    // slower. Its only purpose is compile cost: out-of-lining roughly halves the nvcc compile time and RAM of
+    // the largest (100k+-line) kernels. `__attribute__((noinline))` is honoured by both g++ (host) and nvcc
+    // (device); fill()/powr stay inline. See PERFORMANCE.md / tests/gpu/README.md for the measurements.
     std::string effDecor = decor;
     if (std::getenv("NT_GEN_NOINLINE_TRACES")) {
       const std::string kw = " inline";
@@ -276,29 +274,47 @@ namespace numtracer::network
         break; // RNEG
       }
     };
+    // Liveness of the SSA slots: a slot that feeds neither a result root nor another slot's operand is
+    // dead (greedy Horner + CSE occasionally leaves one). Tag exactly those `const double sN` with
+    // `[[maybe_unused]]` so the flat kernel is -Wunused-variable clean without decorating every line.
+    std::vector<char> used(p.ins.size(), 0);
+    auto markUse = [&](int r) {
+      if (r >= 0 && r < static_cast<int>(p.ins.size())) used[r] = 1;
+    };
+    for (const RInstr &in : p.ins) {
+      if (in.op == RADD || in.op == RSUB || in.op == RMUL) {
+        markUse(in.a);
+        markUse(in.b);
+      } else if (in.op == RNEG)
+        markUse(in.a);
+    }
+    markUse(p.root);
+    markUse(p.rootIm); // kRealProgram (INT_MIN) and -1 are filtered by the r>=0 guard
+    auto slotDecl = [&](std::size_t i) { return used[i] ? "  const double s" : "  [[maybe_unused]] const double s"; };
+
     // COMPLEX trace (folded imaginary colour): real + imaginary halves share the instruction stream;
     // return std::complex<double>{re, im}. The kernel multiplies it by the (complex) dressing
     // coefficient and the consumer takes std::real — so the imaginary part reaches the kernel.
     if (p.rootIm != kRealProgram) {
       auto slot = [](int r) { return r < 0 ? std::string("0.0") : "s" + std::to_string(r); };
-      out << effDecor << " std::complex<double> " << name << "(const double *f) {\n";
+      out << effDecor << " std::complex<double> " << name << "([[maybe_unused]] const double *f) {\n";
       out << std::setprecision(17);
       for (std::size_t i = 0; i < p.ins.size(); ++i) {
-        out << "  const double s" << i << " = ";
+        out << slotDecl(i) << i << " = ";
         emitRhs(p.ins[i]);
         out << ";\n";
       }
       out << "  return std::complex<double>{" << slot(p.root) << ", " << slot(p.rootIm) << "};\n}\n";
       return;
     }
-    out << effDecor << " double " << name << "(const double *f) {\n";
+    out << effDecor << " double " << name << "([[maybe_unused]] const double *f) {\n";
     if (p.root < 0) {
       out << "  return 0.0;\n}\n";
       return;
     }
     out << std::setprecision(17);
     for (std::size_t i = 0; i < p.ins.size(); ++i) {
-      out << "  const double s" << i << " = ";
+      out << slotDecl(i) << i << " = ";
       emitRhs(p.ins[i]);
       out << ";\n";
     }

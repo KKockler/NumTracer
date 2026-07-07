@@ -117,8 +117,13 @@ public:
     cudaEventDestroy(e1_);
     cudaEventDestroy(e2_);
   }
+  // Owns raw device allocations and CUDA events freed once in the destructor, so it is neither
+  // copyable nor movable — a move would leave two objects owning (and later double-freeing) the same
+  // pointers. Copy is deleted below; the moves are spelled out so the non-movability is explicit.
   SegmentedQuadIntegrator(const SegmentedQuadIntegrator &) = delete;
   SegmentedQuadIntegrator &operator=(const SegmentedQuadIntegrator &) = delete;
+  SegmentedQuadIntegrator(SegmentedQuadIntegrator &&) = delete;
+  SegmentedQuadIntegrator &operator=(SegmentedQuadIntegrator &&) = delete;
 
   /// @brief Upload one quadrature axis (host nodes/weights, already mapped to the target
   ///        interval — GSL's fixed tables include the interval scaling in the weights).

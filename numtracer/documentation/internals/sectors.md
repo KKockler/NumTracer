@@ -1,6 +1,6 @@
 # Sector data
 
-> Headers: `dirac/dirac_data.hpp`, `dirac/dense_trace.hpp`, `sun/sun_data.hpp`, `sun/sun.hpp`
+> Headers: `dirac/dirac_data.hpp`, `dirac/dense_trace.hpp`, `sun/sun_data.hpp`, `core/cmat.hpp`
 
 The contraction engine is ignorant of physics — it folds matrices and sums indices. The physics
 constants live in small, typed-out tables that the engine reads. Each sector has a `constexpr`
@@ -28,8 +28,8 @@ sixteen; that sparsity, and the block-antidiagonal Weyl structure, are what the 
 
 ### The chiral dense trace
 
-`dense_trace.hpp` (which lives with the tests, `tests/oracle/dense_trace.hpp`) provides a
-sparsity-aware dense gamma trace, `chiral_gamma_trace`. A
+`dirac/dense_trace.hpp` provides a sparsity-aware dense gamma trace, `chiral_gamma_trace`
+(the tests keep a mirror copy at `tests/oracle/dense_trace.hpp`). A
 slashed momentum in the Weyl basis is block-antidiagonal, $\slashed p = \big[\begin{smallmatrix}0
 & P\\ Q & 0\end{smallmatrix}\big]$, so a chain of them folds into products of 2×2 chiral blocks
 rather than 4×4 matrices — a few times faster than the brute 4×4 chain — and yields
@@ -44,7 +44,7 @@ the structure constants $f^{abc}$ defined by $[T^a, T^b] = i f^{abc} T^c$. Colou
 contractions of these, e.g. $f^{acd} f^{bcd} = N\,\delta^{ab}$ and
 $\mathrm{tr}(T^a T^b) = \tfrac12 \delta^{ab}$.
 
-`sun/sun_data.hpp` types out the SU(2)/SU(3) tables, and `sun/sun.hpp` provides the runtime
+`sun/sun_data.hpp` types out the SU(2)/SU(3) tables and provides the runtime
 **oracle** `SUNBuilder<N>`: its constructor builds the generators (generalized Gell-Mann construction)
 and the structure constants $f^{abc} = -2i\,\mathrm{tr}([T^a,T^b]T^c)$ for any `N`, which is the
 source of truth the typed-out tables are checked against. A colour network with no free indices
@@ -54,5 +54,5 @@ dresses each colour/flavour component differently (a group-diagonal $\delta$) fo
 `sun_value_dressed` to a polynomial $\sum_a c_a Z_a$ over runtime per-component dressing leaves;
 `sun_value_cx` is left untouched, so colour-blind flows are unchanged.
 
-`sun.hpp` also defines `Mat<N>`, `matmul`, and `trace` — a plain dense complex matrix type used
+`core/cmat.hpp` defines `Mat<N>`, `matmul`, and `trace` — a plain dense complex matrix type used
 by the oracle and the tests.
