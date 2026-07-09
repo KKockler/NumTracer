@@ -64,7 +64,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, constExpr_ /; Head[constExpr] =!= Rule && Head[
   MakeNTKernelDiFfRG[ntk, "Constant" -> constExpr, opts];
 
 MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] := Module[
-  {name, nsTag, params, dress, dressTys, dressTy, scalarParams, device, decor, body,
+  {name, nsTag, params, dress, dressTys, dressTy, scalarParams, adParams, device, decor, body,
    flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
 
   name = OptionValue["Name"];
@@ -92,6 +92,12 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] := Module[
   scalarParams = Cases[params, a_?AssociationQ /; a["Type"] === "double" &&
      ! MemberQ[{"k", "p"}, If[StringQ[a["Name"]], a["Name"], SymbolName[a["Name"]]]] :> a["Name"]];
 
+  (* AD-flagged scalar params (e.g. d1V, d2V for the FE-potential flows): the DiFfRG integrator has an
+     autodiff twin (integrator_AD) that forwards these as autodiff::real, so the kernel must declare them
+     as `const auto&`, not `const double&`. Thread their names to MakeNTKernel so it types them auto. *)
+  adParams = Cases[params, a_?AssociationQ /; a["Type"] === "double" && TrueQ[a["AD"]] &&
+     ! MemberQ[{"k", "p"}, If[StringQ[a["Name"]], a["Name"], SymbolName[a["Name"]]]] :> a["Name"]];
+
   (* resolve paths *)
   flowDir   = ntFlowDir[OptionValue["FlowDirectory"]];
   genDir    = OptionValue["GenDirectory"] /. Automatic :> FileNameJoin[{ParentDirectory[flowDir], "gen"}];
@@ -114,7 +120,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] := Module[
   MakeNTKernel[ntk, genFile, kernelFile, tracesFile,
     "Name" -> name <> "_kernel", "Namespace" -> nsTag,
     "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor,
-    "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams,
+    "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams,
     "Constant" -> OptionValue["Constant"],
     "RuntimeInclude" -> None,
     "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"},

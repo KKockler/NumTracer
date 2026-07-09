@@ -1059,7 +1059,7 @@ ntDressType[dressTy_] := If[dressTy === Automatic, "auto", dressTy];
         generator program + the kernel header that calls its output. ---------------------- *)
 
 Options[mkGenerateKernel] = {"Name" -> "nt_inv_kernel", "Namespace" -> Automatic,
-  "Dressings" -> {}, "ScalarParams" -> {}, "IncludeDir" -> Automatic,
+  "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "IncludeDir" -> Automatic,
   "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False,
   "GlobalCollect" -> True,  (* default ON: groups diagrams by dressing coeff + folds colour
     numerically so COEN collects the factored coefficient across diagrams (FORM-style); ~30% runtime
@@ -1339,7 +1339,7 @@ diagColPolys[colnetStrs_, includeDir_] := Module[
         the kernel's number type, then emit and write (write-if-changed) the kernel header that fills
         the fundamental symbols and calls the generated trN(f). *)
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] := Module[
-  {name, ns, dress, scalarParams, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g,
+  {name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g,
    colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn,
    classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run,
    hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor,
@@ -1356,6 +1356,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   $RecursionLimit = Max[$RecursionLimit, 1048576];
   name  = OptionValue["Name"];  dress = OptionValue["Dressings"];
   scalarParams = OptionValue["ScalarParams"];  (* loop-independent scalar doubles threaded into the signature *)
+  (* AD-flagged scalars (d1V, d2V for FE-potential flows) must be `const auto&` so the kernel also
+     accepts autodiff::real from the integrator_AD twin; everything else stays `const double&`. *)
+  adParams = OptionValue["ADParams"];
+  adNames = If[StringQ[#], #, SymbolName[#]] & /@ adParams;
+  scalarTy = Function[nm, If[MemberQ[adNames, If[StringQ[nm], nm, SymbolName[nm]]], "auto", "double"]];
   angleDefs = OptionValue["AngleDefs"];  crossCSE = OptionValue["CrossTraceCSE"];
   gc = OptionValue["GlobalCollect"];  (* Route-B: fold the WHOLE integrand (all diagrams, dressings as
     inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE is subsumed by it. *)
@@ -1634,9 +1639,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   (* every dressing — including the named per-component diagonal dressings (ntSUNDiag{Fund,Adj}) —
      is an ordinary scalar interpolator kernel parameter. *)
   With[{dressTy = Function[nm, interpTy]},
-    kernelParams = Join[mkParam[#, "double"] & /@ args, mkParam[#, "double"] & /@ scalarParams, mkParam[#, dressTy[#]] & /@ dress];
+    kernelParams = Join[mkParam[#, "double"] & /@ args, mkParam[#, scalarTy[#]] & /@ scalarParams, mkParam[#, dressTy[#]] & /@ dress];
     constParams  = Join[mkParam[#, "double"] & /@ Select[args, # === Global`p || # === Global`k &],
-                        mkParam[#, "double"] & /@ scalarParams,
+                        mkParam[#, scalarTy[#]] & /@ scalarParams,
                         mkParam[#, dressTy[#]] & /@ dress];
     (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes
        the atom's value (regulators / interpolators in scope there) and passes it. Matches fm.dress. *)
@@ -1805,7 +1810,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    (see Options[mkGenerateKernel] for the set). *)
 
 Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic,
-  "Dressings" -> {}, "ScalarParams" -> {},
+  "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {},
   "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True,
   "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True,
   "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>,
