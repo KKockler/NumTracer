@@ -1,11 +1,8 @@
 # Colour factors
 
-We start with colour because it is the piece that folds all the way to a *pure number* — no
-momenta, no free indices — so it is the simplest sector to see the engine's "contract and fold"
-in isolation. (If the QCD vocabulary is unfamiliar, the
-[Glossary](../getting_started/glossary.md) defines every term.)
+We start with colour because it is the piece that folds all the way to a *pure number* — no momenta, no free indices — so it is the simplest sector to see the engine's "contract and fold" in isolation. (If the QCD vocabulary is unfamiliar, the [Glossary](../getting_started/glossary.md) defines every term.)
 
-A colour factor in QCD arises through a contraction of SU(N) generators $T^a$ and structure constants $f^{abc}$ with no free indices and no momenta — so it is usually **just a number**, known before any grid point is evaluated. Both quark-self-energy diagrams exchange one gluon, so both carry the same colour structure
+A colour factor in QCD arises through a contraction of SU(N) generators $T^a$ and structure constants $f^{abc}$ with all indices closed. Both quark-self-energy diagrams exchange one gluon, so both carry the same colour structure
 
 $$
 T^a_{ij}\,T^a_{jk} = C_F\,\delta_{ik},
@@ -22,27 +19,20 @@ works, but it does exactly what a colour factor never needs — it *materialises
 tensor only to sum it back down to one scalar. It does not scale, either: the colour network of a
 four-gluon vertex is far too large to ever instantiate as a tensor.
 
-`SUNNet` + `sun_value_cx` is the path the codegen actually uses. It contracts the network but never
-builds a tensor: it folds structure constants and generator traces *sparsely* over the typed-out
-SU(N) tables (`network/sun_net.hpp`) straight to a single complex number. It holds nets a
-materialised tensor never could, and the generated kernel carries only the resulting **number**
-$C_F$ — never a colour tensor. This tutorial computes $C_F$ that way and checks it against its
-known closed form.
+What `NumTracer` does instead is to contract the network but never materialize a tensor: it folds structure constants and generator traces *sparsely* over compile-time SU(N) tables (`network/sun_net.hpp`) straight to a single complex number. The generated kernel carries only the resulting **number** $C_F$ — never a colour tensor. This tutorial computes $C_F$ that way and checks it against its known closed form.
 
 ## The program
 
-`Tutorials/01-color-contraction/colour_factors.cpp` — folds the network to a number with
-`network::sun_value_cx`, and checks it against the closed forms $\mathrm{tr}(T^aT^a) = 4$ and
-$f^{abc}f^{abc} = 24$.
+`Tutorials/01-color-contraction/colour_factors.cpp` — folds the network to a number with `network::sun_value_cx`, and checks it against the closed forms $\mathrm{tr}(T^aT^a) = 4$ and $f^{abc}f^{abc} = 24$.
 
 ```cpp
-#include "numtracer/network/sun_net.hpp" // sun_value_cx + SUN::f / SUN::T / SUN::deltaAdj / SUN::deltaFund
+#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_cx + SUN::f / SUN::T / SUN::deltaAdj / SUN::deltaFund
 
 #include <cmath>
 #include <cstdio>
 
 using namespace numtracer;          // Cx, approx
-namespace net = numtracer::network; // SUNNet, sun_value_cx, SUN — the same alias the other tutorials use
+namespace net = numtracer::network; // SUNNet, sun_value_cx, SUN
 
 // A single unscoped enum keeps every colour label distinct (auto-numbered), so the adjoint and
 // fundamental indices never collide (axes contract iff their labels are equal).
@@ -109,4 +99,4 @@ per-component dressing array folds instead to a polynomial $\sum_a c_a Z_a$, whi
 NumTracer dresses individual colour/flavour components — see
 [per-flavour and per-component dressings](dressed-flavour.md).
 
-Next: the Dirac trace — the part that carries the momenta — [hand-coded](dirac-traces.md).
+Next: the [Dirac trace](dirac-traces.md) — the part that carries the momenta.

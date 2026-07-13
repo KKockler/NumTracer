@@ -1,6 +1,6 @@
 // NumTracer — ZA3 flow integrated on GPU: the full 4D loop integral (radial l1 + two angles;
 // the trivial phi gives the 2π in the prefactor) for a log-spaced grid of external momenta p,
-// in ONE phase-1 launch + one segmented reduction (numtracer/cuda/integrator.cuh, modeled on
+// in ONE phase-1 launch + one segmented reduction (tests/gpu/integrator.cuh, modeled on
 // DiFfRG's Integrator_p2_4D_2ang::map). Quadrature: GSL Gauss-Legendre (l1, cos2) +
 // Gauss-Chebyshev-2 (cos1, jacobian baked into the weights).
 //
@@ -10,7 +10,7 @@
 //     (GPU FMA contraction, different summation order) sit around 1e-13.
 //   timing: same orders, 2 warm-ups + 5 timed map() calls, per-phase cudaEvent times.
 #include "ZA3_gpu_kernel.hh"
-#include "numtracer/cuda/integrator.cuh"
+#include "integrator.cuh"
 #include "quadrature.hpp"
 #include "ref.hpp"
 

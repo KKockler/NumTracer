@@ -8,7 +8,7 @@ We apply it to the warm-up $p\cdot P(l)\cdot p$ and recover the angular factor $
 `Tutorials/03-lorentz-networks/lorentz_networks.cpp`:
 
 ```cpp
-#include "numtracer/numeric/numeric_contract.hpp" // nvec / nprojT (NNet) + numeric_value -> MPoly
+#include <numtracer.hpp> // the whole NumTracer API — here: nvec / nprojT (NNet) + numeric_value -> MPoly
 
 #include <array>
 #include <cmath>

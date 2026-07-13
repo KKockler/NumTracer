@@ -1,4 +1,4 @@
-// NumTracer GPU tests — Kokkos twin of numtracer/cuda/integrator.cuh: the same two-phase
+// NumTracer GPU tests — Kokkos twin of tests/gpu/integrator.cuh: the same two-phase
 // map/reduce (phase 1: one parallel_for writes every weighted integrand value to a device
 // View; phase 2: a pure per-grid-point team reduction, DiFfRG QuadratureIntegrator::map
 // style) expressed in Kokkos instead of raw CUDA + cub. Built against the DiFfRG-bundled

@@ -11,6 +11,7 @@
 #pragma once
 
 #include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
 #include <cmath>
 #include <sstream>
@@ -45,7 +46,7 @@ inline std::vector<network::GenProg> run_numeric(int nsym, const std::vector<Num
 inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &symNames) {
   if (p.t.empty()) return "0.0";
   if ((int)symNames.size() < p.nsym)
-    throw std::runtime_error("mpoly_to_cpp: symNames shorter than the polynomial's symbol count");
+    NT_THROW(std::runtime_error, "mpoly_to_cpp: symNames shorter than the polynomial's symbol count");
   std::ostringstream os;
   os.setf(std::ios::scientific);
   os.precision(17);
@@ -55,9 +56,9 @@ inline std::string mpoly_to_cpp(const MPoly &p, const std::vector<std::string> &
   bool first = true;
   for (const auto &[m, c] : p.t) {
     if (std::abs(c.im) > kRealCoeffTol)
-      throw std::runtime_error("mpoly_to_cpp: complex coefficient where a real expression was expected");
+      NT_THROW(std::runtime_error, "mpoly_to_cpp: complex coefficient where a real expression was expected");
     if (!m.atoms.empty())
-      throw std::runtime_error("mpoly_to_cpp: monomial carries an inverse atom (not a plain expression)");
+      NT_THROW(std::runtime_error, "mpoly_to_cpp: monomial carries an inverse atom (not a plain expression)");
     const double v = c.re;
     if (!first) os << (v < 0 ? " - " : " + ");
     else if (v < 0) os << "-";

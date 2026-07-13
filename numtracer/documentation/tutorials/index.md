@@ -1,14 +1,15 @@
 # Tutorials
 
-These tutorials follow one running example — the **quark self-energy**, the one-loop diagram in
-which a quark emits and reabsorbs a gluon — starting with the tensor network itself, all the way to a generated,
-validated kernel that contracts the network.
+These tutorials follow one running example — the one-loop **quark self-energy**, in which a quark emits and reabsorbs a gluon.
+We start with the tensor network itself and describe all steps up to an auto-generated, validated kernel that contracts the network.
 
-Each page leads with a complete, runnable program. You can write and compile them yourself, or find and compile them in the repository's `Tutorials/` folder. The programs depend only on `NumTracer` itself and require a C++20 compiler.
+Each page leads with a complete, runnable program, which you can write and compile yourself (you can also find them in the repository's `Tutorials/` folder). 
+The programs depend only on `NumTracer` itself and require a C++20 compiler. If you haven't installed `NumTracer` yet, do so by following the [installation](../getting_started/installation.md).
 
 ## The running example
 
-Deriving the flow of the quark two-point function (two functional derivatives of the Wetterich equation w.r.t. quarks) produces exactly **two diagrams**: the same quark–gluon triangle, once with the regulator insertion $\partial_t R$ on the **gluon** line and once on the **quark** line.
+We take the flow of the quark two-point function in an fRG context as the example. 
+This flow has exactly **two diagrams**: two quark–gluon polarizations, once with the regulator insertion $\partial_t R$ on the transversal **gluon** line and once on the **quark** line.
 Projecting onto the wave function and performing the colour and Dirac algebra, the integrand factorises into
 
 $$
@@ -34,11 +35,7 @@ Read [**Key concepts**](../getting_started/concepts.md) first — it defines how
 
 ```{admonition} Not here for QCD?
 :class: note
-These tutorials use one physics example, but the engine is general. For a domain-neutral starting
-point see [**Bring your own network**](../getting_started/bring-your-own-network.md) (a hello-world
-with no physics vocabulary and the DSL↔C++ dictionary), and keep the
-[**Glossary**](../getting_started/glossary.md) open — every QCD term below (*dressing*, *regulator*,
-*colour*, …) is defined there as *example* vocabulary, not something the engine knows about.
+These tutorials use a QCD example, but the engine is general for QFTs in $d=4$ spacetime dimensions. For a domain-neutral starting point see [**Bring your own network**](../getting_started/bring-your-own-network.md) (a hello-world with no physics vocabulary and the Mathematica↔C++ dictionary), and keep the [**Glossary**](../getting_started/glossary.md) open — every QCD/fRG term below (*dressing*, *regulator*, *colour*, …) is defined there as *example* vocabulary, not something the engine knows about.
 ```
 
 ## Building the programs
@@ -52,8 +49,7 @@ cmake --build build -j4        # build every tutorial
 ctest --test-dir build         # run them all as a self-checking test suite
 ```
 
-Each page below also gives the one-target command
-(`cmake --build build --target <name>`) and the program's real output.
+Each page below also gives the one-target command (`cmake --build build --target <name>`) and the program's real output.
 
 ## The path through these pages
 
@@ -62,7 +58,7 @@ Each page below also gives the one-target command
 3. **[Lorentz networks](lorentz-networks.md)** — contract a network of metrics, vectors and projectors to a scalar polynomial over the loop frame.
 4. **[A full diagram](full-diagram.md)** — assemble the whole $T_{\text{num}}$ by hand and validate it two ways (numeric engine, closed form).
 5. **[Generating kernels from Mathematica](generating-kernels.md)** — the front-end that writes all of the above from a tiny DSL.
-6. **[Finite temperature](finite-temperature.md)** — the running example in the heat-bath frame: electric/magnetic projectors, the spatial scalar product, and a distinct Matsubara component.
+6. **[Finite temperature](finite-temperature.md)** — the running example at finite $T$: electric/magnetic projectors (thermal split), the spatial scalar product, and a distinct Matsubara component.
 7. **[Per-flavour and per-component dressings](dressed-flavour.md)** — dress individual flavours or colour/flavour components differently: the per-flavour split and the group-diagonal dressing heads.
 
 For the design behind the engine, see [Under the Hood](../internals/index.md).

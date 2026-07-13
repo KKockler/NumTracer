@@ -22,7 +22,7 @@ $$
 `Tutorials/00-hello-network/hello_network.cpp`:
 
 ```cpp
-#include "numtracer/numeric/numeric_contract.hpp" // nvec / nmet / nprojT (NNet) + numeric_value
+#include <numtracer.hpp> // the whole NumTracer API — here: nvec / nmet / nprojT (NNet) + numeric_value
 
 namespace nm  = numtracer::numeric;
 namespace net = numtracer::network;

@@ -82,7 +82,7 @@ Options[FromFunKit] = {"FlavourGroup" -> Automatic, "DressingCollection" -> True
    distribution they straddle a Plus and cannot).
    "DressingCollection" -> True sets the gate BEFORE expandBridges (FromFunKit runs it before
    NumTrace), so dressed Dirac numerators are kept eager here too; pass the SAME value to NumTrace. *)
-FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten},
+FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, res},
   nf  = OptionValue["FlavourGroup"] /. Automatic :> If[IntegerQ[Global`Nf], Global`Nf, 2];
   map = Join[$ffMap, sunMap[Global`Nc, nf]];
   (* ISOSPIN GENERATORS (quark-meson flows). The notebook auxiliary `TFlav` is the SU(nf) FUNDAMENTAL
@@ -102,5 +102,7 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten},
               Global`TFlav[a_, f1_, f2_]  :> ntSUNT[nf, a, f1, f2]},
     expr];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
-  contractFlavour @ expandBridges[
-    isoRewritten //. (h_Symbol)[a___] /; KeyExistsQ[map, SymbolName[h]] :> map[SymbolName[h]][a]]];
+  ntLog["[prof] FromFunKit (head rewrite + expandBridges): ",
+    First@AbsoluteTiming[res = contractFlavour @ expandBridges[
+      isoRewritten //. (h_Symbol)[a___] /; KeyExistsQ[map, SymbolName[h]] :> map[SymbolName[h]][a]]], " s"];
+  res];

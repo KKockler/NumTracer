@@ -17,6 +17,43 @@
    or after NumTracer. *)
 
 
+(* ---- DiFfRG chatter capture ------------------------------------------------------------------
+   DiFfRG's generators Print a line per emitted file plus a "Please run UpdateFlows[]" nudge. Under
+   NumTracer that nudge is actively WRONG: bare UpdateFlows regenerates flows/CMakeLists.txt from
+   DiFfRG's template and drops the NumTracer patch (find_package + link libs + UNITY_BUILD OFF) —
+   UpdateNTFlows exists to do both atomically. So capture the chatter, print one NumTracer-native line
+   instead, and keep the raw lines behind $NumTracerVerbose for debugging.
+   Internal`InheritedBlock scopes the Print override, so it is restored even if DiFfRG aborts. *)
+SetAttributes[ntCapturePrint, HoldFirst];
+ntCapturePrint[expr_] := Module[{lines = {}, res},
+  res = Internal`InheritedBlock[{Print},
+     Unprotect[Print];
+     Print[args___] := AppendTo[lines, StringJoin[ToString /@ {args}]];
+     expr];
+  {res, lines}];
+
+(* Does flows/CMakeLists.txt still need an UpdateNTFlows pass for this flow? DiFfRG nudges every time;
+   we only nudge when it is actually true — the file is missing, has lost the NumTracer patch, or does
+   not yet mention this flow (i.e. a newly added one). *)
+ntCMakeStaleQ[flowDir_, name_String, wrote_] := Module[{f = FileNameJoin[{flowDir, "CMakeLists.txt"}], txt},
+  If[! FileExistsQ[f], Return[True]];
+  txt = Quiet@Check[Import[f, "Text"], ""];
+  ! StringContainsQ[txt, "find_package(NumTracer"] || ! StringContainsQ[txt, name] || wrote =!= {}];
+
+(* One NumTracer-native line in place of DiFfRG's per-file chatter. *)
+ntReportDiFfRG[name_String, flowDir_, lines_List] := Module[{unchanged, wrote},
+  unchanged = Select[lines, StringContainsQ[#, "unchanged"] &];
+  (* everything that is neither an "unchanged" note nor the UpdateFlows nudge = a file DiFfRG wrote *)
+  wrote = Select[lines, ! StringContainsQ[#, "unchanged"] && ! StringContainsQ[#, "UpdateFlows"] &];
+  ntLog["[diffrg] ", #] & /@ lines;   (* raw chatter, verbose only *)
+  Print["[NumTracer] " <> name <> ": DiFfRG scaffold — " <> ToString[Length[wrote]] <> " written, " <>
+        ToString[Length[unchanged]] <> " unchanged"];
+  If[ntCMakeStaleQ[flowDir, name, wrote],
+    Print["[NumTracer] " <> name <> ": flows/CMakeLists.txt needs refreshing — run UpdateNTFlows[\"" <>
+          name <> "\"]  (NOT UpdateFlows[], which would drop the NumTracer CMake patch)"]];
+  wrote];
+
+
 (* ---- DiFfRG flow directory (public delayed symbol, trailing slash) -------------------------- *)
 ntFlowDir[dir_String] := dir;
 ntFlowDir[Automatic]  := Module[{d = DiFfRG`CodeTools`Directory`flowDir},
@@ -107,14 +144,16 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] := Module[
   kernelFile = FileNameJoin[{kernelDir, "kernel.hh"}];
   tracesFile = FileNameJoin[{kernelDir, "kernels.hh"}];
 
-  (* (1) DiFfRG scaffold FIRST: lays down flows/<name>/ incl. the integrator TUs + a placeholder kernel.hh *)
-  DiFfRG`CodeTools`MakeKernel`MakeKernel[body,
-    "Name" -> name, "Integrator" -> OptionValue["Integrator"],
-    "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"],
-    "Device" -> device, "Type" -> OptionValue["Type"],
-    "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"],
-    "Coordinates" -> OptionValue["Coordinates"],
-    "CoordinateArguments" -> OptionValue["CoordinateArguments"]];
+  (* (1) DiFfRG scaffold FIRST: lays down flows/<name>/ incl. the integrator TUs + a placeholder kernel.hh.
+     Its per-file Prints are captured and replaced by one NumTracer line (see ntReportDiFfRG). *)
+  ntReportDiFfRG[name, flowDir, Last@ntCapturePrint[
+    DiFfRG`CodeTools`MakeKernel`MakeKernel[body,
+      "Name" -> name, "Integrator" -> OptionValue["Integrator"],
+      "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"],
+      "Device" -> device, "Type" -> OptionValue["Type"],
+      "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"],
+      "Coordinates" -> OptionValue["Coordinates"],
+      "CoordinateArguments" -> OptionValue["CoordinateArguments"]]]];
 
   (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel *)
   MakeNTKernel[ntk, genFile, kernelFile, tracesFile,
@@ -148,8 +187,9 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] := Module[
   {flowDir, f, txt},
   flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
 
-  (* (1) DiFfRG aggregation — regenerates flows/CMakeLists.txt from its template (wipes any prior patch) *)
-  DiFfRG`CodeTools`UpdateFlows[name];
+  (* (1) DiFfRG aggregation — regenerates flows/CMakeLists.txt from its template (wipes any prior patch).
+     Chatter captured; step (4) prints the NumTracer-native summary once the patch is back on. *)
+  ntLog["[diffrg] ", #] & /@ Last@ntCapturePrint[DiFfRG`CodeTools`UpdateFlows[name]];
 
   f = FileNameJoin[{flowDir, "CMakeLists.txt"}];
   If[! FileExistsQ[f], Message[UpdateNTFlows::nocmake, f]; Abort[]];
@@ -172,5 +212,10 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] := Module[
   (* (3) loud failure on template drift — StringReplace no-ops silently on a mismatch *)
   If[! StringContainsQ[txt, "NumTracer::NumTracer"],
     Message[UpdateNTFlows::patchfail, f]; Abort[]];
+
+  (* (4) NumTracer-native confirmation, in place of DiFfRG's captured chatter *)
+  Print["[NumTracer] " <> name <> ": flows/CMakeLists.txt regenerated + NumTracer patch applied " <>
+        "(find_package + NumTracer::* link" <>
+        If[! TrueQ[OptionValue["UnityBuild"]], " + UNITY_BUILD OFF", ""] <> ")"];
 
   f];

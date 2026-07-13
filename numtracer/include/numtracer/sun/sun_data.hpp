@@ -22,6 +22,7 @@
 
 #include "numtracer/core/cmat.hpp" // Mat<N>, matmul, trace (the dense complex-matrix leaf)
 #include "numtracer/core/cx.hpp"   // Cx (constexpr complex), approx
+#include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
 #include <array>
 #include <cmath>
@@ -185,7 +186,7 @@ private:
       m(l, l) = std::complex<double>{-norm * l, 0};
       gens_[idx++] = m;
     }
-    if (idx != kAdjDim) throw std::logic_error("SUNBuilder: wrong generator count");
+    if (idx != kAdjDim) NT_THROW(std::logic_error, "SUNBuilder: wrong generator count");
   }
   /// @brief Build the nonzero structure constants @f$f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)@f$.
   ///

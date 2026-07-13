@@ -84,19 +84,6 @@ target_include_directories(numtracer_headeronly INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
-# Opt-in companion target carrying the raised constexpr budgets. Long contraction
-# chains exhaust GCC's default constexpr op/loop limits ("constexpr evaluation
-# exceeded ... operations"); consumers hitting that link NumTracer::constexpr_budget
-# in addition to NumTracer::NumTracer. Kept off the main target so small consumers
-# (and compilers without these flags) are not penalised. Guarded per compiler and
-# per language so the flags never reach nvcc or a C compile.
-add_library(numtracer_constexpr_budget INTERFACE)
-set_target_properties(numtracer_constexpr_budget PROPERTIES EXPORT_NAME constexpr_budget)
-add_library(NumTracer::constexpr_budget ALIAS numtracer_constexpr_budget)
-target_compile_options(numtracer_constexpr_budget INTERFACE
-  "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:GNU>>:-fconstexpr-ops-limit=2000000000;-fconstexpr-loop-limit=100000000;-fconstexpr-depth=2000000>"
-  "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:Clang>>:-fconstexpr-steps=2000000000;-fconstexpr-depth=2000000>")
-
 # ##############################################################################
 # Install & export (headers + CMake package config; arch-independent)
 # ##############################################################################
@@ -104,7 +91,7 @@ target_compile_options(numtracer_constexpr_budget INTERFACE
 include(CMakePackageConfigHelpers)
 
 install(DIRECTORY include/ DESTINATION include)
-install(TARGETS NumTracer numtracer_constexpr_budget numtracer_headeronly EXPORT NumTracerTargets)
+install(TARGETS NumTracer numtracer_headeronly EXPORT NumTracerTargets)
 install(EXPORT NumTracerTargets NAMESPACE NumTracer::
         DESTINATION lib/cmake/NumTracer)
 
@@ -232,37 +219,37 @@ if(NUMTRACER_BUILD_TESTS)
   # Phase-2 example 2: pion <- quark loop -> pion (Yukawa) — fundamental flavour x Dirac x colour.
   add_executable(compare_pion_quark tests/refshim/compare_pion_quark.cpp)
   target_include_directories(compare_pion_quark PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_pion_quark PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_pion_quark PRIVATE NumTracer::NumTracer)
 
   # Phase-2 example 3: gluon <- quark loop -> gluon — fundamental colour via the numeric path.
   add_executable(compare_glu_quark tests/refshim/compare_glu_quark.cpp)
   target_include_directories(compare_glu_quark PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_glu_quark PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_glu_quark PRIVATE NumTracer::NumTracer)
 
   add_executable(compare_zaqbq1 tests/refshim/compare_zaqbq1.cpp)
   target_include_directories(compare_zaqbq1 PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zaqbq1 PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_zaqbq1 PRIVATE NumTracer::NumTracer)
 
   # Symbolic dressing collection: collected Zq (DressingCollection -> True) vs the distributed Zq.
   add_executable(compare_zq_collect tests/refshim/compare_zq_collect.cpp)
   target_include_directories(compare_zq_collect PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zq_collect PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_zq_collect PRIVATE NumTracer::NumTracer)
 
   # NUMERIC (matrix-product) backend validation: ZA gluon self-energy vs the FORM oracle; ZA3 quark
   # triangle vs the FORM oracle (the headline — generates in seconds at <0.4 GB where the inv path OOMs).
   add_executable(compare_za_num tests/refshim/compare_za_num.cpp)
   target_include_directories(compare_za_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_za_num PRIVATE NumTracer::NumTracer)
 
   add_executable(compare_za3_num tests/refshim/compare_za3_num.cpp)
   target_include_directories(compare_za3_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za3_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_za3_num PRIVATE NumTracer::NumTracer)
 
   # pure-YM ghost-gluon vertex: numeric vs the FORM oracle. Guards the disconnected-Lorentz-component
   # (product-not-sum) codegen bug — the only flow with such a diagram.
   add_executable(compare_zacbc_num tests/refshim/compare_zacbc_num.cpp)
   target_include_directories(compare_zacbc_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zacbc_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_zacbc_num PRIVATE NumTracer::NumTracer)
 
   # ZA3 with the FULL quark-gluon vertex {1,4,7} tensor basis (the dense struct-7 case). Gate for the
   # struct-7 codegen fix: with ZAqbq4=ZAqbq7=0 the 1/4/7 numeric kernel must reduce EXACTLY to the
@@ -270,48 +257,48 @@ if(NUMTRACER_BUILD_TESTS)
   # dressings. (A full oracle is impractical at this size; the struct-1 kernel is the trusted reference.)
   add_executable(compare_za3_147_num tests/refshim/compare_za3_147_num.cpp)
   target_include_directories(compare_za3_147_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za3_147_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_za3_147_num PRIVATE NumTracer::NumTracer)
 
   # ZA3 1/4/7 numeric vs the copied FormTracer oracle (independent physical check of structures 4/7).
   add_executable(compare_za3_147_form tests/refshim/compare_za3_147_form.cpp)
   target_include_directories(compare_za3_147_form PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za3_147_form PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_za3_147_form PRIVATE NumTracer::NumTracer)
 
   # etaPiL pion anomalous dimension: numeric kernel vs the copied FormTracer oracle (independent
   # tensor-trace engines on the same pion two-point wave-function loop).
   add_executable(compare_etapil_form tests/refshim/compare_etapil_form.cpp)
   target_include_directories(compare_etapil_form PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_etapil_form PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_etapil_form PRIVATE NumTracer::NumTracer)
 
   # ns/eval timing of the 1/4/7 numeric kernel vs the FORM oracle (build on demand: not a pass/fail
   # test). `cmake --build build --target bench_147 && ./build/bench_147` reproduces the README numbers.
   add_executable(bench_147 EXCLUDE_FROM_ALL tests/refshim/bench_147.cpp)
   target_include_directories(bench_147 PRIVATE tests/gen tests/refshim)
-  target_link_libraries(bench_147 PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(bench_147 PRIVATE NumTracer::NumTracer)
 
   add_executable(compare_za4_num tests/refshim/compare_za4_num.cpp)
   target_include_directories(compare_za4_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_za4_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_za4_num PRIVATE NumTracer::NumTracer)
 
   # ZA4 (four-gluon box, quark loop) with the FULL {1,4,7} vertex — the heaviest 1/4/7 target, made
   # tractable by the σ^{μν} commutator fold (~14 min generation vs the multi-hour unfolded contraction).
-  # Its numeric kernel is ~15 MB and compiles heavily at -O3, so it is NOT committed and this test is
-  # OFF by default. Generate the kernel with
+  # The committed kernel is ~5.3 MB (tests/gen/ZA4_147_num_kernel{,s}.hh) and compiles heavily at -O3
+  # (~13 s, ~0.4 GB), so this test is OFF by default rather than absent. Regenerate the kernel with
   #   wolfram -script tests/gen/gen_qcd_za4_147_numeric.wls
-  # (writes tests/gen/ZA4_147_num_kernel{,s}.hh), then configure -DNUMTRACER_BUILD_ZA4_147=ON. Validation
-  # is by struct-reduction: with ZAqbq4=ZAqbq7=0 the 1/4/7 kernel must reduce to the FORM-validated
-  # ZA4_num_kernel (measured max rel err 8.3e-12), and differ from it with the real 4/7 dressings.
-  option(NUMTRACER_BUILD_ZA4_147 "Build the ZA4 1/4/7 struct-reduction test (needs the locally-generated ~15MB kernel)" OFF)
+  # then configure -DNUMTRACER_BUILD_ZA4_147=ON (the EXISTS guard below also covers a pruned kernel).
+  # Validation is by struct-reduction: with ZAqbq4=ZAqbq7=0 the 1/4/7 kernel must reduce to the
+  # FORM-validated ZA4_num_kernel (measured max rel err 8.3e-12), and differ with the real 4/7 dressings.
+  option(NUMTRACER_BUILD_ZA4_147 "Build the ZA4 1/4/7 struct-reduction test (heavy ~5.3MB committed kernel)" OFF)
   if(NUMTRACER_BUILD_ZA4_147 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/gen/ZA4_147_num_kernel.hh")
     add_executable(compare_za4_147_num tests/refshim/compare_za4_147_num.cpp)
     target_include_directories(compare_za4_147_num PRIVATE tests/gen tests/refshim)
-    target_link_libraries(compare_za4_147_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+    target_link_libraries(compare_za4_147_num PRIVATE NumTracer::NumTracer)
     add_test(NAME flow_za4_147_num COMMAND compare_za4_147_num)
   endif()
 
   add_executable(compare_zq_num tests/refshim/compare_zq_num.cpp)
   target_include_directories(compare_zq_num PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_zq_num PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_zq_num PRIVATE NumTracer::NumTracer)
 
   # Per-flavour dressings: dressing the u-quark and d-quark DIFFERENTLY (broken flavour symmetry).
   # Two explicit flavour loops, each with its own runtime dressing (Gu/Gd, GuDot/GdDot) and NO
@@ -319,14 +306,14 @@ if(NUMTRACER_BUILD_TESTS)
   # checks (kernels generated by tests/gen/gen_flavour_split.wls).
   add_executable(compare_flavour_split tests/refshim/compare_flavour_split.cpp)
   target_include_directories(compare_flavour_split PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_flavour_split PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_flavour_split PRIVATE NumTracer::NumTracer)
 
   # Per-component (group-diagonal) dressings: dress u/d differently WITHIN the SU(2) flavour group
   # (no per-flavour diagram split). Validated by exact equivalence to flow_flavour_split (the
   # separate-diagram kernel), so no external oracle is needed (kernels by gen/gen_flavour_ingroup.wls).
   add_executable(compare_flavour_ingroup tests/refshim/compare_flavour_ingroup.cpp)
   target_include_directories(compare_flavour_ingroup PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_flavour_ingroup PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_flavour_ingroup PRIVATE NumTracer::NumTracer)
 
   # Per-component ADJOINT dressing (gluon condensation): an SU(3)-adjoint line dressed component-by-
   # component (Z_A^a, 8 components) folded through the group. Validated by the collapse property
@@ -334,7 +321,7 @@ if(NUMTRACER_BUILD_TESTS)
   # needed (kernels by gen/gen_gluon_condensate.wls).
   add_executable(compare_gluon_condensate tests/refshim/compare_gluon_condensate.cpp)
   target_include_directories(compare_gluon_condensate PRIVATE tests/gen tests/refshim)
-  target_link_libraries(compare_gluon_condensate PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_gluon_condensate PRIVATE NumTracer::NumTracer)
 
   # Longitudinal-projector codegen gate: numeric backend vs a direct analytic oracle for a hand-built
   # net mixing ntLongProj + ntTransProj (kernel generated by tests/gen/gen_proj_numeric.wls).
@@ -365,7 +352,7 @@ if(NUMTRACER_BUILD_TESTS)
   # (l1·p1)·G(l1²)·G(p²), which is non-vanishing (kernel generated by tests/gen/gen_sigl_dirac.wls).
   add_executable(compare_sigl_dirac tests/refshim/compare_sigl_dirac.cpp)
   target_include_directories(compare_sigl_dirac PRIVATE tests/gen)
-  target_link_libraries(compare_sigl_dirac PRIVATE NumTracer::NumTracer NumTracer::constexpr_budget)
+  target_link_libraries(compare_sigl_dirac PRIVATE NumTracer::NumTracer)
 
   # Finite-temperature quark self-energy (hand-coded, dependency-free): the numeric engine contracts
   # the closed Dirac trace tr[(γ·p) γ^μ (γ·q) γ^ν] against the finite-T gluon line
@@ -403,6 +390,23 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_flavour_ingroup COMMAND compare_flavour_ingroup)
   add_test(NAME flow_gluon_condensate COMMAND compare_gluon_condensate)
   add_test(NAME color_su3 COMMAND sun_contract 3)
+
+  # Run the test suite as part of `cmake --install` (and `make/ninja install`, which build
+  # `all` first so the test binaries exist). A failing test aborts the install with a fatal
+  # error. Off-switch: -DNUMTRACER_TEST_ON_INSTALL=OFF. Tests run against the build-tree
+  # binaries, so this verifies the build we are about to install, independent of the prefix.
+  option(NUMTRACER_TEST_ON_INSTALL "Run ctest as part of the install target" ON)
+  if(NUMTRACER_TEST_ON_INSTALL)
+    install(CODE "
+      message(STATUS \"NumTracer: running the test suite before finishing install\")
+      execute_process(
+        COMMAND \"${CMAKE_CTEST_COMMAND}\" --test-dir \"${CMAKE_BINARY_DIR}\"
+                --output-on-failure --build-config \"\$<CONFIG>\"
+        RESULT_VARIABLE _nt_ctest_rc)
+      if(NOT _nt_ctest_rc EQUAL 0)
+        message(FATAL_ERROR \"NumTracer: tests failed (ctest exit \${_nt_ctest_rc}); install aborted\")
+      endif()")
+  endif()
 endif()
 
 # ##############################################################################
@@ -410,7 +414,8 @@ endif()
 # ##############################################################################
 #
 # Full 4D loop integrals of the generated ZA3/ZA4 kernels over a grid of external momenta,
-# DiFfRG-style two-phase map/reduce on the GPU (include/numtracer/cuda/integrator.cuh).
+# DiFfRG-style two-phase map/reduce on the GPU (tests/gpu/integrator.cuh — an internal test
+# tool, not part of the shipped public headers).
 # Needs the __host__ __device__ kernel variants (tests/gen/ZA{3,4}_gpu_kernel*.hh, regenerate
 # with tests/gen/gen_qcd_za{3,4}_gpu.wls), the CUDA toolkit and GSL (quadrature nodes/weights).
 # Configure with -DNUMTRACER_GPU_TESTS=ON; if the default host compiler is too new for nvcc,
@@ -422,8 +427,6 @@ option(NUMTRACER_KOKKOS_TESTS "Build the Kokkos twins of the GPU integration tes
 
 if(NUMTRACER_GPU_TESTS OR NUMTRACER_KOKKOS_TESTS)
   find_package(GSL REQUIRED)
-  set(NT_CONSTEXPR_FLAGS -fconstexpr-ops-limit=2000000000 -fconstexpr-loop-limit=100000000
-                         -fconstexpr-depth=2000000)
   # CPU same-quadrature reference (the committed HOST kernels), shared by the CUDA and Kokkos
   # test mains and always compiled as plain C++ by the configured CXX compiler.
   add_library(nt_gpu_ref STATIC tests/gpu/ref_za3.cpp tests/gpu/ref_za4.cpp)
@@ -432,7 +435,6 @@ if(NUMTRACER_GPU_TESTS OR NUMTRACER_KOKKOS_TESTS)
   target_include_directories(nt_gpu_ref PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu
                                                ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen)
   target_link_libraries(nt_gpu_ref PUBLIC NumTracer::NumTracer GSL::gsl)
-  target_compile_options(nt_gpu_ref PRIVATE $<$<CXX_COMPILER_ID:GNU>:${NT_CONSTEXPR_FLAGS}>)
 endif()
 
 if(NUMTRACER_GPU_TESTS)
@@ -447,13 +449,12 @@ if(NUMTRACER_GPU_TESTS)
     add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE nt_gpu_ref)
     target_compile_options(${name} PRIVATE
-      # CUDA TU via nvcc: relaxed constexpr (the kernels' compile-time SU(3) colour nets call
-      # constexpr host functions from __device__ code) + the budgets for the gcc host pass
-      # (-Xcompiler: the gcc host pass of every __host__ __device__ function evaluates the same
-      #  constexpr nets, so it needs the budget too)
-      "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:NVIDIA>>:--expt-relaxed-constexpr;-O3;-lineinfo;-Xcompiler=-O3,-fconstexpr-ops-limit=2000000000,-fconstexpr-loop-limit=100000000,-fconstexpr-depth=2000000>"
-      # CUDA TU via clang: it evaluates constexpr itself, so raise its step limits
-      "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:Clang>>:-O3;-fconstexpr-steps=2000000000;-fconstexpr-depth=2000000>")
+      # --expt-relaxed-constexpr lets __device__ code call the constexpr host functions that read
+      # the typed-out SU(3) tables (a permission, not a budget). No raised constexpr op/step limits
+      # are needed: the SU(N) folding happens in the build-time generator, so the emitted kernel
+      # only does table lookups — verified to compile at default limits (nvcc + gcc host pass).
+      "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:NVIDIA>>:--expt-relaxed-constexpr;-O3;-lineinfo>"
+      "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CUDA_COMPILER_ID:Clang>>:-O3>")
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES LABELS gpu)
   endfunction()
@@ -470,10 +471,8 @@ if(NUMTRACER_KOKKOS_TESTS)
   function(nt_kokkos_test name src)
     add_executable(${name} ${src})
     target_link_libraries(${name} PRIVATE nt_gpu_ref Kokkos::kokkos)
-    # the Kokkos TU still needs the gcc constexpr budgets (nvcc_wrapper forwards unknown
-    # flags to the g++-14 host pass); Kokkos::kokkos itself injects --expt-relaxed-constexpr,
-    # --extended-lambda and the arch flags.
-    target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${NT_CONSTEXPR_FLAGS}>)
+    # Kokkos::kokkos injects --expt-relaxed-constexpr, --extended-lambda and the arch flags; the
+    # emitted kernel only reads the typed-out SU(3) tables, so no raised constexpr budget is needed.
     # route this target's C++ compiles through kokkos_launch_compiler -> nvcc_wrapper(g++-14)
     kokkos_compilation(TARGET ${name})
     add_test(NAME ${name} COMMAND ${name})

@@ -28,6 +28,7 @@
 
 #include "numtracer/core/export.hpp" // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
 #include "numtracer/sun/sun_data.hpp" // SUNData<N> tables, Mat<N>, matmul, trace, Cx, sun_detail::FEntry
+#include "numtracer/core/config.hpp"  // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
 #include <algorithm>
 #include <array>
@@ -201,7 +202,7 @@ template <int N> SUNDyn seed_from_table() {
 /// Mirrors @ref numtracer::sun::SUNBuilder::build_generators / build_structure_constants exactly, with
 /// `f^{abc} = -2 i\,\mathrm{tr}([T^a,T^b]T^c)`, using the dynamic matrix.
 inline SUNDyn build_oracle(int N) {
-  if (N < 1) throw std::runtime_error("sun_net: build_oracle requires group rank N >= 1");
+  if (N < 1) NT_THROW(std::runtime_error, "sun_net: build_oracle requires group rank N >= 1");
   SUNDyn d;
   d.N = N;
   const int adj = N * N - 1; // ≥ 0 for N ≥ 1 (guarded above)
@@ -222,7 +223,7 @@ inline SUNDyn build_oracle(int N) {
     m(l, l) = {-norm * l, 0};
     d.gens[idx++] = m;
   }
-  if (idx != adj) throw std::logic_error("sun_net: wrong generator count");
+  if (idx != adj) NT_THROW(std::logic_error, "sun_net: wrong generator count");
   // structure constants below this magnitude are floating-point round-off in the commutator trace,
   // not genuine nonzero entries, so they are dropped.
   constexpr double kStructConstTol = 1e-12;
@@ -253,7 +254,7 @@ inline const SUNDyn &sun_data_for(int N) {
   std::lock_guard<std::mutex> lk(mu);
   auto it = cache.find(N);
   if (it == cache.end()) {
-    if (N < 1) throw std::runtime_error("sun_net: group rank N must be >= 1");
+    if (N < 1) NT_THROW(std::runtime_error, "sun_net: group rank N must be >= 1");
     SUNDyn d = (N == 2) ? seed_from_table<2>() : (N == 3) ? seed_from_table<3>() : build_oracle(N);
     it = cache.emplace(N, std::move(d)).first;
   }
@@ -278,7 +279,7 @@ inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array
       cycle.push_back(gens[curGen][0]); // adjoint class of this generator
       auto it = rowToGen.find(gens[curGen][2]); // next generator: its row == this col
       if (it == rowToGen.end())
-        throw std::runtime_error("sun_net: open fundamental chain (only closed traces supported)");
+        NT_THROW(std::runtime_error, "sun_net: open fundamental chain (only closed traces supported)");
       curGen = it->second;
     } while (curGen != start);
     cycles.push_back(std::move(cycle));
@@ -363,7 +364,7 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
     case SUNFacKind::DeltaFund:
       fundClasses.insert(find(f->a)); fundClasses.insert(find(f->b));
       break;
-    default: throw std::runtime_error("sun_net: unknown SUNFac kind");
+    default: NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
     }
   }
 
@@ -523,13 +524,13 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
       adjDiag[a].push_back(&f->comp2dr);
       break;
     }
-    default: throw std::runtime_error("sun_net: unknown SUNFac kind");
+    default: NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
     }
   }
   // a per-component fundamental dressing on a generator line is not yet supported.
   for (const auto &kv : fundDiag)
     if (genFundClasses.count(kv.first))
-      throw std::runtime_error("sun_net: diagFund on a generator (fundamental) line not yet supported");
+      NT_THROW(std::runtime_error, "sun_net: diagFund on a generator (fundamental) line not yet supported");
 
   // ---- closed-loop factors: plain loops fold to a scalar; diag-dressed loops to a Σ_a SUNPoly ----
   double factorScalar = 1.0;

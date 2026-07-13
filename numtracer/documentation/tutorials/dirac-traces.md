@@ -12,7 +12,7 @@ NumTracer multiplies the matrices rather than enumerating the $(2n-1)!!$ index p
 entries are *polynomials* in the momentum components (`numeric::MPoly`), multiplies, and traces.
 
 ```cpp
-#include "numtracer/numeric/mpoly.hpp"     // MPoly, Mat4, slashC, matmul, mtrace, eval
+#include <numtracer.hpp> // the whole NumTracer API — here: MPoly, Mat4, slashC, matmul, mtrace, eval
 
 #include <array>
 #include <cmath>
@@ -102,8 +102,29 @@ In practice you don't build matrices by hand: you **describe** the closed chain 
 tokens and let `numeric_value` contract it — the form the code generator emits.
 `Tutorials/02-dirac-traces/trace_tokens.cpp`:
 
+```{admonition} What numeric_value does
+:class: note
+`numeric_value(nsym, dirac, lorentz, comp, atomDen)` is the engine's one contraction entry point.
+It does **not** just multiply the networks together — it *contracts* them, meaning it multiplies
+**and sums over every shared index**:
+
+1. It closes the `dirac` chain into 4×4 gamma-matrix products and takes the spinor trace (§2a's
+   `matmul`/`mtrace`, done for you). Legs you left open with `dgamma` survive as *free Lorentz
+   indices* on the resulting tensor; `tr(1)=4` rides along.
+2. It contracts that tensor against the `lorentz` network by **index elimination** — summing away
+   each Lorentz index shared between a `dgamma` leg and a network factor (here the `nmet`).
+3. It returns the surviving scalar as one `MPoly` (a polynomial in the `comp` momentum components).
+
+The five arguments: `nsym` = symbol-space size (as above); `dirac` = the closed gamma chain;
+`lorentz` = the `NNet` that ties off the free legs (empty `{}` when the chain is already scalar);
+`comp` = the component table `comp[vid][μ]` giving each momentum's four components; `atomDen` =
+the projector-denominator table (empty `{}` here — it first matters with projectors in
+[the next tutorial](lorentz-networks.md)).
+```
+
+
 ```cpp
-#include "numtracer/numeric/numeric_contract.hpp" // numeric_value, NNet/NTerm, nmet, dslash, dgamma
+#include <numtracer.hpp> // the whole NumTracer API — here: numeric_value, NNet/NTerm, nmet, dslash, dgamma
 // … MPoly comp table for p (0..3), q (4..7) as in 2a …
 
 enum { mu, nu }; // name the free gamma legs' Lorentz indices (one unscoped enum, all distinct)
@@ -120,6 +141,13 @@ net::DiracNet chainG = {net::dgamma(mu), net::dslash({{1.0, 0}}),
                         net::dgamma(nu), net::dslash({{1.0, 1}})};
 nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(mu, nu)}}};
 nm::MPoly trG = nm::numeric_value(nsym, chainG, lor, comp, {});
+
+// Evaluate both at one point.
+std::vector<double> x = {1.0, 0.5, -0.3, 0.2, 0.8, -0.4, 1.2, 0.1};
+Cx vPQ = nm::eval(trPQ, x, {});
+Cx vG = nm::eval(trG, x, {});
+
+// ...
 ```
 
 ```bash

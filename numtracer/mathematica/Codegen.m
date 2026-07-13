@@ -34,7 +34,7 @@
    NumTracer`Private`$NumTracerVerbose = True before generating. ntLog evaluates its arguments only
    when verbose, so it must NEVER wrap a side-effecting computation — keep such work (e.g. an
    AbsoluteTiming around an assignment) in a With-binding and pass only the timing into ntLog. *)
-$NumTracerVerbose = False;
+$NumTracerVerbose = True;
 ntLog[args___] := If[TrueQ[$NumTracerVerbose], Print[args]];
 
 (* a C++ double literal at full precision (exact rationals -> doubles). *)
@@ -95,10 +95,11 @@ scaleStrInv[str_, s_] := "sc<numtracer::Lit<numtracer::Cx{" <> cppNum[s] <> ", 0
 wrapContractInv[{one_}] := one;
 wrapContractInv[many_] := "contract(" <> StringRiffle[many, ", "] <> ")";
 
-(* MEMOIZED: the projector/Lorentz net builder is called with ~95% repeated inputs (the same
-   transverse-projector structures recur across every diagram/branch — measured 166296 calls but only
-   7264 distinct on ZA3 1/4/7). Cache by a hash of the args; $ctCache is cleared per generation in
-   mkGenerateKernel. Output-preserving (a pure function of its inputs); the recursion is memoised too. *)
+(* MEMOIZED: the projector/Lorentz net builder is called with mostly repeated inputs — the same
+   transverse-projector structures recur across every diagram/branch, so a dense flow makes orders of
+   magnitude more calls than it has distinct arguments. Cache by a hash of the args; $ctCache is cleared
+   per generation in mkGenerateKernel. Output-preserving (a pure function of its inputs); the recursion
+   is memoised too. *)
 compileTInv[e_, ids_, env_, mask_, nc_] := With[{h = Hash[{e, ids, env, mask, nc}]},
   Lookup[$ctCache, h, $ctCache[h] = compileTInvBody[e, ids, env, mask, nc]]];
 compileTInvBody[e_, ids_, env_, mask_, nc_] := Which[
@@ -197,27 +198,111 @@ drDecompose[coeff_] := Module[{factors = If[Head[coeff] === Times, List @@ coeff
    chunks (same colour + coeff) into one trace, so chunking is transparent. Zero -> dropped; a pure
    number -> a constant net (konst). *)
 $ntInvChunk = 150;
-(* max concurrent g++ processes in the generator compile (peak RAM ~ jobs x per-unit). Scales with
-   the machine: NT_GEN_JOBS env override, else min(16, cores-2) — the -O0 net-builder TUs are light
-   on RAM, and dense flows (e.g. the σ^μν struct-7 projection) emit many large units, so the default
-   4 left most cores idle (a 51-unit struct-7 compile ran ~1 h at -P 4). Capped at 16 for RAM. *)
-$ntCompileJobs = With[{e = Environment["NT_GEN_JOBS"]},
+(* max chars of net-builder elements packed into ONE emitted function (see ntChunkDef below). A net
+   builder is normally emitted as a single braced-init list of its sub-term elements:
+     std::vector<std::vector<DChainTok>> dch<i>(){ return {E1, ..., En}; }
+   On a dense flow that one expression grows to megabytes / tens of thousands of elements. At -O0 the
+   back end handles it as ONE basic block with thousands of live temporaries, so a single such TU can
+   cost minutes and several GB of RSS — the direct cause of both a very long compile AND an OOM, since
+   several such units run in parallel. Worse, the braced-init materialises every element temporary in
+   one full-expression, so a big enough builder overflows the default stack at RUNTIME. Chunking the
+   element list into size-bounded helper functions fixes all three, and — since each helper is its own
+   top-level def — lets the unit bin-packer spread them across TUs, so no single unit carries a whole
+   giant net. Kept well under $ntUnitChars so chunks stay packable. *)
+$ntDefChunk = 60000;
+
+(* target chars per generator TU, and the hard cap on how many TUs a flow may split into. The cap must
+   stay above what the size target asks for, or units silently grow back past the target. *)
+$ntUnitChars = 250000;
+$ntUnitCap   = 512;
+
+(* per-job RAM estimate (GB) used to bound the parallel compile; NT_GEN_JOB_MEM overrides. With defs
+   chunked, a unit's peak RSS is a few hundred MB, so 1.5 is deliberately conservative headroom. *)
+$ntGenJobMemGB = With[{e = Environment["NT_GEN_JOB_MEM"]},
+  If[StringQ[e] && NumericQ[Quiet@ToExpression[e]] && ToExpression[e] > 0, N@ToExpression[e], 1.5]];
+
+(* MemAvailable: what the kernel can hand out without swapping. Read fresh (not at package load) —
+   the Wolfram kernel that just built the flow may itself be holding many GB. *)
+ntAvailMemGB[] := Quiet@Check[
+  Module[{m = StringCases[Import["/proc/meminfo", "Text"],
+       "MemAvailable:" ~~ Whitespace ~~ d : DigitCharacter .. ~~ Whitespace ~~ "kB" :> ToExpression[d], 1]},
+    If[m === {}, N[MemoryAvailable[]/2^30], First[m]/1024./1024.]],
+  $Failed];
+
+(* max concurrent cxx processes in the generator compile. Peak RAM ~ jobs x per-unit RSS, so this is
+   bounded by BOTH cores and free memory: a cores-only cap will OOM the box on a dense flow, where a
+   single unit can take GBs. Def chunking now bounds a unit's size, so the memory term is belt-and-braces
+   that keeps a future monster flow from thrashing instead of failing loudly. NT_GEN_JOBS pins the count
+   outright; NT_GEN_JOB_MEM tunes the per-job estimate. Delayed (:=) so the memory reading is taken at
+   compile time, not at package load. *)
+ntCompileJobs[] := With[{e = Environment["NT_GEN_JOBS"], avail = ntAvailMemGB[]},
   Which[
     StringQ[e] && IntegerQ[Quiet@ToExpression[e]] && ToExpression[e] > 0, ToExpression[e],
-    IntegerQ[$ProcessorCount], Max[4, Min[16, $ProcessorCount - 2]],
+    IntegerQ[$ProcessorCount],
+      Max[2, Min[24, $ProcessorCount,
+        If[NumericQ[avail] && avail > 0, Floor[avail/$ntGenJobMemGB], 24]]],
     True, 4]];
+$ntCompileJobs := ntCompileJobs[];
+
+(* Emit ONE net builder, chunking it when its element list is too big to sit in a single function.
+   Small builders keep the old single-def form byte-for-byte. Big ones become
+
+     void dch<i>_c0(std::vector<std::vector<DChainTok>>& o){ o.push_back(E1); o.push_back(E2); ... }
+     ...
+     std::vector<std::vector<DChainTok>> dch<i>(){
+       std::vector<std::vector<DChainTok>> o; o.reserve(n); dch<i>_c0(o); ...; return o; }
+
+   Order is preserved, so the assembled vector is element-for-element identical to the braced-init
+   one — and strictly less work at runtime, since a braced-init-list copies every element while
+   push_back moves the temporary. Returns {defs, decls}: the helpers go into `allDefs` as ordinary
+   top-level defs (so the bin-packer may scatter them across units), and their forward declarations
+   go into the shared decl header, which is where the cross-unit calls resolve. *)
+ntChunkDef[name_String, ret_String, elems_List] :=
+  If[Length[elems] <= 1 || Total[StringLength /@ elems] <= $ntDefChunk,
+    {{ret <> " " <> name <> "(){ return {" <> StringRiffle[elems, ", "] <> "}; }"}, ""},
+    Module[{cs, chunks, nc, defs},
+      (* cumulative chars / chunk size is nondecreasing, so equal keys form contiguous runs *)
+      cs = Ceiling[Accumulate[(StringLength /@ elems) + 2]/$ntDefChunk];
+      chunks = SplitBy[Transpose[{elems, cs}], Last][[All, All, 1]];
+      nc = Length[chunks];
+      defs = MapIndexed[
+        "void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <>
+          StringJoin[("o.push_back(" <> # <> "); ") & /@ #1] <> "}" &, chunks];
+      {Append[defs,
+         ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> "); " <>
+           StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nc}]] <> "return o; }"],
+       StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nc}]]}]];
+
+(* the same over every net of one family (dnet/lnet/dch/dsl); returns {flatDefs, declString}. *)
+ntChunkDefs[prefix_String, ret_String, elemLists_List] :=
+  If[elemLists === {}, {{}, ""},
+    Module[{r = MapIndexed[ntChunkDef[prefix <> ToString[#2[[1]] - 1], ret, #1] &, elemLists]},
+      {Flatten[r[[All, 1]]], StringJoin[r[[All, 2]]]}]];
 
 (* C++ compiler for the build-time generator. The emitted generator is ordinary numeric C++, so
    either g++ or clang++ compiles it with the same flags (-std=c++20 -ftemplate-depth=4000
-   -O2/-O0 -pthread -I -c -o). Resolution order: the NT_GEN_CXX env override (verbatim), else an
-   installed compiler detected via CCompilerDriver (GCC -> g++, Clang -> clang++; the binary is
-   taken from the driver's CompilerInstallation dir when it exists there), else "g++" on PATH. *)
-resolveGenCxx[] := Module[{env = Environment["NT_GEN_CXX"], comps, pick, name, inst, exe, full},
+   -O2/-O0 -fno-exceptions -fno-rtti -pthread -I -c -o). Resolution order: the NT_GEN_CXX env
+   override (verbatim), else PREFER clang++ when present (it compiles the -O0 net-builder units
+   ~2.5x faster than g++ — u33 5.8 s -> 2.3 s), else a compiler detected via CCompilerDriver
+   (GCC -> g++, Clang -> clang++; binary taken from the driver's CompilerInstallation dir), else
+   "g++" on PATH. clang objects link fine against the g++-built libNumTracer.a (shared libstdc++
+   ABI on Linux). *)
+resolveGenCxx[] := Module[{env = Environment["NT_GEN_CXX"], path, comps, clangPick, pick, name, inst, exe, full},
   If[StringQ[env] && StringTrim[env] =!= "", Return[StringTrim[env]]];
   Quiet@Needs["CCompilerDriver`"];
   comps = Quiet@Check[CCompilers[], {}];
   If[! ListQ[comps], comps = {}];
   comps = Select[comps, AssociationQ[#] && StringQ[Lookup[#, "CompilerInstallation"]] &];
+  (* 1) prefer a Clang known to CCompilerDriver *)
+  clangPick = SelectFirst[comps, StringContainsQ[ToString@Lookup[#, "Name", ""], "Clang", IgnoreCase -> True] &, None];
+  If[clangPick =!= None,
+    full = FileNameJoin[{Lookup[clangPick, "CompilerInstallation"], "clang++"}];
+    Return[If[FileExistsQ[full], full, "clang++"]]];
+  (* 2) prefer clang++ on PATH even if CCompilerDriver did not enumerate it *)
+  path = Environment["PATH"];
+  If[StringQ[path] && AnyTrue[StringSplit[path, ":"], FileExistsQ[FileNameJoin[{#, "clang++"}]] &],
+    Return["clang++"]];
+  (* 3) fall back to the CCompilerDriver default (typically g++) *)
   If[comps === {}, Return["g++"]];
   pick = SelectFirst[comps, Lookup[#, "Compiler"] === Quiet@DefaultCCompiler[] &, First[comps]];
   name = ToString@Lookup[pick, "Name", ""];
@@ -537,9 +622,25 @@ orderDiracFacs[facs_] := Module[{nodeFacs = Association[], cur = 1, prevLabel, o
    (two factors share a loop iff they share a spinor index), then order each loop. Returns a LIST of
    ordered token lists (one per loop) — a single-loop component yields a one-element list. The C++
    contraction traces each loop separately and contracts their shared gluon legs (DFac::LoopSep). *)
-orderDiracLoops[facs_] := If[Length[facs] <= 1, {orderDiracFacs[facs]},
+(* MEMOISED: called once per Dirac component, but the distinct Dirac structures are far fewer than the
+   calls — the same chains recur across diagrams and colour branches (the same redundancy the net-term
+   CSE exploits downstream). Building the spinor-loop graph on every call, rather than once per distinct
+   chain, dominated the net-build on a dense dressed flow. Pure function of `facs`; $odCache is cleared
+   per generation in mkGenerateKernel. *)
+$odCache = <||>;
+orderDiracLoops[facs_] := With[{h = Hash[facs]},
+  Lookup[$odCache, h, $odCache[h] = orderDiracLoopsBody[facs]]];
+orderDiracLoopsBody[facs_] := If[Length[facs] <= 1, {orderDiracFacs[facs]},
   Module[{sp = spinorLabelsHead /@ facs, edges, g, comps},
-    edges = Select[Subsets[Range[Length[facs]], {2}], IntersectingQ[sp[[#[[1]]]], sp[[#[[2]]]]] &];
+    (* Two factors are adjacent iff they SHARE a spinor label, so index label -> nodes and read the edges
+       off the buckets: O(n) in the chain length. Testing all Subsets[...,{2}] pairs instead is O(n^2),
+       which was the steepest term in the net-build and the one that would bite hardest on flows with
+       longer Dirac chains. Sort+DeleteDuplicates reproduce the old pair scan's output exactly —
+       lexicographic order (so the Graph, hence ConnectedComponents' component order, is unchanged) and
+       each pair once (two factors may share BOTH labels). *)
+    edges = Sort@DeleteDuplicates@Flatten[
+      Subsets[#, {2}] & /@ Values@GroupBy[
+        Flatten[Table[{l, i}, {i, Length[facs]}, {l, sp[[i]]}], 1], First -> Last], 1];
     g = Graph[Range[Length[facs]], UndirectedEdge @@@ edges];
     comps = ConnectedComponents[g];
     (* a SINGLE spinor loop → the exact original path (orderDiracFacs[facs]), so existing flows stay
@@ -560,7 +661,15 @@ $ntDressResolve = Identity;
    Each option's scalar coefficient is frame-resolved then split into a complex number × dressing atoms
    (drDecompose); a "slash" structure's momenta become a vlc of {1.0, env Base} pairs (coeff-1, like the
    single-vec slash above), an "ident" structure is the spinor identity (slash=false, empty vlc). *)
-dressedSlotStr[ntDressedNum[opts_, _, _], env_] := "DSlot{" <> StringRiffle[
+(* MEMOISED: called once per dressed-numerator token, so a dense dressed flow makes tens of thousands of
+   calls — but has only a handful of DISTINCT dressed numerators, since the same propagator numerator
+   recurs in every diagram and colour branch. Resolving/decomposing one is expensive, and unmemoised this
+   was the single largest cost in the net-build. Pure given `env` and $ntDressResolve, both fixed for the
+   generation; $dsCache is cleared per generation in mkGenerateKernel alongside $ctCache. *)
+$dsCache = <||>;
+dressedSlotStr[gf : ntDressedNum[_, _, _], env_] := With[{h = Hash[{gf, env}]},
+  Lookup[$dsCache, h, $dsCache[h] = dressedSlotStrBody[gf, env]]];
+dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := "DSlot{" <> StringRiffle[
   Function[opt, Module[{num, dr, vlcStr},
      {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
      vlcStr = If[opt[[2, 1]] === "slash",
@@ -584,7 +693,12 @@ dressedSlotStr[ntDressedNum[opts_, _, _], env_] := "DSlot{" <> StringRiffle[
         core, scalar and rest SEPARATELY so the contraction stays deferred (rest emitted once, shared
         across a colour group). A dressed chain returns the ntDressedCore[chain, slots] marker instead. *)
 compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
-  {diracFacs, loops, loopStrs, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed},
+  {diracFacs, loops, loopStrs, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed,
+   vecOf},
+  (* μ -> the momentum q of an ntVec[q,μ] factor, built ONCE per call: tokenOf would otherwise rescan the
+     whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
+     building the Association so a duplicate μ keeps the FIRST match, matching the old `First[...]`. *)
+  vecOf = Association[Reverse[Cases[factors, ntVec[q_, m_] :> (m -> q)]]];
   diracFacs = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum] &];
   If[diracFacs === {}, Return[Append[compileTInv[Times @@ factors, ids, env, mask, nc], ""]]];
   loops = orderDiracLoops[diracFacs];   (* one ordered token list per independent spinor loop *)
@@ -618,10 +732,10 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
        MatchQ[gf, _ntSigma],  With[{s = sigStr[gf[[1]], gf[[2]]]}, If[dressed, "dtfix(" <> s <> ")", s]],
        True,
        Module[{mu = First[gf], vq, t},
-         vq = Cases[factors, ntVec[q_, m_] /; m === mu :> q];
-         t = If[vq =!= {},
-           (AppendTo[slashVecs, ntVec[First[vq], mu]];
-            "dslash({{1.0," <> ToString[env[First[vq]]["Base"]] <> "}})"),
+         vq = Lookup[vecOf, mu, Missing[]];
+         t = If[! MissingQ[vq],
+           (AppendTo[slashVecs, ntVec[vq, mu]];
+            "dslash({{1.0," <> ToString[env[vq]["Base"]] <> "}})"),
            "dgamma(" <> ToString[ids[mu]] <> ")"];
          If[dressed, "dtfix(" <> t <> ")", t]]]];
   (* one token-string per spinor loop (mapped in order so the slot/slashVec side effects accumulate) *)
@@ -764,7 +878,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
   {nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"],
    varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"],
    bb, tmpl, pre, unitPre, nUnits, units, decl, ddl, dStr, lStr, dscv, ddch, ddsl, hasDressed,
-   dnetDefs, lnetDefs, dchDefs, dslDefs, allDefs, main, compInit, cseDefs, cseDecls},
+   dnetDefs, lnetDefs, dchDefs, dslDefs, allDefs, main, compInit, cseDefs, cseDecls,
+   dnetCDecl, lnetCDecl, dchCDecl, dslCDecl, chunkDecls},
   bb[x_] := ToString[x];
   (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
      (a numerator structure-sum kept eager). hasDressed routes the generator to the DPoly branch:
@@ -805,10 +920,11 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
          {ds, ls, rss[[All, 2]], dc, dl}]]], {invNets, invRest}];
   pre = StringJoin[
     "// GENERATED by MakeNTKernel — do not edit. Numeric matrix-product tensor traces.\n",
-    "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n",
-    "#include \"numtracer/codegen/gen.hpp\"\n#include \"numtracer/network/sun_net.hpp\"\n",
-    "#include \"numtracer/numeric/numeric_contract.hpp\"\n#include \"numtracer/numeric/numeric_driver.hpp\"\n",
-    "#include \"numtracer/core/lit.hpp\"\n",
+    (* one umbrella header pulls the whole engine API (network/dirac/gen/sun_net/numeric_*/core) for
+       this single generator TU. The parallel -O0 net-builder units below deliberately keep their
+       minimal includes — pulling the umbrella into each would re-parse the whole engine per unit and
+       regress generation time. The emitted kernel stays minimal too (runtime.hpp + sun_data.hpp). *)
+    "#include \"numtracer/numtracer.hpp\"\n",
     "#include <iostream>\n#include <string>\n#include <utility>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
     "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
     "#include <sstream>\n#include <unordered_map>\n",
@@ -876,20 +992,37 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             Length[dTerms], "->", Length[dMap], " distinct shared builders (dressed; sub-term dedup skipped)"]]];
   (* each net builder returns the group's LIST of sub-term Dirac chains / Lorentz nets (one function
      per net, summed in main — like the inv body's add(), but type-correct for the numeric backend). *)
-  dnetDefs = MapIndexed["std::vector<DiracNet> dnet" <> bb[#2[[1]] - 1] <> "(){ return {" <> StringRiffle[#1, ", "] <> "}; }" &, dStr];
-  lnetDefs = MapIndexed["std::vector<NetVal> lnet" <> bb[#2[[1]] - 1] <> "(){ return {" <> StringRiffle[#1, ", "] <> "}; }" &, lStr];
+  (* each is chunked into size-bounded helpers when its element list is huge (see ntChunkDef): the
+     giant ones are exactly what made a single unit cost minutes and multiple GB. *)
+  {dnetDefs, dnetCDecl} = ntChunkDefs["dnet", "std::vector<DiracNet>", dStr];
+  {lnetDefs, lnetCDecl} = ntChunkDefs["lnet", "std::vector<NetVal>", lStr];
   (* DRESSED: per-net builders for the chain/slot tables, mirroring dnet/lnet — so the giant `dch`/`dsl`
      literals compile on the parallel -O0 units instead of the single -O1 main TU (see unitPre note). *)
-  dchDefs = If[hasDressed,
-    MapIndexed["std::vector<std::vector<DChainTok>> dch" <> bb[#2[[1]] - 1] <> "(){ return {" <> StringRiffle[#1, ", "] <> "}; }" &, ddch], {}];
-  dslDefs = If[hasDressed,
-    MapIndexed["std::vector<std::vector<DSlot>> dsl" <> bb[#2[[1]] - 1] <> "(){ return {" <> StringRiffle[#1, ", "] <> "}; }" &, ddsl], {}];
+  {dchDefs, dchCDecl} = If[hasDressed,
+    ntChunkDefs["dch", "std::vector<std::vector<DChainTok>>", ddch], {{}, ""}];
+  {dslDefs, dslCDecl} = If[hasDressed,
+    ntChunkDefs["dsl", "std::vector<std::vector<DSlot>>", ddsl], {{}, ""}];
+  chunkDecls = dnetCDecl <> lnetCDecl <> dchCDecl <> dslCDecl;
   allDefs = Join[cseDefs, dnetDefs, lnetDefs, dchDefs, dslDefs];
-  (* Size-aware unit count (~250 KB/unit, 8..48): the CSE accessors are many but small, so the old
-     12-defs/unit rule would emit hundreds of tiny TUs each re-parsing the shared decl header. *)
-  nUnits = Min[48, Max[8, Ceiling[StringLength[StringJoin[allDefs]]/250000]]];
-  units = Table[unitPre <> StringRiffle[Table[allDefs[[i]], {i, u, Length[allDefs], nUnits}], "\n"] <> "\n",
-    {u, 1, Min[nUnits, Length[allDefs]]}];
+  (* Size-aware unit count (~$ntUnitChars per unit, 8..$ntUnitCap): the CSE accessors are many but
+     small, so the old 12-defs/unit rule would emit hundreds of tiny TUs each re-parsing the shared
+     decl header. Defs are packed into the units by GREEDY BIN-PACKING (largest def first, into the
+     currently-smallest unit — LPT) rather than round-robin by index: def sizes are skewed, and
+     round-robin left a large max/median spread that made the biggest units the makespan stragglers.
+     The cap must stay above what the size target asks for, or units quietly grow back past it. Now that
+     ntChunkDef bounds any SINGLE def to ~$ntDefChunk, bin-packing can actually hit the target: a single
+     oversized def is no longer an irreducible floor. *)
+  (* Total[StringLength/@...], NOT StringLength[StringJoin[...]] — the latter materialises every def as
+     one giant string just to measure it (much slower, and it allocates the lot). *)
+  nUnits = Min[Min[$ntUnitCap, Max[8, Ceiling[Total[StringLength /@ allDefs]/$ntUnitChars]]], Max[1, Length[allDefs]]];
+  units = If[allDefs === {}, {},
+    (unitPre <> StringRiffle[#, "\n"] <> "\n") & /@
+      Module[{bins = ConstantArray[{}, nUnits], loads = ConstantArray[0, nUnits], b},
+        Do[b = First@Ordering[loads, 1];
+           bins[[b]] = Append[bins[[b]], d];
+           loads[[b]] += StringLength[d],
+          {d, allDefs[[Reverse@Ordering[StringLength /@ allDefs]]]}];
+        bins]];
   (* the shared decl header: net-builder + CSE-accessor forward declarations (the units that call the
      lc<k>()/dc<k>() accessors #include this — emitted ONCE here, not duplicated per unit). *)
   decl = "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder declarations.\n#pragma once\n" <>
@@ -902,7 +1035,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     StringJoin[Table["std::vector<NetVal> lnet" <> bb[i] <> "();\n", {i, 0, nNet - 1}]] <>
     If[hasDressed,
       StringJoin[Table["std::vector<std::vector<DChainTok>> dch" <> bb[i] <> "();\n", {i, 0, nNet - 1}]] <>
-      StringJoin[Table["std::vector<std::vector<DSlot>> dsl" <> bb[i] <> "();\n", {i, 0, nNet - 1}]], ""];
+      StringJoin[Table["std::vector<std::vector<DSlot>> dsl" <> bb[i] <> "();\n", {i, 0, nNet - 1}]], ""] <>
+    (* chunk helpers of the oversized builders — the bin-packer may put a builder's helpers in a
+       different unit than its assembler, so these must be declared here, not per-unit. *)
+    chunkDecls;
   (* component-table init: comp[base][mu] = <MPoly builder>, skipping structural zeros. *)
   compInit = StringJoin @ KeyValueMap[Function[{base, comps},
      StringJoin @ MapIndexed[Function[{s, mu},
@@ -1415,6 +1551,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   invNets = {}; invRest = {}; colourNets = {}; colDecls = {}; colToks = {}; preamble = {};
   factorNets = {}; lorFacOf = {}; factorCompOf = <||>;  (* factor net indices, per-net factor-id list, net->factor-id *)
   $ctCache = <||>;  (* clear the compileTInv memo cache for this generation *)
+  (* dressedSlotStr / orderDiracLoops memos: both depend on generation-fixed state ($ntDressResolve,
+     env), so they MUST be cleared here alongside $ctCache. *)
+  $dsCache = <||>; $odCache = <||>;
   resetDiagDr[];     (* clear the per-component diagonal-dressing registry for this generation *)
   resetDr[];         (* clear the scalar-dressing (ntDressedNum) registry for this generation *)
   (* frame resolver for dressed-numerator option coefficients (compileDirac → dressedSlotStr): the same
@@ -1522,6 +1661,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
            (* the anchor: a trivial unit net carrying the diagram coeff, the constant colour `col`
               (folded once, via the group sum colv(col)*1), and the list of component factor ids. *)
            appendRec[{col, {"konst(1.0)"}, coeff, {{"", 1}}, factorIds, None}])]]]], k["Diagrams"]]], " s"];
+    (* memo sizes: the net-build's cost is dominated by the DISTINCT Dirac/Lorentz structures, not the
+       call count (a dense flow calls these tens of thousands of times for a few hundred distinct
+       results). If a flow ever shows these growing with the call count, a memo has stopped hitting. *)
+    ntLog["[prof]   memo sizes: compileTInv ", Length[$ctCache], " | orderDiracLoops ", Length[$odCache],
+          " | dressedSlotStr ", Length[$dsCache]];
     (* ---- per-component diagonal dressings (ntSUNDiag{Fund,Adj}) ----------------------------------
        A diagram whose colour net carries a diag factor folds (via the validated C++ engine,
        sun_value_dressed, run through the build-time seam) to a SUNPoly Σ_t coeff_t Π D^{dr}, where
@@ -1648,6 +1792,9 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     If[! FreeQ[invNets, _ntDressedCore],
        fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] double dr_" <> ToString[#]) & /@ Sort[Keys[$drTable]]]]];
 
+  (* the integrand -> C++ lowering (FunKit). Timed separately: it is the one heavy stage between the
+     net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
+  ntLog["[prof] FunKit kernel/class/header lowering: ", First@AbsoluteTiming[
   kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor,
     "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
   constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
@@ -1661,7 +1808,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        the support runtime; no tensor-engine headers. *)
     "Includes" -> Join[extraInc, ntRuntimeIncludes[runInc],
        {"numtracer/sun/sun_data.hpp", hdrInc}],
-    "Body" -> ntWrapBody[kns, classStr, name]];
+    "Body" -> ntWrapBody[kns, classStr, name]];], " s"];
 
   (* emit the generator source (the numeric matrix-product backend is the single generation path). *)
   ntLog["[prof] emitNumericGenerator: ", First@AbsoluteTiming[
@@ -1671,13 +1818,16 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
      net-builder codegen compiles in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
   declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
   unitFiles = Table[StringReplace[genFile, ".cpp" -> "_u" <> ToString[u - 1] <> ".cpp"], {u, 1, Length[genUnits]}];
-  Export[declFile, genDecl, "Text"];
-  (* each unit #includes the shared decl header so its net builders can call the cross-unit CSE
-     accessors (lc<k>()/dc<k>()) and sibling net builders, with the declarations parsed once per TU. *)
-  Module[{uInc = "#include \"" <> FileNameTake[declFile] <> "\"\n"},
-    Do[Export[unitFiles[[u]], uInc <> genUnits[[u]], "Text"], {u, 1, Length[genUnits]}]];
-  genSrc = genPre <> "\n#include \"" <> FileNameTake[declFile] <> "\"\n\n" <> genMain;
-  Export[genFile, genSrc, "Text"];
+  ntLog["[prof] write generator files (", Length[unitFiles] + 2, " files, ",
+        Round[(Total[StringLength /@ genUnits] + StringLength[genDecl] + StringLength[genMain])/1000000.], " MB): ",
+    First@AbsoluteTiming[
+      Export[declFile, genDecl, "Text"];
+      (* each unit #includes the shared decl header so its net builders can call the cross-unit CSE
+         accessors (lc<k>()/dc<k>()) and sibling net builders, parsed once per TU. *)
+      Module[{uInc = "#include \"" <> FileNameTake[declFile] <> "\"\n"},
+        Do[Export[unitFiles[[u]], uInc <> genUnits[[u]], "Text"], {u, 1, Length[genUnits]}]];
+      genSrc = genPre <> "\n#include \"" <> FileNameTake[declFile] <> "\"\n\n" <> genMain;
+      Export[genFile, genSrc, "Text"];], " s"];
   Print["wrote generator: ", genFile, " (+ ", Length[genUnits], " net units + decl header)"];
 
   (* run the generator at codegen time -> the committed straight-line kernel header. The binary's
@@ -1719,10 +1869,19 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
          each at ~17 GB virtual (ulimit -v). Peak RAM ~ jobs x per-unit; with the unit count scaled so
          each TU is small (~12 net-builders) this stays well under the machine limit for any flow size.
          Both phases redirect compiler stdout+stderr to `clog` (compile truncates, link appends) so the
-         genfail message can quote the actual g++ diagnostic, not just the exit code. *)
+         genfail message can quote the actual g++ diagnostic, not just the exit code.
+
+         -fno-exceptions -fno-rtti (UNIT TUs only): each net-builder unit is thousands of braced-init-
+         lists of destructible temporaries (DiracNet / DChainTok / DSlot / NetVal); at -O0 emitting the
+         exception-cleanup landing pads for them is ~90% of the compile and superlinear in unit size
+         (a 188 KB unit measured 15.3 s -> 1.3 s, RSS 660 MB -> 280 MB, with exceptions off). The unit
+         code never throws/catches, and the library's internal guards route through NT_THROW
+         (core/config.hpp), which degrades to abort() there — so this only removes dead cleanup code.
+         The MAIN TU keeps exceptions: it emits a try/catch thread-pool fallback (see the parWork
+         template below, `catch(const std::system_error&)`), which is ill-formed under -fno-exceptions. *)
       pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"") & /@ Join[
           {"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"},
-          Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0" <> hoDef <> "-I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')",
+          Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> "-I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')",
             {u, 1, Length[unitFiles]}]], " "] <> " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD > '" <> clog <> "' 2>&1";
       lcmd = cxx <> " -pthread '" <> mainObj <> "' " <> StringRiffle[("'" <> # <> "'") & /@ unitObjs, " "] <> libArg <> " -o '" <> bin <> "' >> '" <> clog <> "' 2>&1";
       {tcc, cc} = AbsoluteTiming[Run[pcmd]; Run[lcmd]];

@@ -338,7 +338,7 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
 Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "DressingCollection" -> True};
 
 NumTrace[net_, OptionsPattern[]] := Module[
-  {frame, args, dress, badRanks, diagrams, allMom, invMom, invSMom, env, nenv},
+  {frame, args, dress, badRanks, diagrams, allMom, invMom, invSMom, env, nenv, diags},
   frame  = OptionValue["Frame"];
   args   = OptionValue["Args"];
   dress  = OptionValue["Dressings"];
@@ -369,7 +369,8 @@ NumTrace[net_, OptionsPattern[]] := Module[
   (* the top-level sum is the (linear) sum of DIAGRAMS; keep single-sector vertex sums eager
      via et::add, but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
      into one giant ETensor. *)
-  diagrams = With[{ex = expandBridges[net]}, If[Head[ex] === Plus, List @@ ex, {ex}]];
+  ntLog["[prof] NumTrace expandBridges: ", First@AbsoluteTiming[
+  diagrams = With[{ex = expandBridges[net]}, If[Head[ex] === Plus, List @@ ex, {ex}]];], " s"];
   (* odd-trace vanishing: a closed Dirac trace of an ODD number of gammas is identically zero
      (and would otherwise carry a spurious imaginary I^odd coefficient from the vertex/basis
      normalizations). Drop such diagrams. (gamma5-bearing traces are exempt from the rule.)
@@ -388,8 +389,11 @@ NumTrace[net_, OptionsPattern[]] := Module[
   invSMom = DeleteDuplicates @ Cases[net, f_?(needsInvSQ) :> momentumOf[f], Infinity];
   {env, nenv} = buildEnv[allMom, invMom, invSMom];
 
+  ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ",
+    First@AbsoluteTiming[diags = analyseDiagram /@ diagrams], " s"];
+
   NTKernel[<|
-    "Diagrams"  -> (analyseDiagram /@ diagrams),
+    "Diagrams"  -> diags,
     "Env"       -> env,
     "NEnv"      -> nenv,
     "Frame"     -> frame,

@@ -1,10 +1,12 @@
 # Per-flavour and per-component dressings
 
 This is the most physics-heavy tutorial; the [Glossary](../getting_started/glossary.md) defines
-*dressing*, *flavour*, *isospin*, and *condensate*. Its runnable artifacts are the Mathematica
+*dressing*, *flavour*, *isospin*, and *condensate*. Its full-flow artifacts are the Mathematica
 generators (`tests/gen/gen_flavour_split.wls`, `gen_flavour_ingroup.wls`, `gen_gluon_condensate.wls`)
-and their committed kernels — validated by the ctests named below — rather than a standalone
-`Tutorials/` C++ program.
+and their committed kernels — validated by the ctests named below. The **group-diagonal fold** at
+the heart of the in-group approach is also directly callable from standalone C++, with no
+Mathematica involved — the [pure-C++ section](#in-pure-c-the-group-diagonal-fold) below is a
+runnable worked example.
 
 The flows so far dressed every quark the same way — one propagator dressing $Z_q$ for the
 whole colour/flavour multiplet. Physics often needs more: the **u** and **d** quarks dressed
@@ -117,11 +119,89 @@ Group-diagonal dressings leave `sun_value_cx` (the plain colour fold) untouched,
 that does *not* use them regenerates byte-identical.
 ```
 
+## In pure C++: the group-diagonal fold
+
+The Mathematica above is only front-end sugar. The mechanism it drives — the SU($N$) trace folding
+to $\sum_a c_a\,D_a$ over named dressings instead of to one flavour-blind number — is the numeric
+engine's colour/flavour fold (`network/sun_net.hpp`), callable directly. There are two entry points:
+
+- `sun_value_cx(net)` — the **plain** fold: a fully-contracted SU($N$) net → **one number** `Cx`.
+- `sun_value_dressed(net)` — the **group-diagonal** fold: if the net carries a `diagFund`/`diagAdj`
+  factor it returns a **`SUNPoly`** — a small polynomial $\sum_t c_t \prod D^{\mathrm{dr}}$, each
+  term a `SUNTerm{coeff, dress}` (`dress` = the list of dressing-ids in that monomial). A net with
+  no diagonal factor comes back as a single constant term, exactly `sun_value_cx`.
+
+A `diag` factor is a $\delta$ tagged with a `comp2dr` map — `comp2dr[v]` is the dressing-id for
+component `v`, or `-1` to **drop** it. This is the C++ image of the Mathematica `spec` rules list.
+The runnable program `Tutorials/06-dressed-flavour/dressed_flavour.cpp` builds the flavour story of
+this tutorial (u/d in an SU(2) doublet) at the engine level and self-checks it — its core:
+
+```cpp
+#include <numtracer.hpp> // sun_value_dressed + SUN::diagFund / diagAdj / deltaFund / deltaAdj
+
+using namespace numtracer;          // Cx, approx
+namespace net = numtracer::network; // SUNPoly / SUNTerm / sun_value_dressed / SUN
+
+enum { i, j }; // the two ends of the closed δ loop
+
+// Evaluate a SUNPoly at a dressing-id -> value assignment D: Σ_t coeff_t · Π_{id∈dress} D(id).
+static Cx eval_poly(const net::SUNPoly &p, double (*D)(int)) {
+  Cx s{0, 0};
+  for (const net::SUNTerm &t : p) {
+    Cx c = t.coeff;
+    for (int id : t.dress) c = c * Cx{D(id), 0.0};
+    s = s + c;
+  }
+  return s;
+}
+
+int main() {
+  // A flavour δ-loop over an SU(2) doublet, its δ made flavour-DIAGONAL: component 0 (u) carries
+  // dressing-id 0, component 1 (d) carries id 1. (comp2dr is 0-based: {0, 1} = "u->id0, d->id1".)
+  // sun_value_dressed folds the closed loop diagFund·deltaFund to the SUNPoly  D_u + D_d.
+  const net::SUNPoly ud = net::sun_value_dressed(
+      {net::SUN::diagFund(2, i, j, {0, 1}), net::SUN::deltaFund(2, j, i)});
+
+  auto broken = [](int id) { return id == 0 ? 2.0 : 5.0; }; // D_u = 2, D_d = 5 (broken isospin)
+  auto ones = [](int) { return 1.0; };                      // all dressings equal to 1
+  std::printf("   D_u + D_d           = %g   (D_u=2, D_d=5 -> 7)\n", eval_poly(ud, broken).re);
+  std::printf("   collapse D_u=D_d=1  = %g   (-> flavour-blind N_f = 2)\n", eval_poly(ud, ones).re);
+
+  // DROP: the same loop dressing ONLY component 0 (id -1 drops component 1) folds to just D_u.
+  const net::SUNPoly u_only = net::sun_value_dressed(
+      {net::SUN::diagFund(2, i, j, {0, -1}), net::SUN::deltaFund(2, j, i)});
+  std::printf("   drop d (only u)     = %g   (-> D_u = 2)\n", eval_poly(u_only, broken).re);
+  return 0; // part B (the adjoint gluon condensate) follows in the source
+}
+```
+
+Building the tutorial (`cmake -S Tutorials -B Tutorials/build && cmake --build Tutorials/build`) and
+running `./Tutorials/build/dressed_flavour` prints:
+
+```text
+A. fundamental u/d doublet (SU(2) flavour)
+   D_u + D_d           = 7   (D_u=2, D_d=5 -> 7)
+   collapse D_u=D_d=1  = 2   (-> flavour-blind N_f = 2)
+   drop d (only u)     = 2   (-> D_u = 2)
+```
+
+Those three lines *are* the physics: `D_u + D_d` is the broken-isospin loop (two flavours dressed
+independently), the collapse `D_u = D_d = 1 → N_f` recovers the flavour-blind number a plain
+`sun_value_cx` would give (this is what `flow_gluon_condensate`'s collapse property checks in the
+adjoint), and the drop reproduces a condensate living on only some components. The Dirac/Lorentz
+trace multiplying this fold is computed **once** — the `SUNPoly` supplies the per-flavour
+coefficients as a polynomial, not one diagram per component. The tutorial's **part B** does the
+adjoint case identically with `SUN::diagAdj(N, a, b, comp2dr)` (dimension $N^2-1$): dressing only
+components 3 and 8 with `-1` elsewhere is the Cartan gluon condensate `{3,8}` of the Mathematica
+example (`full loop, all Z=1 = 8`, `Cartan {3,8} = 2`).
+
 ## Verify
 
 ```bash
 cd numtracer
-# regenerate (needs wolframscript + FunKit + FORM):
+# the pure-C++ fold above (no Wolfram needed):
+cmake --build build -j4 && ctest -R col_numeric --output-on-failure
+# regenerate the full flows (needs wolframscript + FunKit + FORM):
 wolfram -script tests/gen/gen_flavour_split.wls
 wolfram -script tests/gen/gen_flavour_ingroup.wls
 wolfram -script tests/gen/gen_gluon_condensate.wls

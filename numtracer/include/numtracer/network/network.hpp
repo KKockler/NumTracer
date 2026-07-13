@@ -10,6 +10,7 @@
 #pragma once
 
 #include "numtracer/core/cx.hpp"
+#include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 
 #include <cstdint>
 #include <stdexcept>
@@ -153,8 +154,8 @@ namespace numtracer::network
       auto absorb = [&c](const NetVal &nv) {
         for (const PTerm &t : nv) {
           if (t.coeff.im != 0.0)
-            throw std::runtime_error("network::add: complex coefficient on a vector-sum term "
-                                     "(vlc weights are real-only)");
+            NT_THROW(std::runtime_error, "network::add: complex coefficient on a vector-sum term "
+                                         "(vlc weights are real-only)");
           for (const auto &pr : t.e[0].vlc)
             c.vlc.push_back({pr.first * t.coeff.re, pr.second});
         }

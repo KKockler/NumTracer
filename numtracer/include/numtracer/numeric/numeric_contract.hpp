@@ -19,6 +19,7 @@
 #pragma once
 
 #include "numtracer/core/export.hpp"   // NUMTRACER_FUNC / NUMTRACER_DEFINE_BODIES (compiled vs header-only)
+#include "numtracer/core/config.hpp"    // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/codegen/gen.hpp"   // network::GlobalEnv / GenProg / LMono / gdetail::best_into
 #include "numtracer/network/dirac.hpp" // network::DiracNet / DFac (reused chain representation)
 #include "numtracer/numeric/dpoly.hpp"      // DPoly / DMono (dressing-atom layer)
@@ -206,8 +207,8 @@ namespace numtracer::numeric
     // would silently overflow and under-size F.v, corrupting the later index writes. Such a chain
     // is astronomically large anyway — refuse it loudly rather than miscompute.
     if (f > 15)
-      throw std::runtime_error("numeric_dirac: Dirac chain has too many free Lorentz legs "
-                               "(4^f index space overflows a 32-bit int at f>=16)");
+      NT_THROW(std::runtime_error, "numeric_dirac: Dirac chain has too many free Lorentz legs "
+                                   "(4^f index space overflows a 32-bit int at f>=16)");
     int total = 1;
     for (int k = 0; k < f; ++k)
       total *= 4;
@@ -627,8 +628,8 @@ namespace numtracer::numeric
         i = j;
       }
       if (paired) return contract_factors(nsym, {T}, atomDen, units); // self-contract paired legs
-      throw std::runtime_error("numeric_value: Dirac chain has an UNPAIRED free leg but no Lorentz net "
-                               "(uncontracted Lorentz index — mis-split diagram)");
+      NT_THROW(std::runtime_error, "numeric_value: Dirac chain has an UNPAIRED free leg but no Lorentz net "
+                                   "(uncontracted Lorentz index — mis-split diagram)");
     }
 
     /// @brief Split a Dirac chain at @ref network::DFac::LoopSep markers into its independent closed

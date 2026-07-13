@@ -18,7 +18,7 @@ contraction and the closed form.
 the source):
 
 ```cpp
-#include "numtracer/numeric/numeric_contract.hpp" // numeric_value, nprojT, dslash, dgamma
+#include <numtracer.hpp> // the whole NumTracer API — here: numeric_value, nprojT, dslash, dgamma
 // … <array> <cmath> <cstdio> <vector> …
 
 namespace nm = numtracer::numeric;
@@ -44,7 +44,11 @@ net::DiracNet chain = {net::dslash({{1.0, 0}}), net::dgamma(mu),
 // Lorentz net = the transverse projector P_{mu nu}(l): legs mu/nu, momentum vid 2, and its
 // 1/l^2 factor tracked as inverse-atom id 0 (value supplied in atomDen).
 nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nprojT(mu, nu, {{1.0, 2}}, 0)}}};
-std::vector<nm::MPoly> atomDen = {/* l^2 as an MPoly */};
+// atomDen[aid] = the polynomial in the DENOMINATOR of inverse-atom `aid`. The projector above
+// declared its 1/l^2 as atom 0, so atomDen[0] = l^2 = sum_m comp[2][m]^2 (here the constant l2).
+nm::MPoly l2poly(nsym);
+for (int m = 0; m < 4; ++m) l2poly = l2poly + comp[2][m] * comp[2][m];
+std::vector<nm::MPoly> atomDen = {l2poly};
 
 nm::MPoly tr = nm::numeric_value(nsym, chain, lor, comp, atomDen);
 Cx num = nm::eval(tr, /*symbols*/ {}, /*atom values*/ {1.0 / l2}); // -> T_num
@@ -69,9 +73,22 @@ tutorials 2 and 3, now joined:
 | `comp[vid][mu]` | component $\mu$ of momentum `vid`; here constant `MPoly`s (numbers), so `nsym = 0` |
 | `dslash({{1.0, 0}})`, `dslash({{1.0, 1}})` | the slashed momenta $\slashed p$, $\slashed q$ |
 | `dgamma(mu)`, `dgamma(nu)` | the free gammas $\gamma^\mu$, $\gamma^\nu$, open Lorentz legs `mu`/`nu` |
-| `nprojT(mu, nu, {{1.0,2}}, 0)` | the projector $P_{\mu\nu}(l)$: legs `mu`/`nu`, momentum `vid 2` ($l$), inverse-atom id 0 |
-| `atomDen = {l²}` | tells the engine atom 0 is $l^2$, so `eval` can supply $1/l^2$ |
-| `numeric_value(...)` | folds the Dirac chain (matrix products) against the Lorentz net (index elimination) → one polynomial |
+| `nprojT(mu, nu, {{1.0,2}}, 0)` | the projector $P_{\mu\nu}(l)=\delta_{\mu\nu}-l_\mu l_\nu/l^2$: legs `mu`/`nu`, momentum `vid 2` ($l$), **inverse-atom id 0** for its $1/l^2$ |
+| `atomDen = {l²}` | the **atom-denominator table**: `atomDen[0] = l²` says atom 0 stands for $1/l^2$. See the note below |
+| `numeric_value(...)` | **contracts** (not just multiplies) the Dirac chain and the Lorentz net — summing over the shared `mu`/`nu` indices — into one polynomial |
+
+```{admonition} What an "atom" is, and why numeric_value needs atomDen
+:class: note
+The projector carries a factor $1/l^2$. Rather than divide immediately, the engine keeps $1/l^2$ as
+an opaque symbol — an **inverse atom** — identified by a small integer id (here `0`), the same way a
+momentum component is a symbol. `atomDen` is the lookup table from that id to the *denominator*
+polynomial it stands for: `atomDen[0] = l²` means "atom 0 $= 1/(l^2)$". `numeric_value` uses it for
+two things: **monomial cancellation** — when the contraction produces an $l^2$ in the numerator next
+to atom 0, the two cancel exactly instead of surviving as $l^2/l^2$ — and **bookkeeping** the
+surviving $1/l^2$ atoms into each `MPoly` monomial so `eval` (or the generated kernel) can plug in
+their numeric value later. Here that value is `eval(tr, {}, {1.0/l2})`: symbols `{}` (none — the
+momenta are numbers), atom values `{1/l²}`.
+```
 
 The momentum components are plain numbers here, so `numeric_value` returns a constant `MPoly` and
 `eval` reads off the value. (In a generated kernel they are instead polynomials in the frame
@@ -93,7 +110,7 @@ below (Horner factoring, real CSE) are explained in full in
 [front-end](generating-kernels.md) writes:
 
 ```cpp
-#include "numtracer/codegen/gen.hpp" // GlobalEnv, GenProg, emit_cpp, emit_env_layout
+#include <numtracer.hpp> // the whole NumTracer API — here: GlobalEnv, GenProg, emit_cpp, emit_env_layout
 
 net::GlobalEnv g;                          // the shared symbol table (one f[] slot per symbol/atom)
 net::GenProg  prog = nm::to_genprog(tr, g); // Horner-factor + hash-consed real CSE

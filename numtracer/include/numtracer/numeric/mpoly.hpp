@@ -22,10 +22,12 @@
 #pragma once
 
 #include "numtracer/core/cx.hpp"
+#include "numtracer/third_party/gch/small_vector.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -34,10 +36,41 @@ namespace numtracer::numeric
 
   using numtracer::Cx;
 
+  /// Inline capacities for @ref Mono. `e` is ALWAYS exactly `nsym` long and `nsym` is the flow's env
+  /// size (single digits to low tens), while `atoms` is usually empty and rarely more than a few — so
+  /// with these buffers a monomial holds its whole payload inline and never touches the heap.
+  ///
+  /// This matters because `operator*` materialises all n·m product monomials: with `std::vector`
+  /// members that was one heap allocation per product term, and profiling the generator run showed
+  /// malloc/free at ~17% of total time (plus the pointer-chasing it forces on every sort comparison).
+  /// Larger flows overflow these buffers gracefully — small_vector just falls back to the heap, i.e.
+  /// exactly the old behaviour, so correctness never depends on the capacity being big enough.
+  ///
+  /// Exponents and atom ids are `int16_t`, not `int`. Both are small by construction — an exponent is
+  /// a polynomial degree (single digits in practice) and an atom id indexes the flow's atom table — so
+  /// 32 bits each is pure width. It matters because `std::sort` in @ref MPoly::from_scratch physically
+  /// shuffles `pair<Mono, Cx>` objects and the monomial is the bulk of one: halving the exponent width
+  /// halves what every swap moves and doubles how many monomials fit in cache.
+  using MonoExpT = std::int16_t;
+  using MonoAtomT = std::int16_t;
+
+  inline constexpr unsigned kMonoExpInline = 24; ///< covers nsym for the flows in practice
+  inline constexpr unsigned kMonoAtomInline = 8;
+
+  using MonoExp = gch::small_vector<MonoExpT, kMonoExpInline>;
+  using MonoAtoms = gch::small_vector<MonoAtomT, kMonoAtomInline>;
+
+  struct Mono;
+  /// Scratch list of (monomial, coeff) handed to @ref MPoly::from_scratch. Measured on a real flow,
+  /// from_scratch is called tens of millions of times with a MEAN of ~4 terms — it is not one big
+  /// sort, it is a flood of tiny ones — so a heap-backed scratch vector paid an allocation per call.
+  /// Inline storage covers the common case; larger products fall back to the heap as before.
+  inline constexpr unsigned kMPolyScratchInline = 8;
+
   /// @brief A monomial: exponents over the user symbols plus a sorted multiset of inverse-atom ids.
   struct Mono {
-    std::vector<int> e;     ///< length nsym, exponent of each user symbol
-    std::vector<int> atoms; ///< sorted (with multiplicity) ids of surviving `1/k²` atoms
+    MonoExp e;       ///< length nsym, exponent of each user symbol
+    MonoAtoms atoms; ///< sorted (with multiplicity) ids of surviving `1/k²` atoms
     bool operator<(const Mono &o) const
     {
       if (e != o.e) return e < o.e;
@@ -45,6 +78,8 @@ namespace numtracer::numeric
     }
     bool operator==(const Mono &o) const { return e == o.e && atoms == o.atoms; }
   };
+
+  using MPolyScratch = gch::small_vector<std::pair<Mono, Cx>, kMPolyScratchInline>;
 
   /// @brief Multivariate polynomial: monomial → complex coefficient, over `nsym` user symbols.
   ///
@@ -62,7 +97,7 @@ namespace numtracer::numeric
     explicit MPoly(int ns) : nsym(ns) {}
 
     /// Build from an unsorted scratch list of (monomial, coeff): sort then combine adjacent equals.
-    static MPoly from_scratch(int ns, std::vector<std::pair<Mono, Cx>> s)
+    static MPoly from_scratch(int ns, MPolyScratch s)
     {
       MPoly p(ns);
       std::sort(s.begin(), s.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
@@ -82,30 +117,33 @@ namespace numtracer::numeric
     static MPoly constant(int ns, Cx c)
     {
       MPoly p(ns);
-      if (!(c.re == 0 && c.im == 0)) p.t.push_back({Mono{std::vector<int>(ns, 0), {}}, c});
+      if (!(c.re == 0 && c.im == 0)) p.t.push_back({Mono{MonoExp(ns, 0), {}}, c});
       return p;
     }
     /// The i-th user symbol (coefficient 1).
     static MPoly var(int ns, int i)
     {
       MPoly p(ns);
-      std::vector<int> e(ns, 0);
+      MonoExp e(ns, 0);
       e[i] = 1;
       p.t.push_back({Mono{std::move(e), {}}, Cx{1, 0}});
       return p;
     }
     /// A single monomial `c · ∏ x_k^{e_k}` (no inverse atoms). Used by the generated component table.
-    static MPoly mono(int ns, std::vector<int> e, Cx c)
+    /// Takes a `std::vector` because the GENERATED component table hands one over as a braced list;
+    /// it is converted into the monomial's inline storage here (once per table entry, not on any hot
+    /// path).
+    static MPoly mono(int ns, const std::vector<int> &e, Cx c)
     {
       MPoly p(ns);
-      if (!(c.re == 0 && c.im == 0)) p.t.push_back({Mono{std::move(e), {}}, c});
+      if (!(c.re == 0 && c.im == 0)) p.t.push_back({Mono{MonoExp(e.begin(), e.end()), {}}, c});
       return p;
     }
     /// A bare inverse atom `1/D` (atom id `aid`), coefficient 1.
     static MPoly atom(int ns, int aid)
     {
       MPoly p(ns);
-      p.t.push_back({Mono{std::vector<int>(ns, 0), {aid}}, Cx{1, 0}});
+      p.t.push_back({Mono{MonoExp(ns, 0), MonoAtoms{static_cast<MonoAtomT>(aid)}}, Cx{1, 0}});
       return p;
     }
 
@@ -173,23 +211,28 @@ namespace numtracer::numeric
     const int ns = a.nsym ? a.nsym : b.nsym;
     if (a.t.empty() || b.t.empty()) return MPoly(ns);
     assert(a.nsym == b.nsym); // both carry terms ⇒ symbol spaces must match; see operator+ (debug-only)
-    std::vector<std::pair<Mono, Cx>> s;
+    MPolyScratch s;
     s.reserve(a.t.size() * b.t.size());
-    std::vector<int> e(ns);
+    // Build each product monomial IN PLACE. The old code kept a scratch `e` and copied it into the
+    // Mono, which (with a heap-backed exponent vector) was an allocation per product term.
     for (const auto &[ma, ca] : a.t)
       for (const auto &[mb, cb] : b.t) {
+        auto &slot = s.emplace_back(Mono{}, ca * cb);
+        Mono &m = slot.first;
+        m.e.resize(static_cast<std::size_t>(ns));
         for (int k = 0; k < ns; ++k)
-          e[k] = ma.e[k] + mb.e[k];
-        std::vector<int> at;
-        at.reserve(ma.atoms.size() + mb.atoms.size());
+          m.e[k] = ma.e[k] + mb.e[k];
+        // Only ask for capacity when the merge would actually overflow the inline buffer. Most
+        // monomials carry NO atoms at all, and an unconditional reserve() here cost ~7% of the run.
+        const std::size_t nat = ma.atoms.size() + mb.atoms.size();
+        if (nat > kMonoAtomInline) m.atoms.reserve(nat);
         std::size_t i = 0, j = 0; // merge the two sorted atom multisets
         while (i < ma.atoms.size() && j < mb.atoms.size())
-          at.push_back(ma.atoms[i] <= mb.atoms[j] ? ma.atoms[i++] : mb.atoms[j++]);
+          m.atoms.push_back(ma.atoms[i] <= mb.atoms[j] ? ma.atoms[i++] : mb.atoms[j++]);
         while (i < ma.atoms.size())
-          at.push_back(ma.atoms[i++]);
+          m.atoms.push_back(ma.atoms[i++]);
         while (j < mb.atoms.size())
-          at.push_back(mb.atoms[j++]);
-        s.push_back({Mono{e, std::move(at)}, ca * cb});
+          m.atoms.push_back(mb.atoms[j++]);
       }
     return MPoly::from_scratch(ns, std::move(s));
   }
@@ -203,12 +246,12 @@ namespace numtracer::numeric
   /// survive into the lowering as `inv` env slots. Value-preserving and frame-agnostic.
   inline MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
-    std::vector<std::pair<Mono, Cx>> out;
+    MPolyScratch out;
     out.reserve(p.t.size());
     for (const auto &[m, c] : p.t) {
-      std::vector<int> e = m.e;
+      MonoExp e = m.e;
       Cx coeff = c;
-      std::vector<int> keep;
+      MonoAtoms keep;
       keep.reserve(m.atoms.size());
       for (const auto &aid : m.atoms) {
         bool cancelled = false;
@@ -216,7 +259,7 @@ namespace numtracer::numeric
           const MPoly &D = atomDen[aid];
           if (D.t.size() == 1) { // monomial denominator → may cancel
             const auto &dm = *D.t.begin();
-            const std::vector<int> &d = dm.first.e;
+            const MonoExp &d = dm.first.e;
             const Cx dc = dm.second;
             bool dominates = dm.first.atoms.empty();
             for (std::size_t k = 0; dominates && k < e.size(); ++k)
@@ -255,8 +298,8 @@ namespace numtracer::numeric
     for (const auto &g : groups)
       for ([[maybe_unused]] int idx : g)
         assert(idx >= 0 && idx < p.nsym);
-    std::vector<std::pair<Mono, Cx>> out;
-    std::vector<std::tuple<std::vector<int>, std::vector<int>, Cx>> work;
+    MPolyScratch out;
+    std::vector<std::tuple<MonoExp, MonoAtoms, Cx>> work;
     for (const auto &[m, c] : p.t)
       work.push_back({m.e, m.atoms, c});
     while (!work.empty()) {
@@ -275,11 +318,11 @@ namespace numtracer::numeric
       }
       const std::vector<int> &group = groups[groupIdx];
       const int last = group.back();
-      std::vector<int> base = e;
+      MonoExp base = e;
       base[last] -= 2;                                     // U_last^2 -> 1 - Σ_{μ<last} Uμ^2
       work.push_back({base, atoms, c});                    // the "+1" branch
       for (std::size_t i = 0; i + 1 < group.size(); ++i) { // the "-Uμ^2" branches
-        std::vector<int> shifted = base;
+        MonoExp shifted = base;
         shifted[group[i]] += 2;
         work.push_back({std::move(shifted), atoms, Cx{-c.re, -c.im}});
       }

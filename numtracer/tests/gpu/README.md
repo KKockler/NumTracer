@@ -2,7 +2,7 @@
 
 Full 4D loop integrals of the generated ZA3/ZA4 invariant-basis kernels over a grid of 64
 log-spaced external momenta, run on the GPU as DiFfRG-style two-phase map/reduce
-(`include/numtracer/cuda/integrator.cuh`):
+(`tests/gpu/integrator.cuh`):
 
 1. **phase 1** — ONE grid-stride launch evaluates `prefactor · l1³ · Πwᵢ · Re kernel(...)` at
    every (grid point, quadrature node) pair into a device buffer (one contiguous segment per
