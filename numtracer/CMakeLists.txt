@@ -391,6 +391,34 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_gluon_condensate COMMAND compare_gluon_condensate)
   add_test(NAME color_su3 COMMAND sun_contract 3)
 
+  # ---- CODEGEN test (opt-in) -------------------------------------------------------------------
+  # Every test above runs a C++ binary against the PRE-GENERATED headers in tests/gen; Wolfram is
+  # never invoked, so none of them can see a change to mathematica/. This one closes that gap: it
+  # regenerates the kernels from source, rebuilds, and re-runs the flow tests. It needs Wolfram and
+  # takes minutes, hence opt-in:
+  #
+  #     cmake -B build -DNUMTRACER_TEST_CODEGEN=ON && ctest --test-dir build -L codegen
+  #
+  # It carries the label `codegen` and re-invokes ctest with `-LE codegen`, so it cannot recurse into
+  # itself; for the same reason the install-time run below excludes the label.
+  option(NUMTRACER_TEST_CODEGEN
+         "Add a ctest that regenerates the kernels via Wolfram and re-runs the flow tests (slow)" OFF)
+  if(NUMTRACER_TEST_CODEGEN)
+    find_program(NT_WOLFRAM_EXE NAMES wolfram wolframscript math)
+    if(NOT NT_WOLFRAM_EXE)
+      message(WARNING "NUMTRACER_TEST_CODEGEN=ON but no Wolfram kernel found; skipping the codegen test")
+    else()
+      add_test(NAME codegen_regen
+               COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/gen/regen_check.sh" --ctest
+               WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+      set_tests_properties(codegen_regen PROPERTIES
+        LABELS codegen
+        RUN_SERIAL TRUE          # regenerates in the source tree and rebuilds: must not race
+        TIMEOUT 5400)
+      set_property(TEST codegen_regen PROPERTY ENVIRONMENT "NT_BUILD_DIR=${CMAKE_BINARY_DIR}")
+    endif()
+  endif()
+
   # Run the test suite as part of `cmake --install` (and `make/ninja install`, which build
   # `all` first so the test binaries exist). A failing test aborts the install with a fatal
   # error. Off-switch: -DNUMTRACER_TEST_ON_INSTALL=OFF. Tests run against the build-tree
@@ -401,7 +429,7 @@ if(NUMTRACER_BUILD_TESTS)
       message(STATUS \"NumTracer: running the test suite before finishing install\")
       execute_process(
         COMMAND \"${CMAKE_CTEST_COMMAND}\" --test-dir \"${CMAKE_BINARY_DIR}\"
-                --output-on-failure --build-config \"\$<CONFIG>\"
+                --output-on-failure --build-config \"\$<CONFIG>\" -LE codegen
         RESULT_VARIABLE _nt_ctest_rc)
       if(NOT _nt_ctest_rc EQUAL 0)
         message(FATAL_ERROR \"NumTracer: tests failed (ctest exit \${_nt_ctest_rc}); install aborted\")

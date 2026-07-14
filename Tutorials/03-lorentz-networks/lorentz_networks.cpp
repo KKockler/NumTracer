@@ -6,7 +6,7 @@
 // inverse propagators 1/l^2 as separate "atoms". numtracer::numeric::numeric_value does that
 // contraction. We apply it to the warm-up p.P(l).p and read off p^2 (1 - cos^2 theta) — the angular
 // factor of the ghost/gluon loop.
-#include "numtracer/numeric/numeric_contract.hpp" // nvec / nprojT (NNet) + numeric_value -> MPoly
+#include <numtracer.hpp> // the whole NumTracer API — here: nvec / nprojT (NNet) + numeric_value -> MPoly
 
 #include <array>
 #include <cmath>

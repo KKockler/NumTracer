@@ -10,7 +10,7 @@
 // We do two contractions and check each against its closed form:
 //   (1) a . b        = a_mu delta^{mu nu} b_nu      (a metric tying two vectors)
 //   (2) a . P(k) . a = a^2 - (a.k)^2 / k^2          (a transverse projector on k)
-#include "numtracer/numeric/numeric_contract.hpp" // nvec / nmet / nprojT (NNet) + numeric_value
+#include <numtracer.hpp> // the whole NumTracer API — here: nvec / nmet / nprojT (NNet) + numeric_value
 
 #include <array>
 #include <cmath>

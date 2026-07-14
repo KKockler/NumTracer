@@ -4,7 +4,7 @@
 // C_F delta_ik with C_F = (N^2-1)/2N = 4/3 for SU(3). A colour network with no free indices is
 // just a number: numtracer::network::sun_value_cx contracts it over the typed-out SU(N)
 // tables. We compute C_F this way and check it against its known closed form.
-#include "numtracer/network/sun_net.hpp" // sun_value_cx + SUN::f / SUN::T / SUN::deltaAdj / SUN::deltaFund
+#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_cx + SUN::f / SUN::T / SUN::deltaAdj / SUN::deltaFund
 
 #include <cmath>
 #include <cstdio>

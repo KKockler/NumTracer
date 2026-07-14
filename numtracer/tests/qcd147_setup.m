@@ -6,6 +6,11 @@
    to qcd_setup.m. This is the dense `1/4/7` case the numeric backend must handle; qcd_setup.m is
    kept untouched as the struct-1 regression guard. NOT part of the NumTracer frontend. *)
 
+(* Pin FunKit's backend BEFORE any derivative/trace is taken: FRoute is leg-order sensitive, so
+   the backend choice silently changes the loop-momentum routing and thus every frozen test
+   integrand. See backend_pin.m. *)
+Get[FileNameJoin[{DirectoryName[$InputFileName], "backend_pin.m"}]];
+
 fields = <|
   "Commuting" -> {A[p, {v, c}]},
   "Grassmann" -> {{cb[p, {c}], c[p, {c}]}, {qb[p, {d, A, F}], q[p, {d, A, F}]}}

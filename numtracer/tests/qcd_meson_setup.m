@@ -14,6 +14,11 @@
    Nf=2 here and thus share one signature, which is what makes the cross-check a pointwise compare. *)
 
 (* ---- field space + truncation (QCD.nb cell 2) -------------------------------------------------- *)
+(* Pin FunKit's backend BEFORE any derivative/trace is taken: FRoute is leg-order sensitive, so
+   the backend choice silently changes the loop-momentum routing and thus every frozen test
+   integrand. See backend_pin.m. *)
+Get[FileNameJoin[{DirectoryName[$InputFileName], "backend_pin.m"}]];
+
 fields = <|
   "Commuting" -> {A[p, {v, c}], ΠL[p, {f}], σL[p]},
   "Grassmann" -> {{cb[p, {c}], c[p, {c}]}, {qb[p, {d, A, F}], q[p, {d, A, F}]}}

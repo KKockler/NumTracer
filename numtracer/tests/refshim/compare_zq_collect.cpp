@@ -29,8 +29,27 @@ int main() {
     double r = cDist(l1, c1, p, k);
     pw = std::max(pw, std::fabs(cColl(l1, c1, p, k) - r) / (1e-300 + std::fabs(r)));
   }
-  std::printf("Zq collected vs distributed:  pointwise=%.3e\n", pw);
-  bool ok = pw < 1e-8; // numeric (evaluation-order round-off) tolerance, as in compare_zq_num
+  // PHYSICAL CHECK = the angular-integrated value. The pointwise integrand is not a physical
+  // invariant: the loop momentum is a free reparametrisation, and FunKit's FRoute picks it from the
+  // leg order it is handed — so a change of backend or derivation can hand us an integrand that
+  // differs pointwise by O(1) while integrating to exactly the same thing. Integrate the one loop
+  // angle with its sqrt(1-cos1^2) polar Jacobian, at fixed |l1|.
+  auto ang1 = [&](auto kfn, double l1, double p, double k) {
+    const int M = 65; double s = 0, h = 2.0 / (M - 1);
+    for (int i = 0; i < M; ++i) {
+      double c1 = -1.0 + i * h;
+      double w = ((i == 0 || i == M - 1) ? 0.5 : 1.0);
+      s += w * std::sqrt(std::max(0.0, 1.0 - c1 * c1)) * kfn(l1, c1, p, k);
+    }
+    return s * h;
+  };
+  double ie = 0;
+  for (double l1 : {0.4, 0.9, 1.7}) for (double p : {0.7, 1.8}) for (double k : {0.5, 1.4}) {
+    double r = ang1(cDist, l1, p, k);
+    ie = std::max(ie, std::fabs(ang1(cColl, l1, p, k) - r) / (1e-300 + std::fabs(r)));
+  }
+  std::printf("Zq collected vs distributed:  pointwise=%.3e  cos1-integrated=%.3e (physical check)\n", pw, ie);
+  bool ok = ie < 1e-8; // numeric (evaluation-order round-off) tolerance, as in compare_zq_num
   std::printf(ok ? "ALL TESTS PASSED\n" : "TESTS FAILED\n");
   return ok ? 0 : 1;
 }

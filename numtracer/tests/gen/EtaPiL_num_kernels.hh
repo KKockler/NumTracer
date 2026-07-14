@@ -12,7 +12,7 @@ template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i
 //   f[4] = dress(3)
 //   f[5] = var(1)
 static inline constexpr int nenv = 6;
-static inline void fill(double *f, double l1, double cos1, double dr_0, double dr_1, double dr_2, double dr_3) {
+static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double dr_0, [[maybe_unused]] double dr_1, [[maybe_unused]] double dr_2, [[maybe_unused]] double dr_3) {
   f[0] = dr_0;
   f[1] = dr_1;
   f[2] = dr_2;
@@ -20,7 +20,7 @@ static inline void fill(double *f, double l1, double cos1, double dr_0, double d
   f[4] = dr_3;
   f[5] = cos1;
 }
-static inline double tr0(const double *f) {
+static inline double tr0([[maybe_unused]] const double *f) {
   const double s0 = -18;
   const double s1 = f[2];
   const double s2 = s1*s1;
@@ -42,14 +42,14 @@ static inline double tr0(const double *f) {
   const double s18 = s12*s17;
   return s18;
 }
-static inline std::complex<double> tr1(const double *f) {
+static inline std::complex<double> tr1([[maybe_unused]] const double *f) {
   const double s0 = f[4];
   const double s1 = f[3];
   const double s2 = s1*s1;
   const double s3 = f[2];
   const double s4 = f[1];
   const double s5 = f[0];
-  const double s6 = 36;
+  const double s6 = -36;
   const double s7 = s0*s6;
   const double s8 = s2*s7;
   const double s9 = s3*s8;
@@ -57,7 +57,7 @@ static inline std::complex<double> tr1(const double *f) {
   const double s11 = s5*s10;
   return std::complex<double>{0.0, s11};
 }
-static inline double tr2(const double *f) {
+static inline double tr2([[maybe_unused]] const double *f) {
   const double s0 = -0.018000000000000002;
   const double s1 = 18;
   const double s2 = f[3];

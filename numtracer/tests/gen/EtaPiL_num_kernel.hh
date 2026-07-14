@@ -34,7 +34,7 @@ using namespace DiFfRG;
     const auto _interp8 = hSigL(l1);
     const auto _interp9 = Zq(l1);
     const auto _interp10 = ntIm(DiFfRG::etapil_num::tr1(fenv));
-    const auto _interp11 = hPiL(0.002 * sqrt(0.1666666666666667 - 166.6666666666667 * (cos1 - 1000. * l1) * l1));
+    const auto _interp11 = hPiL(0.000816496580927726 * sqrt(1. - 1000. * (cos1 - 1000. * l1) * l1));
     const auto _interp12 = hSigL(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
     const auto _interp13 = RF(powr<2>(k), 1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1));
     const auto _interp14 = Zq(sqrt(1.e-6 - 0.002 * cos1 * l1 + powr<2>(l1)));
@@ -60,7 +60,7 @@ using namespace DiFfRG;
     const auto _cse16 = -_cse15 * _interp13 * _interp4;
     const auto _cse17 = _cse12 + _cse16;
     const auto _cse18 = sqrt(rhoL);
-    return -500000. * fma(-4., _cse11 * _cse4 * _den1 * powr<2>(_interp1) * _interp2, fma(-2., 1.414213562373095 * _cse11 * _cse14 * powr<2>(_cse17) * _cse18 * _den1 * _den2 * powr<2>(_interp1) * _interp10 * _interp8, fma(2., 1.414213562373095 * _cse11 * _cse18 * powr<2>(_cse4) * _den1 * _den2 * _interp10 * powr<2>(_interp11) * _interp12 * powr<2>(l1), fma(4., _cse11 * _cse17 * powr<2>(_cse4) * _den1 * _den2 * powr<2>(_interp11) * _interp16 * powr<2>(l1), fma(-1., 1.414213562373095 * _cse11 * _cse18 * _den1 * _den2 * powr<2>(_interp1) * _interp10 * powr<2>(_interp12) * _interp8 * rhoL, fma(2., _cse11 * _cse17 * _den1 * _den2 * powr<2>(_interp11) * _interp15 * powr<2>(_interp8) * rhoL, fma(1.414213562373095, _cse11 * _den1 * _den2 * _interp10 * powr<2>(_interp11) * _interp12 * powr<2>(_interp8) * sqrt(powr<3>(rhoL)), 0.)))))));
+    return 500000. * fma(4., _cse11 * _cse4 * _den1 * powr<2>(_interp1) * _interp2, fma(-2., 1.414213562373095 * _cse11 * _cse14 * powr<2>(_cse17) * _cse18 * _den1 * _den2 * powr<2>(_interp1) * _interp10 * _interp8, fma(2., 1.414213562373095 * _cse11 * _cse18 * powr<2>(_cse4) * _den1 * _den2 * _interp10 * powr<2>(_interp11) * _interp12 * powr<2>(l1), fma(-4., _cse11 * _cse17 * powr<2>(_cse4) * _den1 * _den2 * powr<2>(_interp11) * _interp16 * powr<2>(l1), fma(-1., 1.414213562373095 * _cse11 * _cse18 * _den1 * _den2 * powr<2>(_interp1) * _interp10 * powr<2>(_interp12) * _interp8 * rhoL, fma(-2., _cse11 * _cse17 * _den1 * _den2 * powr<2>(_interp11) * _interp15 * powr<2>(_interp8) * rhoL, fma(1.414213562373095, _cse11 * _den1 * _den2 * _interp10 * powr<2>(_interp11) * _interp12 * powr<2>(_interp8) * sqrt(powr<3>(rhoL)), 0.)))))));
   }
 
   // clang-format off
@@ -69,7 +69,9 @@ static inline auto constant(const double& k, const double& etaPiL, const double&
 return 0.;
   // clang-format on
 
-}private: static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
+}
+private:
+static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
 static inline auto RF(const auto &k2, const auto &p2) { return REG::RF(k2, p2); }
 static inline auto RBdot(const auto &k2, const auto &p2) { return REG::RBdot(k2, p2); }
 static inline auto RFdot(const auto &k2, const auto &p2) { return REG::RFdot(k2, p2); }

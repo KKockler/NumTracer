@@ -5,7 +5,7 @@
 // the momentum components (numtracer::numeric::MPoly), multiplies the chain, and takes the
 // matrix trace. The classic identity tr(p/ q/) = 4 p.q falls straight out of the product — we
 // check it against that closed form.
-#include "numtracer/numeric/spinor_mat.hpp" // Mat4, slashC, matmul, mtrace (pulls in MPoly, eval)
+#include <numtracer.hpp> // the whole NumTracer API — here: Mat4, slashC, matmul, mtrace, MPoly, eval
 
 #include <array>
 #include <cmath>

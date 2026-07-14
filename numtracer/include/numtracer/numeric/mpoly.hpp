@@ -91,6 +91,9 @@ namespace numtracer::numeric
   /// kernel) and equality/lookup are binary searches.
   struct MPoly {
     int nsym = 0;
+    /// Heap-backed on purpose. Giving `t` inline storage (capacity 4) was measured: it bought ~2% of
+    /// run time but pushed sizeof(Mat4) from ~0.5 KB to ~8.7 KB and peak RSS up ~20% — a bad trade on
+    /// the dense flows, which are memory-bound before they are time-bound.
     std::vector<std::pair<Mono, Cx>> t; ///< sorted by Mono, like terms combined, no zeros
 
     MPoly() = default;

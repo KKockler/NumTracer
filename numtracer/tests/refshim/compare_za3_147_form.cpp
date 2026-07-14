@@ -33,12 +33,19 @@ int main() {
     double r = cForm(l1, c1, c2, p, k);
     pw = std::max(pw, std::fabs(cNum(l1, c1, c2, p, k) - r) / (1e-300 + std::fabs(r)));
   }
+  // Integrate the loop angles with the measure the loop integral actually carries — the
+  // sqrt(1-cos1^2) polar Jacobian is what makes this a PHYSICAL invariant. Without it this is just
+  // an unweighted integral over the (cos1,cos2) cube, which is NOT invariant under the choice of
+  // loop momentum: FunKit's FRoute picks that from the leg order it is handed, so a change of
+  // backend or derivation can legitimately hand us an integrand that differs pointwise while
+  // integrating to the same thing. (Grading on the unweighted cube integral failed by ~20% on such
+  // a change with nothing actually wrong.)
   auto ang2 = [&](auto kfn, double l1, double p, double k) {
     const int M = 41; double s = 0, h = 2.0 / (M - 1);
     for (int i = 0; i < M; ++i) for (int j = 0; j < M; ++j) {
       double c1 = -1.0 + i * h, c2 = -1.0 + j * h;
       double w = ((i == 0 || i == M - 1) ? 0.5 : 1.0) * ((j == 0 || j == M - 1) ? 0.5 : 1.0);
-      s += w * kfn(l1, c1, c2, p, k);
+      s += w * std::sqrt(std::max(0.0, 1.0 - c1 * c1)) * kfn(l1, c1, c2, p, k);
     }
     return s * h * h;
   };

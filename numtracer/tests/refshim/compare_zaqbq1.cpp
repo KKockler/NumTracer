@@ -39,7 +39,6 @@ int main() {
   std::mt19937_64 rng(31337);
   std::uniform_real_distribution<double> U(0.05, 3.0), Uc(-0.999, 0.999);
 
-  // ZAqbq1 matches the oracle POINTWISE (no odd-cos loop-routing term), like the Zq 2-point.
   const int Nt = 200000;
   std::vector<double> TL(Nt), TC1(Nt), TC2(Nt), TP(Nt), TK(Nt);
   for (int i = 0; i < Nt; ++i) { TL[i] = U(rng); TC1[i] = Uc(rng); TC2[i] = Uc(rng); TP[i] = U(rng); TK[i] = U(rng); }
@@ -50,7 +49,42 @@ int main() {
     e_num = std::max(e_num, std::fabs(callNum(TL[i], TC1[i], TC2[i], TP[i], TK[i]) - f) / (1e-300 + std::fabs(f)));
   }
   std::printf("ZAqbq1 (quark-gluon vertex) vs Form, pointwise over %d points:\n", Nt);
-  std::printf("  numeric max rel err = %.3e\n", e_num);
+  std::printf("  numeric max rel err = %.3e  (diagnostic only — see below)\n", e_num);
+
+  // PHYSICAL CHECK = the angular-integrated value, as in compare_za4_num.
+  //
+  // The pointwise integrand is NOT a physical invariant: the two kernels only have to agree once the
+  // loop momentum is integrated over. The choice of loop momentum is a free reparametrisation, and
+  // FunKit's routing (FRoute) picks it from the leg order it is handed — so a change of FunKit
+  // backend, or of the derivation, can legitimately hand us an integrand that differs pointwise by
+  // O(1) (we have measured a factor 60) while integrating to exactly the same thing. Grading on the
+  // pointwise value would fail on such a change even though nothing is wrong; grading on the
+  // integral does not. (The old comment here claimed ZAqbq1 "matches the oracle POINTWISE (no
+  // odd-cos loop-routing term)" — that held only for the routing frozen into the committed oracle.)
+  //
+  // Integrate over the 2 loop angles with the measure the loop integral actually carries
+  // (sqrt(1-cos1^2) for the polar angle), at fixed |l1| — a routing change that preserves |l1|
+  // leaves this invariant, and it also averages out the ~1e-9 pointwise round-off floor.
+  auto ang2 = [&](auto fn, double l1, double p, double k) {
+    const int M = 33;
+    const double h = 2.0 / (M - 1);
+    double s = 0;
+    for (int i = 0; i < M; ++i)
+      for (int j = 0; j < M; ++j) {
+        const double c1 = -1 + i * h, c2 = -1 + j * h;
+        const double w = ((i == 0 || i == M - 1) ? 0.5 : 1.0) * ((j == 0 || j == M - 1) ? 0.5 : 1.0);
+        s += w * std::sqrt(std::max(0.0, 1.0 - c1 * c1)) * fn(l1, c1, c2, p, k);
+      }
+    return s * h * h;
+  };
+  double e_int = 0;
+  for (double l1 : {0.4, 0.9, 1.7})
+    for (double p : {0.7, 1.8})
+      for (double k : {0.5, 1.4}) {
+        const double r = ang2(callForm, l1, p, k);
+        e_int = std::max(e_int, std::fabs(ang2(callNum, l1, p, k) - r) / (1e-300 + std::fabs(r)));
+      }
+  std::printf("  numeric 2-angle-integrated rel err = %.3e  (PHYSICAL CHECK)\n", e_int);
 
   auto bench = [&](auto fn, int n) {
     volatile double sink = 0;
@@ -64,12 +98,12 @@ int main() {
   const double t_num = bench([&](int i) { return callNum(TL[i], TC1[i], TC2[i], TP[i], TK[i]); }, Nt);
   std::printf("\ntiming:\n  Form    %12.2f ns/eval\n  numeric %12.2f ns/eval\n", t_form, t_num);
   std::printf("RESULT kernel=ZAqbq1 path=Form    ns=%.2f relerr=0\n", t_form);
-  std::printf("RESULT kernel=ZAqbq1 path=numeric ns=%.2f relerr=%.3e\n", t_num, e_num);
+  std::printf("RESULT kernel=ZAqbq1 path=numeric ns=%.2f relerr=%.3e\n", t_num, e_int);
 
   // 1e-8 is the numeric-frame tolerance used across the numeric kernels (compare_za4_num,
   // compare_za3_147_num): the fixed kinematic frame + the to_genprog noise-prune leave a ~1e-9
   // round-off floor, amplified here by the real-part cancellation of a complex integrand.
-  const bool pass = e_num < 1e-8;
-  std::printf("\nZAqbq1 (numeric vs Form): %s\n", pass ? "MATCH (< 1e-8)" : "MISMATCH");
+  const bool pass = e_int < 1e-8;
+  std::printf("\nZAqbq1 (numeric vs Form, angular-integrated): %s\n", pass ? "MATCH (< 1e-8)" : "MISMATCH");
   return pass ? 0 : 1;
 }

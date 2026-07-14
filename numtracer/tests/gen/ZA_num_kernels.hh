@@ -6,25 +6,25 @@ namespace DiFfRG { namespace za_num {
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(3)
-//   f[1] = inv(23)
+//   f[1] = inv(22)
 //   f[2] = var(1)
 //   f[3] = var(0)
 //   f[4] = dress(0)
-//   f[5] = dress(3)
-//   f[6] = dress(1)
-//   f[7] = dress(2)
+//   f[5] = dress(2)
+//   f[6] = dress(3)
+//   f[7] = dress(1)
 static inline constexpr int nenv = 8;
-static inline void fill(double *f, double l1, double cos1, double p, double dr_0, double dr_1, double dr_2, double dr_3) {
+static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double p, [[maybe_unused]] double dr_0, [[maybe_unused]] double dr_1, [[maybe_unused]] double dr_2, [[maybe_unused]] double dr_3) {
   f[0] = p;
   f[1] = 1.0/((1.00000000000000000e+00)*(p)*(p) - (2.00000000000000000e+00)*(l1)*(cos1)*(p) + (1.00000000000000000e+00)*(l1)*(l1));
   f[2] = cos1;
   f[3] = l1;
   f[4] = dr_0;
-  f[5] = dr_3;
-  f[6] = dr_1;
-  f[7] = dr_2;
+  f[5] = dr_2;
+  f[6] = dr_3;
+  f[7] = dr_1;
 }
-static inline double tr0(const double *f) {
+static inline double tr0([[maybe_unused]] const double *f) {
   const double s0 = 24;
   const double s1 = 48;
   const double s2 = f[2];
@@ -61,7 +61,7 @@ static inline double tr0(const double *f) {
   const double s33 = s31+s32;
   return s33;
 }
-static inline double tr1(const double *f) {
+static inline double tr1([[maybe_unused]] const double *f) {
   const double s0 = -48;
   const double s1 = 336;
   const double s2 = f[2];
@@ -70,9 +70,9 @@ static inline double tr1(const double *f) {
   const double s5 = s1+s4;
   return s5;
 }
-static inline double tr2(const double *f) {
-  const double s0 = -24;
-  const double s1 = 24;
+static inline double tr2([[maybe_unused]] const double *f) {
+  const double s0 = 24;
+  const double s1 = -24;
   const double s2 = f[2];
   const double s3 = s2*s2;
   const double s4 = s0*s3;
@@ -82,42 +82,42 @@ static inline double tr2(const double *f) {
   const double s8 = s5*s7;
   return s8;
 }
-static inline std::complex<double> tr3(const double *f) {
+static inline std::complex<double> tr3([[maybe_unused]] const double *f) {
   const double s0 = f[6];
   const double s1 = s0*s0;
   const double s2 = f[3];
-  const double s3 = s2*s2;
-  const double s4 = f[4];
+  [[maybe_unused]] const double s3 = s2*s2;
+  const double s4 = f[5];
   const double s5 = s4*s4;
   const double s6 = f[0];
   const double s7 = f[2];
-  const double s8 = f[7];
-  const double s9 = f[5];
-  const double s10 = 32;
-  const double s11 = 16;
+  const double s8 = f[4];
+  const double s9 = f[7];
+  const double s10 = -32;
+  const double s11 = -16;
   const double s12 = s7*s7;
   const double s13 = s10*s12;
   const double s14 = s11+s13;
-  const double s15 = -48;
+  const double s15 = 48;
   const double s16 = s7*s15;
   const double s17 = s6*s16;
   const double s18 = s2*s14;
   const double s19 = s17+s18;
   const double s20 = s1*s19;
-  const double s21 = -32;
-  const double s22 = -16;
+  const double s21 = 32;
+  const double s22 = 16;
   const double s23 = s12*s21;
   const double s24 = s22+s23;
   const double s25 = s5*s24;
   const double s26 = s2*s20;
   const double s27 = s25+s26;
-  const double s28 = 96;
-  const double s29 = s8*s28;
-  const double s30 = s0*s29;
-  const double s31 = s4*s30;
+  const double s28 = -96;
+  const double s29 = s0*s28;
+  const double s30 = s4*s29;
+  const double s31 = s8*s30;
   const double s32 = s9*s27;
   const double s33 = s31+s32;
-  const double s34 = 48;
+  const double s34 = -48;
   const double s35 = s9*s34;
   const double s36 = s5*s35;
   const double s37 = s7*s36;

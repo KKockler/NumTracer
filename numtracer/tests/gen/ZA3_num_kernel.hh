@@ -21,13 +21,13 @@ using namespace DiFfRG;
     const double cosl1p1 = cos1;
     const double cosl1p2 = 0.5 * (-cos1 + sqrt(3. - 3. * powr<2>(cos1)) * cos2);
     const double cosl1p3 = 0.5 * (-cos1 - sqrt(3. - 3. * powr<2>(cos1)) * cos2);
-    double fenv[DiFfRG::za3_num::nenv];
-    const double dr_0 = Mq(l1);
-    const double dr_1 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
+    double fenv[(DiFfRG::za3_num::nenv) > 0 ? (DiFfRG::za3_num::nenv) : 1];
+    const double dr_0 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+    const double dr_1 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
     const double dr_2 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
     const double dr_3 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p + powr<2>(p)));
-    const double dr_4 = Mq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
-    const double dr_5 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cosl1p1 * l1 * p - 2. * cosl1p2 * l1 * p + powr<2>(p)));
+    const double dr_4 = Mq(l1);
+    const double dr_5 = -powr<-1>(l1) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
     DiFfRG::za3_num::fill(fenv, l1, cos1, cos2, p, dr_0, dr_1, dr_2, dr_3, dr_4, dr_5);
     const auto _interp1 = ntRe(DiFfRG::za3_num::tr0(fenv));
     const auto _interp2 = RBdot(powr<2>(k), powr<2>(l1));
@@ -91,7 +91,7 @@ using namespace DiFfRG;
     const auto _cse7 = _cse6 * _interp4;
     const auto _cse8 = _interp2 * _interp3;
     const auto _cse9 = _cse7 + _cse8;
-    return fma(-0.005050505050505051, _cse2 * _cse9 * _den2 * _den4 * _den7 * _interp1 * _interp12 * _interp13 * _interp14, fma(-0.005050505050505051, _cse2 * _cse9 * _den2 * _den7 * _interp13 * _interp15 * _interp16, fma(-0.0202020202020202, _cse2 * _den10 * _den6 * _den9 * _interp27 * _interp28 * _interp29 * _interp30 * (-_cse1 * _interp31 * _interp32 - _cse1 * _interp33 * (_interp34 + 50. * (-_interp32 + _interp35))), fma(0.0101010101010101, _cse2 * _den3 * _den5 * _den8 * _interp17 * _interp18 * _interp19 * _interp20 * (_interp2 * _interp21 + (_interp22 + 50. * (-_interp21 + _interp23)) * _interp4), 0.))));
+    return fma(-0.005050505050505051, _cse2 * _cse9 * _den2 * _den4 * _den7 * _interp1 * _interp12 * _interp13 * _interp14, fma(-0.005050505050505051, _cse2 * _cse9 * _den2 * _den7 * _interp13 * _interp15 * _interp16, fma(0.0202020202020202, _cse2 * _den10 * _den6 * _den9 * _interp27 * _interp28 * _interp29 * _interp30 * (-_cse1 * _interp31 * _interp32 - _cse1 * _interp33 * (_interp34 + 50. * (-_interp32 + _interp35))), fma(-0.0101010101010101, _cse2 * _den3 * _den5 * _den8 * _interp17 * _interp18 * _interp19 * _interp20 * (_interp2 * _interp21 + (_interp22 + 50. * (-_interp21 + _interp23)) * _interp4), 0.))));
   }
 
   // clang-format off
@@ -100,7 +100,9 @@ static inline auto constant(const double& p, const double& k, const SplineInterp
 return 0.;
   // clang-format on
 
-}private: static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
+}
+private:
+static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
 static inline auto RF(const auto &k2, const auto &p2) { return REG::RF(k2, p2); }
 static inline auto RBdot(const auto &k2, const auto &p2) { return REG::RBdot(k2, p2); }
 static inline auto RFdot(const auto &k2, const auto &p2) { return REG::RFdot(k2, p2); }

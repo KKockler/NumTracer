@@ -8,7 +8,7 @@
 //   combination c * (momentum vid) dgamma(id)           : a free gamma^id with
 //   an OPEN Lorentz index, to be contracted later
 // The chain list is cyclic, so it already closes into a trace.
-#include "numtracer/numeric/numeric_contract.hpp" // numeric_value, NNet/NTerm, nmet, dslash, dgamma
+#include <numtracer.hpp> // the whole NumTracer API — here: numeric_value, NNet/NTerm, nmet, dslash, dgamma
 
 #include <array>
 #include <cmath>
@@ -52,7 +52,7 @@ int main() {
   std::vector<double> x = {1.0, 0.5, -0.3, 0.2, 0.8, -0.4, 1.2, 0.1};
   double pq = 0;
   for (int m = 0; m < 4; ++m)
-    pq += x[static_cast<std::size_t>(m)] * x[static_cast<std::size_t>(4 + m)];
+    pq += x[m] * x[4 + m];
   Cx vPQ = nm::eval(trPQ, x, {});
   Cx vG = nm::eval(trG, x, {});
 

@@ -8,8 +8,7 @@
 //   contract numerically; (2) the closed form   — 4 p ( -3 c l1 + p
 //   + 2 c^2 p ), the analytic value for q = l - p.
 // The two agree, which is what pins the engine's algebra down.
-#include "numtracer/codegen/gen.hpp"             // GlobalEnv, GenProg, emit_cpp, emit_env_layout
-#include "numtracer/numeric/numeric_contract.hpp" // numeric_value, to_genprog, nprojT, dslash, dgamma
+#include <numtracer.hpp> // the whole NumTracer API — here: GlobalEnv/GenProg/emit_cpp/emit_env_layout + numeric_value/to_genprog/nprojT/dslash/dgamma
 
 #include <array>
 #include <cmath>

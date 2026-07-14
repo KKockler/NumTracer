@@ -18,11 +18,11 @@ using namespace DiFfRG;
 
     using namespace DiFfRG::compute;
     using namespace numtracer;
-    double fenv[DiFfRG::za_num::nenv];
-    const double dr_0 = Mq(l1);
-    const double dr_1 = -sqrt(powr<-1>(powr<2>(l1))) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
-    const double dr_2 = Mq(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-    const double dr_3 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+    double fenv[(DiFfRG::za_num::nenv) > 0 ? (DiFfRG::za_num::nenv) : 1];
+    const double dr_0 = Mq(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+    const double dr_1 = -sqrt(powr<-1>(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))) * RF(powr<2>(k), powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)) * Zq(k) - Zq(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
+    const double dr_2 = Mq(l1);
+    const double dr_3 = -sqrt(powr<-1>(powr<2>(l1))) * RF(powr<2>(k), powr<2>(l1)) * Zq(k) - Zq(l1);
     DiFfRG::za_num::fill(fenv, l1, cos1, p, dr_0, dr_1, dr_2, dr_3);
     const auto _interp1 = ntRe(DiFfRG::za_num::tr0(fenv));
     const auto _interp2 = RBdot(powr<2>(k), powr<2>(l1));
@@ -60,9 +60,9 @@ using namespace DiFfRG;
     const auto _den3 = powr<-2>(_interp15 * _interp4 + _interp18 * powr<2>(l1));
     const auto _den4 = powr<-1>(_interp3 * _interp8 + _interp9 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
     const auto _den5 = -powr<-1>(_interp15 * _interp8 + _interp19 * (powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
-    const auto _den6 = powr<-2>(powr<2>(_interp27) + powr<2>(_interp23 * _interp24 + _interp28 * sqrt(powr<2>(l1))));
+    const auto _den6 = powr<-2>(powr<2>(_interp27) + powr<2>(_interp23 * _interp24 + _interp28 * l1));
     const auto _den7 = powr<-1>(powr<2>(_interp29) + powr<2>(_interp23 * _interp30 + _interp31 * sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p))));
-    const auto _cse1 = sqrt(powr<-1>(powr<2>(l1)));
+    const auto _cse1 = powr<-1>(l1);
     const auto _cse2 = powr<-2>(p);
     const auto _cse3 = _interp2 * _interp3;
     const auto _cse4 = -_interp3;
@@ -71,7 +71,7 @@ using namespace DiFfRG;
     const auto _cse7 = _cse6 + _interp5;
     const auto _cse8 = _cse7 * _interp4;
     const auto _cse9 = _cse3 + _cse8;
-    return fma(-0.04166666666666666, _cse2 * _cse9 * _den2 * _den4 * _interp1 * powr<2>(_interp10), fma(-0.02083333333333333, _cse2 * _cse9 * _den2 * _interp11 * _interp12, fma(0.1666666666666667, _cse2 * _den6 * _den7 * _interp20 * powr<2>(_interp21) * (-_cse1 * _interp22 * _interp23 - _cse1 * _interp24 * (_interp25 + 50. * (-_interp23 + _interp26))), fma(0.0833333333333333, _cse2 * _den3 * _den5 * _interp13 * powr<2>(_interp14) * (_interp15 * _interp2 + (_interp16 + 50. * (-_interp15 + _interp17)) * _interp4), 0.))));
+    return fma(-0.04166666666666666, _cse2 * _cse9 * _den2 * _den4 * _interp1 * powr<2>(_interp10), fma(-0.02083333333333333, _cse2 * _cse9 * _den2 * _interp11 * _interp12, fma(-0.1666666666666667, _cse2 * _den6 * _den7 * _interp20 * powr<2>(_interp21) * (-_cse1 * _interp22 * _interp23 - _cse1 * _interp24 * (_interp25 + 50. * (-_interp23 + _interp26))), fma(-0.0833333333333333, _cse2 * _den3 * _den5 * _interp13 * powr<2>(_interp14) * (_interp15 * _interp2 + (_interp16 + 50. * (-_interp15 + _interp17)) * _interp4), 0.))));
   }
 
   // clang-format off
@@ -80,7 +80,9 @@ static inline auto constant(const double& p, const double& k, const SplineInterp
 return 0.;
   // clang-format on
 
-}private: static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
+}
+private:
+static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
 static inline auto RF(const auto &k2, const auto &p2) { return REG::RF(k2, p2); }
 static inline auto RBdot(const auto &k2, const auto &p2) { return REG::RBdot(k2, p2); }
 static inline auto RFdot(const auto &k2, const auto &p2) { return REG::RFdot(k2, p2); }
