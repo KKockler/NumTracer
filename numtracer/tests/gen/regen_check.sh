@@ -39,6 +39,10 @@ DEFAULT_FLOWS=(
   gen_qcd_za_numeric gen_qcd_za3_147_numeric gen_qcd_za4_147_numeric
   gen_qcd_aqbq147_numeric gen_ym_zacbc_numeric gen_qcd_etapil_numeric
   gen_zq_collect
+  # The dense sub-term-dedup flow. Emits TWO kernels in one run (dedup ON, and a dedup-OFF control);
+  # compare_zaaqbq1_small grades one against the other. The slowest flow here (~90 s), almost all of
+  # it the dedup-OFF control — which is the speedup being tested.
+  gen_zaaqbq1_small_numeric
 )
 FLOWS=("$@")
 [[ ${#FLOWS[@]} -eq 0 ]] && FLOWS=("${DEFAULT_FLOWS[@]}")
@@ -61,6 +65,27 @@ done
 if (( fail )); then
   echo "generation failed; leaving tests/gen/ as-is for inspection (restore: $0 --restore)"
   exit 1
+fi
+
+# DENSITY GUARD for the sub-term-dedup flow. compare_zaaqbq1_small grades the dedup-ON kernel against
+# a dedup-OFF control — but if the flow ever loses its sub-term density (a setup edit that lets the
+# {[g,g],g} structure sigma-fold, a basis restricted to the wrong element, NT_TEST_NDIAG cut too far),
+# the two kernels become the SAME trivial computation and the test passes while checking nothing. Every
+# other flow in tests/gen is already in exactly that state — 1 sub-term per net — which is why this
+# flow exists. So assert the density the flow is supposed to have, from the generator's own log.
+log=/tmp/regen_gen_zaaqbq1_small_numeric.log
+if [[ -f "$log" ]]; then
+  line=$(grep -m1 '\[cse\] sub-terms:' "$log" || true)
+  redun=$(sed -n 's/.*distinct traces (\([0-9.]*\)x).*/\1/p' <<<"$line")
+  fold=$(sed -n 's/.*(longest \([0-9]*\)).*/\1/p' <<<"$line")
+  echo "  density guard: ${line#*\[cse\] }"
+  if [[ -z "$redun" || -z "$fold" ]] \
+     || ! awk -v r="$redun" 'BEGIN{exit !(r > 2.0)}' \
+     || (( fold < 10 )); then
+    echo "  FAIL: the dense flow lost its sub-term density (need redundancy > 2x and longest fold >= 10)."
+    echo "        It is the ONLY flow that exercises the dedup; without it the suite is blind to it."
+    exit 1
+  fi
 fi
 
 echo "rebuilding against the regenerated kernels ..."

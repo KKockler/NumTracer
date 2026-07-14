@@ -211,10 +211,26 @@ if(NUMTRACER_BUILD_TESTS)
   add_executable(test_col_numeric tests/test_col_numeric.cpp)
   target_link_libraries(test_col_numeric PRIVATE NumTracer::NumTracer)
 
+  # THE SUB-TERM DEDUP GATE — the only flow with real sub-term density (~7.5k contractions over ~820
+  # distinct traces, 9x redundancy, longest per-net fold ~140). Every other committed flow has exactly
+  # ONE sub-term per net, so the dedup's merge / trace cache / tree fold are no-ops there. Grades the
+  # dedup-ON kernel against a dedup-OFF (NT_GEN_NO_DEDUP) control generated from the same derivation.
+  add_executable(compare_zaaqbq1_small tests/refshim/compare_zaaqbq1_small.cpp)
+  target_include_directories(compare_zaaqbq1_small PRIVATE tests/gen tests/refshim)
+  target_link_libraries(compare_zaaqbq1_small PRIVATE NumTracer::NumTracer)
+
   # Silent-corruption guards on paths no committed flow exercises: network::add refusing a complex
   # vector-sum coefficient (real-only Elem::vlc), and the empty colour net folding to the identity.
   add_executable(test_guards tests/test_guards.cpp)
   target_link_libraries(test_guards PRIVATE NumTracer::NumTracer)
+
+  # The generator's sub-term dedup (numeric/trace_fold.hpp): the balanced tree fold vs the left fold
+  # it replaces, and every trace-cache regime. This is the ONLY test that sees the fold: the dedup
+  # needs many sub-terms per net, and every flow in tests/gen has exactly one — so the flow tests and
+  # even the codegen test are blind to it. Includes a work bound (a botched carry still returns the
+  # right VALUE while quietly degenerating back into the left fold, which no value check can see).
+  add_executable(test_trace_fold tests/test_trace_fold.cpp)
+  target_link_libraries(test_trace_fold PRIVATE NumTracer::NumTracer)
 
   # Phase-2 example 2: pion <- quark loop -> pion (Yukawa) — fundamental flavour x Dirac x colour.
   add_executable(compare_pion_quark tests/refshim/compare_pion_quark.cpp)
@@ -375,6 +391,8 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME finiteT_quark COMMAND test_finiteT_quark)
   add_test(NAME col_numeric COMMAND test_col_numeric)
   add_test(NAME guards COMMAND test_guards)
+  add_test(NAME trace_fold COMMAND test_trace_fold)
+  add_test(NAME flow_zaaqbq1_small COMMAND compare_zaaqbq1_small)
   add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)
   add_test(NAME flow_pion_quark COMMAND compare_pion_quark)
   add_test(NAME flow_glu_quark COMMAND compare_glu_quark)

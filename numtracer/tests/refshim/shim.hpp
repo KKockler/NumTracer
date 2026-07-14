@@ -115,6 +115,8 @@ namespace shimdress
   // quark-gluon vertex tensor structures 4 (p^mu) and 7 (sigma^{mu nu}) of the {1,4,7} basis.
   inline double ZAqbq4(double x) { return 0.6 + 0.2 * std::sin(0.35 * x); }
   inline double ZAqbq7(double x) { return 0.4 + 0.15 * std::cos(0.55 * x); }
+  // two-gluon-two-quark vertex (transAAqbq element T^(R)) — the dense sub-term-dedup test flow.
+  inline double ZAAqbq1(double x) { return 0.85 + 0.3 * std::sin(0.45 * x); }
   inline double Zq(double x) { return 1.0 / (1.0 + 0.2 * x) + 0.85; }
   inline double Mq(double x) { return 0.3 / (1.0 + 0.1 * x) + 0.05; }
   inline double dtZq(double x) { return -0.18 / (1.0 + 0.25 * x); }
@@ -140,6 +142,7 @@ struct DressingSet {
   DiFfRG::Fn ZAqbq1{&shimdress::ZAqbq1};
   DiFfRG::Fn ZAqbq4{&shimdress::ZAqbq4};
   DiFfRG::Fn ZAqbq7{&shimdress::ZAqbq7};
+  DiFfRG::Fn ZAAqbq1{&shimdress::ZAAqbq1};
   DiFfRG::Fn Zq{&shimdress::Zq};
   DiFfRG::Fn Mq{&shimdress::Mq};
   DiFfRG::Fn dtZq{&shimdress::dtZq};
