@@ -17,12 +17,76 @@ Neither intermediate is ever formed. The result is already a small polynomial.
 
 ## The polynomial it works in
 
-`numeric/mpoly.hpp` defines `MPoly`, a multivariate polynomial whose variables are the frame's
-*scalar symbols* (momentum components / scalar products) and which carries surviving inverse
-atoms `1/k²` (propagator denominators) on each monomial. It is the arithmetic currency of the
-whole engine: addition, multiplication, monomial-level cancellation of `k²·(1/k²)`
-(`divThroughMonomialAtoms`), and collection of equal-momentum propagator groups
-(`reduce_units`). Everything below produces and combines `MPoly`s.
+`numeric/mpoly.hpp` defines `MPoly`, the arithmetic currency of the whole engine: a multivariate
+polynomial over the frame's scalar symbols that also tracks surviving inverse propagator
+denominators `1/k²`. Everything below produces and combines `MPoly`s through addition,
+multiplication, monomial-level cancellation of `k²·(1/k²)` (`divThroughMonomialAtoms`), and
+collection of equal-momentum propagator groups (`reduce_units`).
+
+### Data model
+
+An `MPoly` is a sorted list of `(monomial, complex coefficient)` pairs (`MPoly::t`) — nothing
+more exotic. A **monomial** (`Mono`) has two independent parts that live in two different
+namespaces:
+
+* **An exponent vector** (`Mono::e`), length `nsym`. After γ-matrices, metrics and projectors
+  have been contracted numerically, the only symbolic quantities left are a handful of scalar
+  *user symbols* — for a typical flow `nsym` is single digits: `l1` (loop momentum), `cos1`,
+  angular components, `p` (external momentum). The exponent vector is the list of powers of each
+  symbol in one product term: with symbol order `[l1, cos1, …, p]`, the plain product
+  `l1²·cos1¹·p³` is stored as `e = [2,1,0,0,3]`. Position = which symbol, value = its power. (This
+  is *not* an exponent that is itself an expression — just a tuple of integer powers. The
+  generated component table writes these directly, e.g. `MPoly::mono(5,{1,1,0,0,0},…)` is
+  `l1·cos1`.)
+
+* **A sorted multiset of atom ids** (`Mono::atoms`). An **atom id** is an integer that *names a
+  projector's denominator `k²`* — it is neither a symbol index nor the value `1/k²`. Each
+  transverse/longitudinal/electric/magnetic projector in the network carries an id (`Elem::inv`,
+  and `Elem::invS` for the spatial `1/|k⃗|²`); `collect_atom_denoms` interns the actual
+  denominator polynomial once into a separate table, `atomDen[aid] = k² = Σ_μ comp[μ]²` (itself
+  an `MPoly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
+  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `MPoly::atom(nsym, aid)` builds a bare `1/D`
+  as a monomial with empty exponents and `atoms = {aid}`.
+
+Two monomials are "the same" (and so combine) iff their exponent vectors *and* their id multisets
+match. Multiplication adds exponent vectors and merge-sorts the two id lists (`operator*`); both
+are cheap `int16_t` operations.
+
+**Why store an id rather than the denominator itself?** Three reasons. (a) At contraction time
+`k²` is a *polynomial* in the symbols, not a number, and a reciprocal of a whole polynomial is
+neither a symbol nor an integer power — so it cannot fold into the exponent vector and needs its
+own slot in the monomial key. (b) The id is a cheap, exact handle: interning each denominator
+once into `atomDen` keeps the monomial key small and makes monomial comparison an integer compare
+instead of a polynomial compare (this matters — sorting/combining runs over millions of terms).
+(c) The id is exactly what cancellation needs: `divThroughMonomialAtoms` looks up `atomDen[aid]`,
+and if a bare loop's `k²` has collapsed to a single monomial (e.g. `l1²`, via the unit-vector
+identity in `reduce_units`) whose powers the numerator dominates, it absorbs the factor —
+subtract exponents, divide the coefficient, drop that id. A denominator that is a genuine
+polynomial (a shifted line `k=l−q`) never matches, so its id *survives* and is later lowered to a
+runtime `inv` env slot. The id is the link between the on-monomial factor and the denominator
+table that lets the cancellation pass decide whether the factor dies or lives.
+
+### Two dressing layers reuse the same trick
+
+`MPoly` interns `1/k²` factors as ids and merges them on multiply. Two *dressing* layers reuse
+that exact pattern — a sorted multiset of runtime-call ids carried on each term — for structures
+that must stay symbolic to the end of the trace rather than cancel:
+
+* **`DPoly`** (`numeric/dpoly.hpp`) — a **dressed Dirac numerator** like `Mq·δ + Z(p)·γ·p` is a
+  *sum* of structures with runtime coefficients. Rather than distribute the diagram into `2^D`
+  traces, the front-end keeps it eager and the engine collects one `DPoly`: a map from a
+  **dressing-atom multiset** (`DMono`) to the kinematic `MPoly` it multiplies. The coefficient
+  *is* an `MPoly`, so `DPoly` reuses `MPoly::operator*`/`+` verbatim and undressed flows are
+  byte-identical (their `DPoly` is a single empty-dressing term). Walked through in the
+  [dressed-numerators tutorial](../tutorials/dressed-numerators.md).
+* **`SUNPoly`** (`network/sun_net.hpp`) — the colour/flavour analogue described in
+  [step 3](#step-3-the-colour-fold): a group-diagonal `δ` folds to `Σ_a c_a Z_a` over named
+  dressing ids instead of one flavour-blind number.
+
+The decisive contrast with `MPoly`'s atoms: dressing ids **never cancel** — they are opaque
+runtime values that ride untouched to the lowering (a `dress` env leaf, evaluated once like an
+`inv` leaf). That is why they are a separate layer and not more entries in `Mono::atoms`: mixing
+them would tax the hot undressed path and blur the "this factor can cancel" invariant.
 
 ## Step 1 — the Dirac trace as matrix products
 

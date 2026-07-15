@@ -36,16 +36,16 @@ oracle the backend is validated against.
 Headers live under `include/numtracer/`; include paths use the full prefix, e.g.
 `#include "numtracer/numeric/numeric_contract.hpp"`.
 
-| path | role |
-|---|---|
-| `core/` | foundations: the `constexpr` complex `Cx` (usable as a template parameter) and its `Lit<C>` carrier, the dense complex matrix `Mat<N>`, the per-axis contraction planner, and build tunables |
-| `dirac/` | typed-out Euclidean γ matrices (Weyl basis) and a sparsity-aware dense γ-trace oracle |
-| `sun/` | typed-out SU(2)/SU(3) colour/flavour tables plus the `SUNBuilder<N>` runtime oracle they are checked against |
-| `network/` | the Lorentz network value (`NetVal`) and its builders, plus the generator-side numeric colour and Dirac contractions |
-| `numeric/` | the **numeric matrix-product backend**: fold a diagram's Dirac trace by 4×4 spinor products and contract the Lorentz network to one polynomial (`MPoly`), then hand it to the lowering driver |
-| `dense/` | a brute-force dense tensor (`DTensor`) that contracts labelled Lorentz⊗Dirac⊗SU(N) axes entry-for-entry — the naive baseline the generated kernels are validated against |
+| path       | role                                                                                                                                                                                                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/`    | foundations: the `constexpr` complex `Cx` (usable as a template parameter) and its `Lit<C>` carrier, the dense complex matrix `Mat<N>`, the per-axis contraction planner, and build tunables                                                         |
+| `dirac/`   | typed-out Euclidean γ matrices (Weyl basis) and a sparsity-aware dense γ-trace oracle                                                                                                                                                                |
+| `sun/`     | typed-out SU(2)/SU(3) colour/flavour tables plus the `SUNBuilder<N>` runtime oracle they are checked against                                                                                                                                         |
+| `network/` | the Lorentz network value (`NetVal`) and its builders, plus the generator-side numeric colour and Dirac contractions                                                                                                                                 |
+| `numeric/` | the **numeric matrix-product backend**: fold a diagram's Dirac trace by 4×4 spinor products and contract the Lorentz network to one polynomial (`MPoly`), then hand it to the lowering driver                                                        |
+| `dense/`   | a brute-force dense tensor (`DTensor`) that contracts labelled Lorentz⊗Dirac⊗SU(N) axes entry-for-entry — the naive baseline the generated kernels are validated against                                                                             |
 | `codegen/` | build-time emission: Horner-factor a polynomial (`lower.hpp`) through the real value-numbering CSE builder (`real_cse.hpp`) into a straight-line program and print the kernel header (`gen.hpp`); `runtime.hpp` is the minimal consumer-side support |
-| `cuda/` | a two-phase CUDA quadrature integrator over a grid of external momenta, consuming `__host__ __device__` generated kernels |
+| `cuda/`    | a two-phase CUDA quadrature integrator over a grid of external momenta, consuming `__host__ __device__` generated kernels                                                                                                                            |
 
 ## Build & test
 
@@ -63,8 +63,7 @@ top-level project (`-DNUMTRACER_BUILD_TESTS=OFF` to skip). Each generated kernel
 gated against a FORM or equivalence oracle over random points; regenerate them only when a flow or the
 codegen changes. Opt-in `-DNUMTRACER_SANITIZE="ADDRESS;UNDEFINED"` runs the suite under ASan/UBSan.
 
-Long contraction chains can exhaust GCC's `constexpr` limits; link `NumTracer::constexpr_budget` to
-raise them. GPU integration tests (CUDA + GSL) are off by default — see `tests/gpu/README.md`.
+GPU integration tests (CUDA + GSL) are off by default — see `tests/gpu/README.md`.
 
 ## Install & use from other projects
 
@@ -75,7 +74,6 @@ cmake --install build        # default prefix: ~/.local/share/NumTracer
 ```cmake
 find_package(NumTracer REQUIRED HINTS ~/.local/share/NumTracer)
 target_link_libraries(my_target PRIVATE NumTracer::NumTracer)
-# add NumTracer::constexpr_budget if long chains exhaust GCC's constexpr limits
 ```
 
 If `wolframscript` is found at configure time, the Mathematica front-end is also installed so

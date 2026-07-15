@@ -60,6 +60,7 @@ Each page below also gives the one-target command (`cmake --build build --target
 5. **[Generating kernels from Mathematica](generating-kernels.md)** — the front-end that writes all of the above from a tiny DSL.
 6. **[Finite temperature](finite-temperature.md)** — the running example at finite $T$: electric/magnetic projectors (thermal split), the spatial scalar product, and a distinct Matsubara component.
 7. **[Per-flavour and per-component dressings](dressed-flavour.md)** — dress individual flavours or colour/flavour components differently: the per-flavour split and the group-diagonal dressing heads.
+8. **[Dressed propagator numerators](dressed-numerators.md)** — a dressed Dirac structure $S(p)=M_q\mathbb{1}+Z(p)\slashed p$ kept eager and collected into one trace (a `DPoly`) instead of $2^D$ diagrams.
 
 For the design behind the engine, see [Under the Hood](../internals/index.md).
 
@@ -73,4 +74,5 @@ full-diagram
 generating-kernels
 finite-temperature
 dressed-flavour
+dressed-numerators
 ```

@@ -64,6 +64,9 @@ nt_tutorial(full_diagram 04-full-diagram/full_diagram.cpp)
 # 06 — per-flavour and per-component dressings: the group-diagonal SU(N) fold
 nt_tutorial(dressed_flavour 06-dressed-flavour/dressed_flavour.cpp)
 
+# 07 — dressed propagator numerators: one trace collected into a DPoly, not 2^D diagrams
+nt_tutorial(dressed_numerators 07-dressed-numerators/dressed_numerators.cpp)
+
 # 05 — generating kernels from Mathematica: a walkthrough, not a compiled program.
 #      See 05-generating-kernels/README.md and tests/gen/gen_zq_numeric.wls. The
 #      optional target below regenerates the committed numeric Zq kernel (needs
