@@ -32,16 +32,31 @@
 #include <cstddef>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace numtracer::numeric
 {
 
+  /// @brief Construct an empty polynomial of the phase-B backend type `P` at symbol-space size `nsym`.
+  ///        For the real backends `MPoly`/`DPoly` this routes through the private-factory attorneys (the
+  ///        `nsym`-taking ctors are not public); any OTHER `P` (e.g. a unit test's mock polynomial with a
+  ///        public `explicit P(int)`) falls back to the plain ctor, so the fold templates stay generic.
+  template <class P> inline P zero_like(int nsym)
+  {
+    if constexpr (std::is_same_v<P, MPoly>)
+      return MPolyFactory::zero(nsym);
+    else if constexpr (std::is_same_v<P, DPoly>)
+      return DPolyFactory::zero(nsym);
+    else
+      return P(nsym);
+  }
+
   /// @brief Scale a contracted trace by its sub-term scalar. Overloaded so phase B is one template
   ///        over both backends: the plain path multiplies by a constant `MPoly`, the dressed path
   ///        scales every kinematic coefficient (@ref scaleCx).
-  inline MPoly scale_trace(int nsym, const MPoly &p, Cx c) { return MPoly::constant(nsym, c) * p; }
+  inline MPoly scale_trace(int nsym, const MPoly &p, Cx c) { return MPolyFactory::constant(nsym, c) * p; }
   inline DPoly scale_trace(int, const DPoly &p, Cx c) { return scaleCx(p, c); }
 
   /// @brief Approximate heap footprint of a polynomial, for the trace-table RAM report. The table is
@@ -99,7 +114,7 @@ namespace numtracer::numeric
   template <class P, class TraceFn>
   std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace)
   {
-    std::vector<P> T(static_cast<std::size_t>(std::max(0L, nCache)), P(nsym));
+    std::vector<P> T(static_cast<std::size_t>(std::max(0L, nCache)), zero_like<P>(nsym));
     parallel_flat(nCache, W, [&](long k) { T[static_cast<std::size_t>(k)] = trace(static_cast<int>(k)); });
     return T;
   }
@@ -147,7 +162,7 @@ namespace numtracer::numeric
       rank.push_back(c);
     }
 
-    if (st.empty()) return P(nsym);
+    if (st.empty()) return zero_like<P>(nsym);
     P acc = std::move(st.front()); // O(log n) leftovers, largest first
     for (std::size_t i = 1; i < st.size(); ++i)
       acc = acc + st[i];
@@ -164,7 +179,7 @@ namespace numtracer::numeric
                            const std::vector<std::vector<Cx>> &sc, const std::vector<P> &T, long nCache,
                            unsigned W, TraceFn &&trace)
   {
-    std::vector<P> mp(sidx.size(), P(nsym));
+    std::vector<P> mp(sidx.size(), zero_like<P>(nsym));
     parallel_flat(static_cast<long>(sidx.size()), W, [&](long i) {
       const auto u = static_cast<std::size_t>(i);
       mp[u] = fold_net<P>(nsym, sidx[u], sc[u], T, nCache, trace);

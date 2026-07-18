@@ -23,17 +23,19 @@ namespace nm = numtracer::numeric;
 using numtracer::Cx;
 
 int main() {
-  // The 8 components of two momenta p, q are symbols 0..7: MPoly::var(nsym, i) is "symbol i".
+  // The 8 components of two momenta p, q are symbols 0..7. Bind the symbol space once in a
+  // LorentzEnv; env.var(i) is then "symbol i".
   const int nsym = 8;
+  nm::LorentzEnv env(nsym);
   std::array<nm::MPoly, 4> p, q;
   for (int mu = 0; mu < 4; ++mu) {
-    p[mu] = nm::MPoly::var(nsym, mu);     // p_mu = symbol mu
-    q[mu] = nm::MPoly::var(nsym, 4 + mu); // q_mu = symbol 4+mu
+    p[mu] = env.var(mu);     // p_mu = symbol mu
+    q[mu] = env.var(4 + mu); // q_mu = symbol 4+mu
   }
 
-  // slashC(nsym, comp) = sum_mu comp[mu] * gamma^mu : the slashed momentum as a 4x4 of MPoly.
-  nm::Mat4 ps = nm::slashC(nsym, p);
-  nm::Mat4 qs = nm::slashC(nsym, q);
+  // env.slashC(comp) = sum_mu comp[mu] * gamma^mu : the slashed momentum as a 4x4 of MPoly.
+  nm::Mat4 ps = env.slashC(p);
+  nm::Mat4 qs = env.slashC(q);
 
   // tr(p/ q/) is the trace of the matrix product — a polynomial in the 8 symbols.
   nm::MPoly tr = nm::mtrace(nm::matmul(ps, qs));
@@ -67,29 +69,32 @@ The pieces:
 
 | symbol                  | meaning                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------- |
-| `nsym`                  | the **fixed size of the symbol space** — how many runtime symbols every polynomial is built over (here 8: $p_0..p_3$, $q_0..q_3$) |
-| `MPoly::var(nsym, i)`   | the polynomial equal to **symbol `i`** ($x_i$, coefficient 1). `nsym` is the symbol-space size; `i` is the 0-based index of which symbol, so `0 ≤ i < nsym` |
-| `slashC(nsym, comp)`    | $\slashed p = \sum_\mu \mathtt{comp}[\mu]\,\gamma^\mu$ as a 4×4 matrix of `MPoly`                |
+| `nsym`                  | the **fixed size of the symbol space** — how many runtime symbols every polynomial is built over (here 8: $p_0..p_3$, $q_0..q_3$). You hand it to `LorentzEnv env(nsym)` once |
+| `LorentzEnv env(nsym)`  | the factory that binds `nsym` once; every `MPoly`/`slashC`/`numeric_value` below is a method on it, so the symbol-space size can never be passed inconsistently |
+| `env.var(i)`            | the polynomial equal to **symbol `i`** ($x_i$, coefficient 1). `i` is the 0-based index of which symbol, so `0 ≤ i < nsym` (the `nsym` is the env's) |
+| `env.slashC(comp)`      | $\slashed p = \sum_\mu \mathtt{comp}[\mu]\,\gamma^\mu$ as a 4×4 matrix of `MPoly`                |
 | `matmul` / `mtrace`     | ordinary 4×4 matrix product and trace, over `MPoly` entries                                      |
 | `eval(tr, x, {})`       | plug the symbols' numeric values `x` (one per symbol, so `x.size() == nsym`) into the polynomial (no inverse atoms here) |
 
 ```{admonition} nsym is a dimension you fix up front, not a running count
 :class: important
-The first argument to `MPoly::var(nsym, i)` (and to `MPoly::constant`, `slashC`, …) is **not** "how
+The `nsym` you give `LorentzEnv env(nsym)` is **not** "how
 many variables I have created so far." It is the fixed dimension of the variable space: internally
 every monomial stores an exponent vector of length `nsym`, one slot per symbol. You choose `nsym`
-once for the whole computation (here 8), then *address* symbols by index `i` — `var(8, 0)` is
-$x_0$, `var(8, 7)` is $x_7$. There is no incremental "add a variable" step; symbol `i` exists for
+once for the whole computation (here 8) by constructing the env, then *address* symbols by index
+`i` on that env — `env.var(0)` is $x_0$, `env.var(7)` is $x_7$. There is no incremental "add a
+variable" step; symbol `i` exists for
 any `0 ≤ i < nsym` whether or not you use it, and the value of `x_i` is supplied later, positionally,
 in the `eval(tr, x, …)` array (`x[i]`).
 
 **Every `MPoly` that is combined (added or multiplied) must share the same `nsym`.** The `+` and `*`
 operators assume both operands' exponent vectors have the same length and walk them slot-for-slot;
 mixing two different `nsym` values reads exponents out of bounds — undefined behaviour, not a checked
-error — and like terms silently fail to combine. So pick `nsym` once, thread the same value through
-every builder, and size the `eval` array to match. (When momenta are plain *numbers* rather than
-symbols — as in [the full diagram](full-diagram.md) — you set `nsym = 0` and build the components
-with `MPoly::constant`, i.e. an empty symbol space.)
+error — and like terms silently fail to combine. Building everything from **one** `LorentzEnv`
+guarantees this: every `env.var`/`env.constant`/`env.mono` carries the env's `nsym`, so just size
+the `eval` array to match. (When momenta are plain *numbers* rather than symbols — as in
+[the full diagram](full-diagram.md) — you make a `LorentzEnv env(0)` and build the components with
+`env.constant`, i.e. an empty symbol space.)
 ```
 
 The trace *is* a matrix product. NumTracer never "knows" the identity
@@ -104,7 +109,8 @@ tokens and let `numeric_value` contract it — the form the code generator emits
 
 ```{admonition} What numeric_value does
 :class: note
-`numeric_value(nsym, dirac, lorentz, comp, atomDen)` is the engine's one contraction entry point.
+`env.numeric_value(dirac, lorentz, comp, atomDen)` — a method on the `LorentzEnv` that supplies
+`nsym` — is the engine's one contraction entry point.
 It does **not** just multiply the networks together — it *contracts* them, meaning it multiplies
 **and sums over every shared index**:
 
@@ -115,7 +121,7 @@ It does **not** just multiply the networks together — it *contracts* them, mea
    each Lorentz index shared between a `dgamma` leg and a network factor (here the `nmet`).
 3. It returns the surviving scalar as one `MPoly` (a polynomial in the `comp` momentum components).
 
-The five arguments: `nsym` = symbol-space size (as above); `dirac` = the closed gamma chain;
+The four arguments (the env already carries `nsym`): `dirac` = the closed gamma chain;
 `lorentz` = the `NNet` that ties off the free legs (empty `{}` when the chain is already scalar);
 `comp` = the component table `comp[vid][μ]` giving each momentum's four components; `atomDen` =
 the projector-denominator table (empty `{}` here — it first matters with projectors in
@@ -125,14 +131,14 @@ the projector-denominator table (empty `{}` here — it first matters with proje
 
 ```cpp
 #include <numtracer.hpp> // the whole NumTracer API — here: numeric_value, NNet/NTerm, nmet, dslash, dgamma
-// … MPoly comp table for p (0..3), q (4..7) as in 2a …
+// … LorentzEnv env + MPoly comp table for p (0..3), q (4..7) as in 2a …
 
 enum { mu, nu }; // name the free gamma legs' Lorentz indices (one unscoped enum, all distinct)
 
 // (1) tr(p/ q/): a closed chain of two slashed momenta.
 // dslash({{c, vid}}) = a slashed momentum with components c * (momentum vid).
 net::DiracNet chainPQ = {net::dslash({{1.0, 0}}), net::dslash({{1.0, 1}})};
-nm::MPoly trPQ = nm::numeric_value(nsym, chainPQ, /*lorentz*/ {}, comp, /*atomDen*/ {});
+nm::MPoly trPQ = env.numeric_value(chainPQ, /*lorentz*/ {}, comp, /*atomDen*/ {});
 
 // (2) tr(gamma^mu p/ gamma_mu q/): two FREE gamma legs (dgamma) on Lorentz indices mu, nu,
 // tied together by a metric. A Lorentz network (NNet) is a sum of terms; here one term,
@@ -140,7 +146,7 @@ nm::MPoly trPQ = nm::numeric_value(nsym, chainPQ, /*lorentz*/ {}, comp, /*atomDe
 net::DiracNet chainG = {net::dgamma(mu), net::dslash({{1.0, 0}}),
                         net::dgamma(nu), net::dslash({{1.0, 1}})};
 nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(mu, nu)}}};
-nm::MPoly trG = nm::numeric_value(nsym, chainG, lor, comp, {});
+nm::MPoly trG = env.numeric_value(chainG, lor, comp, {});
 
 // Evaluate both at one point.
 std::vector<double> x = {1.0, 0.5, -0.3, 0.2, 0.8, -0.4, 1.2, 0.1};

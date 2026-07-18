@@ -112,6 +112,28 @@ inline SUNFac diagFund(int g, int i, int j, std::vector<int> comp2dr) { return {
 inline SUNFac diagAdj(int g, int a, int b, std::vector<int> comp2dr) { return {SUNFacKind::DiagAdj, g, a, b, -1, std::move(comp2dr)}; }
 } // namespace SUN
 
+/// @brief A factory that binds the SU(N) group rank `g` once and mints @ref SUNFac factors without
+///        repeating it at every call — the colour/flavour analogue of @ref numtracer::numeric::LorentzEnv
+///        (which binds `nsym`). Named `SUNEnv` rather than "ColourEnv" because SU(N) also carries flavour;
+///        a single kernel may mix ranks (e.g. colour SU(3) ⊗ flavour SU(2)), so instantiate one `SUNEnv`
+///        per rank. Thin ergonomic wrapper over the `SUN::` builders (which stay public), so it needs no
+///        friendship. `sun_value_cx`/`sun_value_dressed` take a fully-built @ref SUNNet and are unchanged.
+class SUNEnv {
+public:
+  explicit SUNEnv(int g) : g_(g) {}
+  int rank() const { return g_; }
+
+  SUNFac f(int a, int b, int c) const { return SUN::f(g_, a, b, c); }
+  SUNFac deltaAdj(int a, int b) const { return SUN::deltaAdj(g_, a, b); }
+  SUNFac T(int a, int i, int j) const { return SUN::T(g_, a, i, j); }
+  SUNFac deltaFund(int i, int j) const { return SUN::deltaFund(g_, i, j); }
+  SUNFac diagFund(int i, int j, std::vector<int> comp2dr) const { return SUN::diagFund(g_, i, j, std::move(comp2dr)); }
+  SUNFac diagAdj(int a, int b, std::vector<int> comp2dr) const { return SUN::diagAdj(g_, a, b, std::move(comp2dr)); }
+
+private:
+  int g_; ///< group rank `N` (3 colour, 2 flavour, …)
+};
+
 // The whole SU(N) contraction machinery (dynamic matrices, generator/f-table build+cache, group
 // contraction) is internal to the generator: its bodies compile only in the library TU (or a
 // header-only build). A normal consumer sees just the SUNFac/SUNNet types + SUN builders above and

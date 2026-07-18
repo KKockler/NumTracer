@@ -24,20 +24,21 @@ using numtracer::Cx;
 enum { mu, nu }; // Lorentz indices
 
 int main() {
-  // The loop frame: each momentum is a vid into a component table comp[vid][0..3]. We keep the
-  // components SYMBOLIC (one scalar variable per component) so numeric_value contracts the network
-  // once into a polynomial we can then evaluate at any concrete frame.
-  //   p = vid 0 -> scalar vars 0..3,  l = vid 1 -> scalar vars 4..7.
-  const int nsym = 8;
-  std::vector<std::array<nm::MPoly, 4>> comp(2);
-  for (int i = 0; i < 4; ++i) {
-    comp[0][i] = nm::MPoly::var(nsym, i);     // p_i
-    comp[1][i] = nm::MPoly::var(nsym, 4 + i); // l_i
-  }
+  // The loop frame: each momentum is a vid into a component table comp[vid][0..3], whose entries are
+  // MPolys. We pick the concrete one-angle frame up front — p along axis 0, l in the 0-1 plane — and
+  // keep only its NON-ZERO components symbolic (one scalar variable each), so numeric_value contracts
+  // the network into the polynomial in exactly those frame scalars:
+  //   p_0 = var 0,   l_0 = var 1,   l_1 = var 2.
+  const int nsym = 3;
+  nm::LorentzEnv env(nsym); // bind the 3-symbol space once; every MPoly below is minted from it
+  std::vector<std::array<nm::MPoly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
+  comp[0][0] = env.var(0); // p = (p_0, 0, 0, 0)
+  comp[1][0] = env.var(1); // l = (l_0, l_1, 0, 0)
+  comp[1][1] = env.var(2);
 
-  // The transverse projector P(l)_{mu nu} carries its 1/l^2 as "atom" id 0; numeric_value needs
-  // that atom's denominator l^2 = sum_i comp[1][i]^2.
-  nm::MPoly l2(nsym);
+  // The transverse projector P(l)_{mu nu} = delta_{mu nu} - l_mu l_nu / l^2 carries its 1/l^2 as
+  // "atom" id 0; numeric_value needs that atom's denominator l^2 = sum_i comp[1][i]^2.
+  nm::MPoly l2 = env.zero();
   for (int i = 0; i < 4; ++i) l2 = l2 + comp[1][i] * comp[1][i];
   std::vector<nm::MPoly> atomDen = {l2};
 
@@ -49,16 +50,15 @@ int main() {
                                        nm::nvec(nu, {{1.0, 0}})}}};
 
   // Contract: empty Dirac chain (this is a pure-Lorentz network). The result is one MPoly =
-  // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2, a polynomial in the component vars with the 1/l^2 atom.
-  nm::MPoly poly = nm::numeric_value(nsym, net::DiracNet{}, lor, comp, atomDen);
+  // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2 = p_0^2 - p_0^2 l_0^2 / l^2 — two monomials in this frame
+  // (the second carries the 1/l^2 atom).
+  nm::MPoly poly = env.numeric_value(net::DiracNet{}, lor, comp, atomDen);
 
-  // A concrete one-angle frame: p along axis 0, l at angle theta in the 0-1 plane.
+  // Evaluate the contracted polynomial at concrete values: p along axis 0, l at angle theta.
   const double Pm = 1.3, l0 = 0.5, l1 = 0.7;
-  const std::vector<double> x = {Pm, 0, 0, 0, l0, l1, 0, 0}; // p_0..3 then l_0..3
+  const std::vector<double> x = {Pm, l0, l1}; // var 0 = p_0, var 1 = l_0, var 2 = l_1
   const double l2v = l0 * l0 + l1 * l1;
   const std::vector<double> atomVal = {1.0 / l2v}; // value of atom 0 = 1/l^2 at this frame
-
-  // Evaluate the contracted polynomial at the frame (atom 0 substituted with 1/l^2).
   const double val = nm::eval(poly, x, atomVal).re;
 
   const double cth = l0 / std::sqrt(l2v); // cos theta
@@ -98,7 +98,8 @@ of factors. The factor builders are:
 | `nprojL(Mu, Nu, vlc, atom)`    | the longitudinal projector $P^L_{\mu\nu}(l)=l_\mu l_\nu/l^2$ (same arguments as `nprojT`); note $P^T+P^L=\delta$                                        |
 | `neps(A, B, C, D)`            | the Levi-Civita tensor $\varepsilon_{ABCD}$ (the $\gamma_5$ trace's antisymmetric tensor)                                                              |
 
-`numeric_value(nsym, dirac, net, comp, atomDen)` contracts the Dirac chain (empty here) against the
+`env.numeric_value(dirac, net, comp, atomDen)` — a method on the `LorentzEnv` that carries `nsym` —
+contracts the Dirac chain (empty here) against the
 Lorentz network and returns one `MPoly` — a polynomial in the frame's component variables, each
 monomial optionally carrying inverse-propagator **atoms**. For $p\cdot P(l)\cdot p$ it has **two**
 monomials: $\mathrm{sp}(p,p)$ and $-\mathrm{sp}(p,l)^2\cdot(1/l^2)$ — exactly

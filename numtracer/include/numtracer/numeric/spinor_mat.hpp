@@ -29,7 +29,7 @@ namespace numtracer::numeric
     {
       for (auto &row : a)
         for (auto &e : row)
-          e = MPoly(ns);
+          e = MPolyFactory::zero(ns);
     }
   };
 
@@ -38,7 +38,7 @@ namespace numtracer::numeric
     Mat4 C(A.nsym);
     for (int i = 0; i < 4; ++i)
       for (int j = 0; j < 4; ++j) {
-        MPoly s(A.nsym);
+        MPoly s = MPolyFactory::zero(A.nsym);
         for (int k = 0; k < 4; ++k)
           s = s + A.a[i][k] * B.a[k][j];
         C.a[i][j] = std::move(s);
@@ -47,7 +47,7 @@ namespace numtracer::numeric
   }
   inline MPoly mtrace(const Mat4 &A)
   {
-    MPoly s(A.nsym);
+    MPoly s = MPolyFactory::zero(A.nsym);
     for (int i = 0; i < 4; ++i)
       s = s + A.a[i][i];
     return s;
@@ -61,7 +61,7 @@ namespace numtracer::numeric
       for (int j = 0; j < 4; ++j) {
         const Cx g = numtracer::dirac::kGamma[mu][i][j];
         if (g.re == 0 && g.im == 0) continue;
-        S.a[i][j] = MPoly::constant(nsym, g);
+        S.a[i][j] = MPolyFactory::constant(nsym, g);
       }
     return S;
   }
@@ -76,7 +76,7 @@ namespace numtracer::numeric
         for (int j = 0; j < 4; ++j) {
           const Cx g = numtracer::dirac::kGamma[mu][i][j];
           if (g.re == 0 && g.im == 0) continue;
-          S.a[i][j] = S.a[i][j] + MPoly::constant(nsym, g) * comp[mu];
+          S.a[i][j] = S.a[i][j] + MPolyFactory::constant(nsym, g) * comp[mu];
         }
     }
     return S;

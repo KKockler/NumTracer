@@ -23,6 +23,13 @@ denominators `1/k²`. Everything below produces and combines `MPoly`s through ad
 multiplication, monomial-level cancellation of `k²·(1/k²)` (`divThroughMonomialAtoms`), and
 collection of equal-momentum propagator groups (`reduce_units`).
 
+Every `MPoly` (and `DPoly`) is minted through a `numtracer::numeric::LorentzEnv` (`numeric/env.hpp`),
+a small factory that binds the symbol-space size `nsym` **once**: you write `nm::LorentzEnv env(nsym)`
+and then call `env.mono(...)`, `env.atom(...)`, `env.var(i)`, `env.zero()`, `env.numeric_value(...)`.
+Because the env carries `nsym`, the raw size-taking factories never appear in caller code, and two
+polynomials built from the same env are guaranteed to share a symbol space. The illustrative
+constructors below are shown as env methods for that reason.
+
 ### Data model
 
 An `MPoly` is a sorted list of `(monomial, complex coefficient)` pairs (`MPoly::t`) — nothing
@@ -36,8 +43,8 @@ namespaces:
   symbol in one product term: with symbol order `[l1, cos1, …, p]`, the plain product
   `l1²·cos1¹·p³` is stored as `e = [2,1,0,0,3]`. Position = which symbol, value = its power. (This
   is *not* an exponent that is itself an expression — just a tuple of integer powers. The
-  generated component table writes these directly, e.g. `MPoly::mono(5,{1,1,0,0,0},…)` is
-  `l1·cos1`.)
+  generated component table writes these directly, e.g. `env.mono({1,1,0,0,0},…)` on a
+  `LorentzEnv env(5)` (five symbols) is `l1·cos1`.)
 
 * **A sorted multiset of atom ids** (`Mono::atoms`). An **atom id** is an integer that *names a
   projector's denominator `k²`* — it is neither a symbol index nor the value `1/k²`. Each
@@ -45,7 +52,7 @@ namespaces:
   and `Elem::invS` for the spatial `1/|k⃗|²`); `collect_atom_denoms` interns the actual
   denominator polynomial once into a separate table, `atomDen[aid] = k² = Σ_μ comp[μ]²` (itself
   an `MPoly` in the symbols). A term multiplied by `1/D₃·1/D₃·1/D₇` carries `atoms = {3,3,7}`
-  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `MPoly::atom(nsym, aid)` builds a bare `1/D`
+  (sorted, with multiplicity ⇒ `1/D₃²` is `{3,3}`). `env.atom(aid)` builds a bare `1/D`
   as a monomial with empty exponents and `atoms = {aid}`.
 
 Two monomials are "the same" (and so combine) iff their exponent vectors *and* their id multisets

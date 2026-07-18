@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/numeric/env.hpp"
 
 using numtracer::Cx;
 namespace nm = numtracer::numeric;
@@ -107,22 +108,23 @@ int main()
   // ───────────────────────── (B) value-preserving end-to-end via numeric_value ─────────────────────────
   std::printf("== projector fusion: value-preserving ==\n");
   constexpr int nsym = 16;
+  nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(4);
   for (int mu = 0; mu < 4; ++mu) {
-    comp[kVid][(std::size_t)mu] = nm::MPoly::var(nsym, 0 + mu);
-    comp[aVid][(std::size_t)mu] = nm::MPoly::var(nsym, 4 + mu);
-    comp[bVid][(std::size_t)mu] = nm::MPoly::var(nsym, 8 + mu);
-    comp[qVid][(std::size_t)mu] = nm::MPoly::var(nsym, 12 + mu);
+    comp[kVid][(std::size_t)mu] = env.var(0 + mu);
+    comp[aVid][(std::size_t)mu] = env.var(4 + mu);
+    comp[bVid][(std::size_t)mu] = env.var(8 + mu);
+    comp[qVid][(std::size_t)mu] = env.var(12 + mu);
   }
-  nm::MPoly k2(nsym), ks2(nsym);
+  nm::MPoly k2 = env.zero(), ks2 = env.zero();
   for (int mu = 0; mu < 4; ++mu)
     k2 = k2 + comp[kVid][(std::size_t)mu] * comp[kVid][(std::size_t)mu];
   for (int mu = 1; mu < 4; ++mu)
     ks2 = ks2 + comp[kVid][(std::size_t)mu] * comp[kVid][(std::size_t)mu];
-  const std::vector<nm::MPoly> atomDen = {k2, nm::MPoly(nsym), ks2}; // atom 1 (q²) unused here
+  const std::vector<nm::MPoly> atomDen = {k2, env.zero(), ks2}; // atom 1 (q²) unused here
 
   auto NV = [&](std::initializer_list<nm::NElem> e) {
-    return nm::numeric_value(nsym, {}, nm::NNet{nm::NTerm{Cx{1, 0}, std::vector<nm::NElem>(e)}}, comp, atomDen);
+    return env.numeric_value({}, nm::NNet{nm::NTerm{Cx{1, 0}, std::vector<nm::NElem>(e)}}, comp, atomDen);
   };
   // redundant (fused internally) vs hand-simplified — must be equal MPolys
   const nm::MPoly redT = NV({vec(10, aVid), PT(10, 12), PT(12, 11), vec(11, bVid)});

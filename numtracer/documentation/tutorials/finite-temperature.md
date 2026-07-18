@@ -66,12 +66,13 @@ the numeric engine and checks it against the closed-form trace identity:
 ```cpp
 // 8 symbols: external p = vars 0..3 (vid 0), loop l = vars 4..7 (vid 1).
 // q = l − p is a linear combination; atoms: 0 = l², 1 = |l⃗|² (component 0 dropped).
+nm::LorentzEnv env(nsym); // bind the 8-symbol space once (nsym = 8); numeric_value is a method on it
 const network::DiracNet chain = {network::dslash({{1.0, pVid}}), network::dgamma(100),
                                  network::dslash({{1.0, lVid}, {-1.0, pVid}}), network::dgamma(101)};
 // finite-T gluon line G_{μν}(l) = ZAE·P_E(l) + ZAM·P_M(l)
 const nm::NNet gluon = {nm::NTerm{Cx{ZAE, 0}, {nm::nprojE(100, 101, {{1.0, lVid}}, 0, 1)}},
                         nm::NTerm{Cx{ZAM, 0}, {nm::nprojM(100, 101, {{1.0, lVid}}, 1)}}};
-const nm::MPoly N = nm::numeric_value(nsym, chain, gluon, comp, atomDen);
+const nm::MPoly N = env.numeric_value(chain, gluon, comp, atomDen);
 ```
 
 | piece | meaning |

@@ -28,14 +28,15 @@ int main() {
   // the network into the polynomial in exactly those frame scalars:
   //   p_0 = var 0,   l_0 = var 1,   l_1 = var 2.
   const int nsym = 3;
-  std::vector<std::array<nm::MPoly, 4>> comp(2, {nm::MPoly(nsym), nm::MPoly(nsym), nm::MPoly(nsym), nm::MPoly(nsym)});
-  comp[0][0] = nm::MPoly::var(nsym, 0); // p = (p_0, 0, 0, 0)
-  comp[1][0] = nm::MPoly::var(nsym, 1); // l = (l_0, l_1, 0, 0)
-  comp[1][1] = nm::MPoly::var(nsym, 2);
+  nm::LorentzEnv env(nsym);
+  std::vector<std::array<nm::MPoly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
+  comp[0][0] = env.var(0); // p = (p_0, 0, 0, 0)
+  comp[1][0] = env.var(1); // l = (l_0, l_1, 0, 0)
+  comp[1][1] = env.var(2);
 
   // The transverse projector P(l)_{mu nu} = delta_{mu nu} - l_mu l_nu / l^2 carries its 1/l^2 as
   // "atom" id 0; numeric_value needs that atom's denominator l^2 = sum_i comp[1][i]^2.
-  nm::MPoly l2(nsym);
+  nm::MPoly l2 = env.zero();
   for (int i = 0; i < 4; ++i) l2 = l2 + comp[1][i] * comp[1][i];
   std::vector<nm::MPoly> atomDen = {l2};
 
@@ -51,7 +52,7 @@ int main() {
   // Contract: empty Dirac chain (this is a pure-Lorentz network). The result is one MPoly =
   // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2 = p_0^2 - p_0^2 l_0^2 / l^2 — two monomials in this frame
   // (the second carries the 1/l^2 atom).
-  nm::MPoly poly = nm::numeric_value(nsym, net::DiracNet{}, lor, comp, atomDen);
+  nm::MPoly poly = env.numeric_value(net::DiracNet{}, lor, comp, atomDen);
 
   // Evaluate the contracted polynomial at concrete values: p along axis 0, l at angle theta.
   const double Pm = 1.3, l0 = 0.5, l1 = 0.7;

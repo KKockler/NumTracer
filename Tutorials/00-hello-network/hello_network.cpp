@@ -37,9 +37,10 @@ int main() {
   // component is a CONSTANT polynomial (nsym = 0: an empty symbol space). comp[vid][c] is
   // component c (0..3) of vector vid.
   const int nsym = 0;
-  auto vec4 = [](const double v[4]) {
-    return std::array<nm::MPoly, 4>{nm::MPoly::constant(0, {v[0], 0}), nm::MPoly::constant(0, {v[1], 0}),
-                                    nm::MPoly::constant(0, {v[2], 0}), nm::MPoly::constant(0, {v[3], 0})};
+  nm::LorentzEnv env(nsym);
+  auto vec4 = [&env](const double v[4]) {
+    return std::array<nm::MPoly, 4>{env.constant({v[0], 0}), env.constant({v[1], 0}),
+                                    env.constant({v[2], 0}), env.constant({v[3], 0})};
   };
   std::vector<std::array<nm::MPoly, 4>> comp = {vec4(a), vec4(b), vec4(k)}; // vids 0, 1, 2
 
@@ -51,14 +52,14 @@ int main() {
                                         nm::nvec(nu, {{1.0, 1}})}}};  // b on index nu
   // Empty Dirac chain (this network is pure-Lorentz). The result is one MPoly; with numeric
   // components it is a constant, and eval reads the number off (no symbols, no inverse atoms).
-  const double ab = nm::eval(nm::numeric_value(nsym, net::DiracNet{}, dot, comp, {}), {}, {}).re;
+  const double ab = nm::eval(env.numeric_value(net::DiracNet{}, dot, comp, {}), {}, {}).re;
 
   double abClosed = 0;
   for (int c = 0; c < 4; ++c) abClosed += a[c] * b[c];
 
   // --- (2) a . P(k) . a : the transverse projector P(k)_{mu nu} = delta_{mu nu} - k_mu k_nu/k^2 ----
   // P(k) carries its 1/k^2 as inverse-"atom" id 0; the engine needs that atom's denominator k^2.
-  nm::MPoly k2 = nm::MPoly::constant(0, {0, 0});
+  nm::MPoly k2 = env.constant({0, 0});
   for (int c = 0; c < 4; ++c) k2 = k2 + comp[2][c] * comp[2][c];
   nm::NNet proj = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}),          // a on mu
                                          nm::nprojT(mu, nu, {{1.0, 2}}, 0),  // P(k)_{mu nu}
@@ -66,7 +67,7 @@ int main() {
 
   double k2v = 0, a2 = 0, ak = 0;
   for (int c = 0; c < 4; ++c) k2v += k[c] * k[c], a2 += a[c] * a[c], ak += a[c] * k[c];
-  const double apa = nm::eval(nm::numeric_value(nsym, net::DiracNet{}, proj, comp, {k2}),
+  const double apa = nm::eval(env.numeric_value(net::DiracNet{}, proj, comp, {k2}),
                               /*symbols*/ {}, /*atom values*/ {1.0 / k2v})
                          .re;
   const double apaClosed = a2 - ak * ak / k2v;

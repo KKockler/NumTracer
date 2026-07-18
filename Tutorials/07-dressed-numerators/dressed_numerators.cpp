@@ -38,10 +38,11 @@ int main() {
   // Frame symbols: two momenta p (symbols 0..3) and q (symbols 4..7). comp[vid] is the 4-vector of
   // MPoly components of fundamental momentum `vid` — here each component is just a bare symbol.
   const int nsym = 8; // p:0..3, q:4..7
+  nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(2);
   for (int mu = 0; mu < 4; ++mu) {
-    comp[0][mu] = nm::MPoly::var(nsym, mu);     // p_mu
-    comp[1][mu] = nm::MPoly::var(nsym, 4 + mu); // q_mu
+    comp[0][mu] = env.var(mu);     // p_mu
+    comp[1][mu] = env.var(4 + mu); // q_mu
   }
 
   // The Lorentz half: the two free gluon legs (ids 100, 101) meet through one metric δ_{100,101}.
@@ -63,7 +64,7 @@ int main() {
                                        nm::dtfix(net::dgamma(101)), nm::dtslot(1)};
 
   // Collect: ONE contraction, no 2^D blowup. dp is the DPoly.
-  nm::DPoly dp = nm::numeric_value_dressed(nsym, dchain, {sP, sQ}, lor, comp, /*atomDen*/ {});
+  nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, /*atomDen*/ {});
 
   // Distributed reference: enumerate the 2×2 structure choices, contract each concrete (undressed)
   // chain with the ORDINARY numeric_value, and weight by the product of that choice's dressings.
@@ -72,7 +73,7 @@ int main() {
     if (cp == 1) c.push_back(net::dslash({{1.0, 0}})); // p̸ (else identity: nothing to push)
     c.push_back(net::dgamma(101));
     if (cq == 1) c.push_back(net::dslash({{1.0, 1}})); // q̸
-    return nm::eval(nm::numeric_value(nsym, c, lor, comp, {}), x, {});
+    return nm::eval(env.numeric_value(c, lor, comp, {}), x, {});
   };
 
   std::printf("Dressed quark bubble  tr( γ^μ S(p) γ^ν S(q) ) δ_{μν},  S = Mq·𝟙 + Z·slash\n");

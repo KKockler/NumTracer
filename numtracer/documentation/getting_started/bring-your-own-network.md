@@ -40,23 +40,24 @@ int main() {
   // A "frame" fixes each vector's four components. Here they are numbers, so each component is a
   // CONSTANT polynomial (nsym = 0, an empty symbol space). comp[vid][c] = component c of vector vid.
   const int nsym = 0;
-  auto vec4 = [](const double v[4]) {
-    return std::array<nm::MPoly, 4>{nm::MPoly::constant(0, {v[0], 0}), nm::MPoly::constant(0, {v[1], 0}),
-                                    nm::MPoly::constant(0, {v[2], 0}), nm::MPoly::constant(0, {v[3], 0})};
+  nm::LorentzEnv env(nsym); // bind the (empty) symbol space once; env.constant/numeric_value use it
+  auto vec4 = [&env](const double v[4]) {
+    return std::array<nm::MPoly, 4>{env.constant({v[0], 0}), env.constant({v[1], 0}),
+                                    env.constant({v[2], 0}), env.constant({v[3], 0})};
   };
   std::vector<std::array<nm::MPoly, 4>> comp = {vec4(a), vec4(b), vec4(k)}; // vids 0, 1, 2
 
   // (1) a . b : a metric delta_{mu nu} ties a (leg mu) to b (leg nu). Sharing mu and nu sums both.
   nm::NNet dot = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}), nm::nmet(mu, nu), nm::nvec(nu, {{1.0, 1}})}}};
-  const double ab = nm::eval(nm::numeric_value(nsym, net::DiracNet{}, dot, comp, {}), {}, {}).re;
+  const double ab = nm::eval(env.numeric_value(net::DiracNet{}, dot, comp, {}), {}, {}).re;
 
   // (2) a . P(k) . a : the transverse projector on k. P(k) carries its 1/k^2 as inverse "atom" 0,
   // so we hand the engine that atom's denominator k^2, and supply 1/k^2 at eval time.
-  nm::MPoly k2 = nm::MPoly::constant(0, {0, 0});
+  nm::MPoly k2 = env.constant({0, 0});
   for (int c = 0; c < 4; ++c) k2 = k2 + comp[2][c] * comp[2][c];
   nm::NNet proj = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}), nm::nprojT(mu, nu, {{1.0, 2}}, 0), nm::nvec(nu, {{1.0, 0}})}}};
   double k2v = 0; for (int c = 0; c < 4; ++c) k2v += k[c] * k[c];
-  const double apa = nm::eval(nm::numeric_value(nsym, net::DiracNet{}, proj, comp, {k2}), {}, {1.0 / k2v}).re;
+  const double apa = nm::eval(env.numeric_value(net::DiracNet{}, proj, comp, {k2}), {}, {1.0 / k2v}).re;
   // ... compare ab, apa to their closed forms; print ALL TESTS PASSED / TESTS FAILED ...
 }
 ```
@@ -80,7 +81,7 @@ chain or SU($N$) factors and nothing else changes — the sectors compose (see t
 
 | Path | You write | Needs | Good for |
 |---|---|---|---|
-| **C++ API** | the network with `nvec`/`nmet`/`nprojT`/`dgamma`/`SUN::T`… and call `numeric_value` | nothing but a C++20 compiler — no external libraries | hand-built traces, embedding in your own code, the numeric oracle |
+| **C++ API** | the network with `nvec`/`nmet`/`nprojT`/`dgamma`/`SUN::T`… and call `env.numeric_value` on a `LorentzEnv` | nothing but a C++20 compiler — no external libraries | hand-built traces, embedding in your own code, the numeric oracle |
 | **Mathematica DSL** | the network with `ntVec`/`ntMetric`/`ntTransProj`/… and call `NumTrace` + `MakeNTKernel` | a Wolfram kernel | generating a committed, lowered C++ kernel from a symbolic network |
 
 Two things are worth stating plainly, because it is easy to assume otherwise:
@@ -120,9 +121,10 @@ $1/q^2$. Colour networks are built as a `SUNNet` and folded with `network::sun_v
    you say "sum these together"; a label used once stays free.
 2. **Pick a frame.** Choose reference components for each vector — for a one-angle loop, one vector
    along an axis and another at an angle (see [Key concepts](concepts.md#runtime-numbers-come-from-the-frame)).
-   Keep components you want as runtime symbols symbolic (`MPoly::var`); the rest are constants.
+   Keep components you want as runtime symbols symbolic (`env.var`, from a `LorentzEnv env(nsym)`);
+   the rest are `env.constant`.
 3. **Build the network and contract.** Assemble the Dirac chain (`DiracNet`), the Lorentz network
-   (`NNet`), and any colour network, then call `numeric_value` (Lorentz+Dirac) and `sun_value_cx`
+   (`NNet`), and any colour network, then call `env.numeric_value` (Lorentz+Dirac) and `sun_value_cx`
    (colour). You get back a scalar `MPoly` in your frame symbols.
 4. **Read it or lower it.** `eval` the polynomial at a point, or hand it to the codegen to emit a
    flat C++ kernel ([full diagram](../tutorials/full-diagram.md#lowering-to-an-optimized-kernel)).

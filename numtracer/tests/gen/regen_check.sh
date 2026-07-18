@@ -39,6 +39,12 @@ DEFAULT_FLOWS=(
   gen_qcd_za_numeric gen_qcd_za3_147_numeric gen_qcd_za4_147_numeric
   gen_qcd_aqbq147_numeric gen_ym_zacbc_numeric gen_qcd_etapil_numeric
   gen_zq_collect
+  # Hand-built (no FunKit) DSL gates, cheap. The ONLY flow covering (a) an eager multi-term Dirac Plus
+  # of mixed gamma parity — the physics flows above all have a well-defined diagram-global parity, so
+  # they are blind to it; (b) the Power parity fold (sp[p2,p3]^2 must not recurse); (c) a COLLAPSED
+  # all-delta spinor loop keeping its tr(1)=4 (a 0.25 ratio in compare_multiterm_proj_num means that
+  # regressed). Emits two kernels: Multiterm_proj_num_kernel and Deltaloop_num_kernel.
+  gen_multiterm_proj_numeric
   # The dense sub-term-dedup flow. Emits TWO kernels in one run (dedup ON, and a dedup-OFF control);
   # compare_zaaqbq1_small grades one against the other. The slowest flow here (~90 s), almost all of
   # it the dedup-OFF control — which is the speedup being tested.

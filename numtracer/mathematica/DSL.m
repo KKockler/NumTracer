@@ -135,7 +135,14 @@ scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | 
 freeIdx[e_] := Which[
   tensorQ[e],        labelsOf[e],
   Head[e] === Plus,  freeIdx[First[List @@ e]],
-  Head[e] === Times, Cases[Tally[Flatten[freeIdx /@ (List @@ e)]], {l_, c_} /; OddQ[c] :> l],
+  (* A tensor^n is n copies sharing the SAME labels — a closed self-contraction (see compileTInv),
+     so it exposes NO free index. Spelled out rather than left to the True branch below, which
+     would return {} for the wrong reason and hide a malformed Power. *)
+  Head[e] === Power && IntegerQ[e[[2]]] && e[[2]] >= 2 && ! scalarQ[e], {},
+  (* count == 1 is free; count == 2 is contracted. checkLabels guarantees no label occurs more
+     often, so the old OddQ test was equivalent — but OddQ would silently call a 4x label
+     "contracted" and a 3x label "free" if the guard were ever bypassed. *)
+  Head[e] === Times, Cases[Tally[Flatten[freeIdx /@ (List @@ e)]], {l_, c_} /; c == 1 :> l],
   True,              {}];
 
 (* All index labels anywhere under a (sub)expression (free + internally summed) — the
@@ -220,6 +227,37 @@ collectibleDiracSumQ[_] := False;
 distributeQ[p_] := sectorBridgeQ[p] ||
   (dressedStructureSumQ[p] && ! (TrueQ[$ntDressCollect] && collectibleDiracSumQ[p]));
 
+(* The SET of γ-count parities the diagram's terms would carry IF every EAGER Dirac Plus were
+   distributed — {0}, {1}, or {0,1}. Used for the odd-trace-vanishing verdict: a closed trace is
+   identically zero only when EVERY branch has an odd γ count, i.e. the set is exactly {1}.
+   A diagram-global `Count[_ntGamma, Infinity]` cannot decide this — it sums γ's ACROSS the branches
+   of an eager Plus and so reports a parity no actual term has (e.g. a projector 1 + p̸ against two
+   γ's counts 3 → "odd" → the whole diagram is dropped, taking its non-vanishing even branch with it).
+   Computed WITHOUT Expand: the sets are capped at two elements and fold pairwise, so this is linear
+   in the factor count rather than a product-of-sums blow-up.
+   Only _ntGamma is counted, matching the old test: ntSigma (2 γ) and ntDeltaDirac (0 γ) are both
+   EVEN and so correctly contribute parity 0. ntDressedNum cannot appear yet (rewriteDressedNums runs
+   later, inside analyseDiagram). *)
+diracParities[e_Plus] := Union @@ (diracParities /@ (List @@ e));
+diracParities[e_Times] := Fold[Union[Flatten[Mod[Outer[Plus, #1, #2], 2]]] &,
+                               {0}, diracParities /@ (List @@ e)];
+(* b^n is n copies of b multiplied. Do NOT write this as diracParities[Times @@ ConstantArray[b, n]]:
+   Times immediately re-collapses the copies back to b^n, so that recurses until $RecursionLimit and
+   returns garbage — and it fires on ORDINARY SCALAR powers (sp[p2,p3]^2 in a Gram determinant), not
+   just tensor powers. Fold the parity arithmetically instead: n copies of a definite parity p give
+   n*p mod 2, and if b itself has both parities then so does any power of it. *)
+diracParities[Power[b_, n_Integer?Positive]] := With[{s = diracParities[b]},
+  If[Length[s] > 1, {0, 1}, {Mod[n * First[s], 2]}]];
+(* {0, Infinity}, NOT Infinity: this catch-all is reached with a BARE factor (a single ntGamma head
+   pulled out of the enclosing Times), and level spec Infinity means {1, Infinity} — it would skip
+   level 0 and count that γ as zero. The old diagram-global test never hit this because it always
+   ran on a whole Times, where every γ sits at level 1. *)
+diracParities[e_] := {Mod[Count[e, _ntGamma, {0, Infinity}], 2]};
+
+(* The odd-trace verdict itself: a γ5-free diagram every one of whose branches is an odd closed
+   γ trace is identically zero and can be pruned before any trace runs. *)
+vanishingOddTraceQ[diagram_] := FreeQ[diagram, _ntGamma5] && diracParities[diagram] === {1};
+
 (* The slash momentum of a γ·p term: the {coeff, q} pairs of the ntVec factors sharing the γ's Lorentz
    index μ (a signed linear combination like p−l, exactly like ntSigmaLeg). $Failed if ill-formed. *)
 dressedVlc[facs_, mu_] := Module[{lf = Times @@ Select[facs, ! FreeQ[#, ntVec[_, mu]] &], terms},
@@ -300,7 +338,7 @@ redistDiagram[diag_] := Block[{$ntDressCollect = False},
     net = net /. nd_ntDressedNum :> expandDressedNum[nd];
     With[{ex = expandBridges[net]},
       analyseDiagram /@ Select[If[Head[ex] === Plus, List @@ ex, {ex}],
-        ! (FreeQ[#, _ntGamma5] && OddQ[Count[#, _ntGamma, Infinity]]) &]]]];
+        ! vanishingOddTraceQ[#] &]]]];
 
 (* Distribute every colour<->Lorentz-bridging sum into its surrounding product (only that
    sum; single-sector sums are left intact for et::add). Turns a bridging diagram into a
@@ -312,6 +350,19 @@ expandBridges[e_Times] := Module[{factors = List @@ e, bridge},
   If[MissingQ[bridge],
     Times @@ (expandBridges /@ factors),
     expandBridges[Plus @@ (Times @@ Append[DeleteCases[factors, bridge, {1}, 1], #] & /@ (List @@ bridge))]]];
+(* Times is Flat+Orderless and auto-collects identical factors, so two byte-identical bridging sums
+   become Power[sum, 2] BEFORE we ever see them. The selector above matches p_Plus only, so such a
+   Power is never chosen as a bridge and would fall through the catch-all below UN-DISTRIBUTED —
+   fusing the colour and Lorentz axes into one giant ETensor (the exact blow-up expandBridges
+   exists to prevent), or worse being read by compileTInv as a closed self-contraction. It cannot
+   simply be re-expanded here: Times would immediately re-collapse the copies unless their labels
+   were freshened first, and two vertices that legitimately share every label are themselves a bug.
+   No known flow produces this; fail loudly if one ever does. *)
+NumTrace::bridgepow = "expandBridges: a colour<->Lorentz-bridging sum appears raised to the power \
+`1`, i.e. as `1` byte-identical factors sharing every index label. Such a sum cannot be distributed \
+(and identical labels on two distinct vertices are themselves malformed). Offending base:\n`2`";
+expandBridges[e : Power[b_Plus, n_Integer]] /; n >= 2 && distributeQ[b] :=
+  (Message[NumTrace::bridgepow, n, Short[b, 6]]; Abort[]);
 expandBridges[e_] := e;
 
 (* ---- env-id layout ---------------------------------------------------------- *)
@@ -374,14 +425,32 @@ NumTrace[net_, OptionsPattern[]] := Module[
   (* odd-trace vanishing: a closed Dirac trace of an ODD number of gammas is identically zero
      (and would otherwise carry a spurious imaginary I^odd coefficient from the vertex/basis
      normalizations). Drop such diagrams. (gamma5-bearing traces are exempt from the rule.)
-     A COLLECTIBLE dressed propagator sum (Mq·δ + Z·γ·p̸, kept eager under collection) carries a
-     VARIABLE gamma parity — its δ ("ident") branch has 0 gammas, its γ·p̸ ("slash") branch has 1 —
-     so a single odd/even verdict on the whole diagram is wrong: it would drop one non-vanishing
-     branch with the other. (e.g. struct-4 `l̸1 γ^ρ` + a propagator counts 3 γ → odd → the diagram
-     was dropped, killing its non-zero Mq·δ branch — the 1/4/7 collection bug.) Such a diagram is
-     KEPT here; the per-branch matrix-product trace zeroes its odd-gamma branches on its own. *)
-  diagrams = Select[diagrams, ! (FreeQ[#, _ntGamma5] && OddQ[Count[#, _ntGamma, Infinity]] &&
-                                 FreeQ[#, p_Plus /; collectibleDiracSumQ[p]]) &];
+     The verdict is PER BRANCH (diracParities), not on a diagram-global gamma count: an EAGER Dirac
+     Plus left standing by expandBridges can carry a VARIABLE gamma parity, and summing the count
+     across its branches yields a parity no actual term has. Two ways that bites:
+       * a COLLECTIBLE dressed propagator sum (Mq·δ + Z·γ·p̸, kept eager under collection) — its δ
+         ("ident") branch has 0 gammas, its γ·p̸ ("slash") branch 1. (e.g. struct-4 `l̸1 γ^ρ` + a
+         propagator counts 3 γ → "odd" → the diagram was dropped, killing its non-zero Mq·δ branch
+         — the 1/4/7 collection bug.)
+       * a MULTI-TERM PROJECTOR's Plus — all-numeric coefficients and single-sector, so distributeQ
+         is False (left eager) AND collectibleDiracSumQ is False (that predicate needs a NON-numeric
+         coefficient). It was exempted by neither, so the oblique-metric dual projector for e.g.
+         AqbqDirect8 structure 7 traced to an identically-zero kernel with no error raised.
+     Only an ALL-odd-branch diagram is dropped; a mixed-parity one is KEPT, and the per-branch
+     matrix-product trace zeroes its odd-gamma branches on its own (splitColourGroupsInv expands any
+     γ-bearing Plus and compiles each branch separately, so this filter is purely a pruning
+     optimisation sitting upstream of already-correct code). *)
+  diagrams = Select[diagrams, ! vanishingOddTraceQ[#] &];
+
+  (* Validate every distributed diagram BEFORE analyseDiagram assigns axis ids: it gives ONE id
+     per DISTINCT label (see below), so a label occurring 4x becomes four axes sharing an id and
+     the et engine mis-pairs them into a silently wrong number. Checked per diagram (not on the
+     raw net): only after expandBridges is each diagram a flat Times in which "1 = free,
+     2 = contracted" is the actual invariant. *)
+  ntLog["[prof] NumTrace checkLabels: ", First@AbsoluteTiming[
+  With[{frees = MapIndexed[checkLabels[#1, First[#2]] &, diagrams]},
+    ntLog["[labels] ", Length[diagrams], " diagram(s) validated; free-index set(s) = ",
+      DeleteDuplicates[Sort /@ frees]]];], " s"];
 
   (* global env layout: every distinct momentum, and which ones need a 1/q^2 slot *)
   allMom = DeleteDuplicates @ Cases[net, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
@@ -423,17 +492,103 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
     "Coeff"      -> If[TrueQ[$ntDressCollect], contractFlavour[Times @@ Select[factors, scalarQ]],
                        Times @@ Select[factors, scalarQ]],
     "Ids"        -> ids,
+    (* "Constant" is consumed by Codegen's per-component dispatch, where it means not merely
+       "momentum-free" but "a constant SU(N) component": it is handed to compileColG, which only
+       understands group heads. A momentum-free DIRAC structure (a bare closed spinor δ-loop, tr[1] = 4,
+       with no ntVec/projector to carry momentum) is momentum-free yet carries no colour meaning, so
+       compileColG emitted it as raw Mathematica (`colFacG[ntDeltaDirac[d2,d3], <|a1 -> 0, ...|>]`)
+       into the generator .cpp — an instant clang failure. Reproduce with <P_2,T_2> of AqbqDirect8.
+       Listing the Dirac heads here makes such a component NON-constant, routing it to
+       splitColourGroupsInv/compileDirac like any other Dirac structure. NOTE this is only correct
+       together with the collapsed-loop tr(1)=4 restoration in compileDirac (see nEmptyLoops there):
+       orderDiracFacs drops δ connectors, so the loop arrives token-free and the runtime's split_loops
+       would otherwise discard it, giving a kernel 4x too small. *)
     "Components" -> (<|"Factors" -> orderFactors[#],
                        "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
-                                              _ntElectricProj | _ntMagneticProj | _ntDressedNum]|> &
+                                              _ntElectricProj | _ntMagneticProj | _ntDressedNum |
+                                              _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac]|> &
                      /@ connectedComponents[tensorF])
   |>
 ];
 
-(* validate a network before analysis: each label must appear at most twice *)
-NumTrace::badlabel = "Index label `1` appears `2` times (expected 1 or 2).";
-checkLabels[net_] := Module[{labels, counts},
-  labels = Flatten @ Cases[net, f_?tensorQ :> labelsOf[f], Infinity];
-  counts = Counts[labels];
-  KeyValueMap[If[#2 > 2, Message[NumTrace::badlabel, #1, #2]] &, counts];
-];
+(* ---- per-diagram label validation ------------------------------------------------
+   Run on ONE diagram AFTER expandBridges (a flat Times whose factors are heads, eager
+   single-sector Plus vertices, Powers and scalars). The invariant, per diagram:
+     * a label occurring ONCE  is a free (external) index of the whole trace;
+     * a label occurring TWICE is contracted — the et engine pairs the two axes by id;
+     * a label occurring 3+ times is MALFORMED. analyseDiagram assigns ONE id per DISTINCT
+       label, make_eplan (axplan.hpp) pairs axes first-match-wins between exactly TWO
+       operands, and contract_all is a LEFT FOLD — so four axes sharing an id silently
+       contract as two independent pairs. No crash, just a wrong number. That is why this
+       must Abort rather than Message.
+   A Plus factor needs care and is why the old whole-net Cases[...,Infinity] count was
+   useless: an eager vertex sum's summands LEGITIMATELY repeat the same free labels. A Plus
+   is counted ONCE, via the free set its summands must agree on — that agreement is itself
+   the et::add alignment precondition freeIdx[_Plus] assumes without checking. A summand's
+   internal dummies are private and must not appear anywhere else. *)
+
+NumTrace::badlabel = "Diagram `1`: index label `2` occurs `3` times (expected 1 = free, \
+2 = contracted). The et engine contracts axes by matching id, so `3` axes sharing this label \
+are silently mis-paired into a wrong number. Offending diagram:\n`4`";
+NumTrace::plusfree = "Diagram `1`: the summands of an eager (un-distributed) sum expose \
+DIFFERENT free indices `2` — et::add cannot align them. Offending sum:\n`3`";
+NumTrace::privclash = "Diagram `1`: label(s) `2` are private dummies of one factor but also \
+occur outside it — a dummy-name collision between two independently generated objects. \
+Offending diagram:\n`3`";
+
+(* {exposed-multiset, private-set, bad-list} of a (sub)expression. *)
+labelCensus[e_] := Which[
+  tensorQ[e],
+    With[{ls = labelsOf[e]},
+      (* a label repeated WITHIN one head is a legal self-trace; splitSelfTraces resolves it *)
+      {DeleteDuplicates[ls], Cases[Tally[ls], {l_, c_} /; c >= 2 :> l], {}}],
+
+  Head[e] === Power && IntegerQ[e[[2]]] && e[[2]] >= 1 && ! scalarQ[e],
+    (* n copies sharing the SAME labels: a closed self-contraction (see compileTInv) *)
+    Module[{c = labelCensus[e[[1]]], n = e[[2]]},
+      Which[
+        n === 1, c,
+        n === 2, {{}, Union[c[[1]], c[[2]]], c[[3]]},
+        True,    {{}, Union[c[[1]], c[[2]]], Join[c[[3]], ({#, n} &) /@ c[[1]]]}]],
+
+  Head[e] === Times,
+    Module[{sub = labelCensus /@ Select[List @@ e, ! scalarQ[#] &], exp, tal, priv, bad},
+      If[sub === {}, Return[{{}, {}, {}}]];
+      exp  = Join @@ sub[[All, 1]];
+      tal  = Tally[exp];
+      priv = Union @@ sub[[All, 2]];
+      bad  = Join[Join @@ sub[[All, 3]], Cases[tal, {l_, c_} /; c > 2 :> {l, c}]];
+      (* a child's private dummy must not be exposed or private anywhere else *)
+      Do[With[{mine = sub[[i, 2]],
+               others = Union[Join @@ Delete[sub, i][[All, 1]], Join @@ Delete[sub, i][[All, 2]]]},
+           With[{clash = Intersection[mine, others]},
+             If[clash =!= {}, bad = Join[bad, ({#, "private-clash"} &) /@ clash]]]],
+         {i, Length[sub]}];
+      {Cases[tal, {l_, c_} /; c == 1 :> l],
+       Union[priv, Cases[tal, {l_, c_} /; c == 2 :> l]],
+       bad}],
+
+  Head[e] === Plus,
+    Module[{sub = labelCensus /@ (List @@ e), frees},
+      frees = Sort /@ sub[[All, 1]];
+      {If[frees === {}, {}, First[frees]],
+       Union @@ sub[[All, 2]],
+       Join[Join @@ sub[[All, 3]],
+            If[Length[DeleteDuplicates[frees]] > 1, {{frees, "plus-free-mismatch"}}, {}]]}],
+
+  True, {{}, {}, {}}];
+
+(* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). *)
+$ntCheckLabels = (Environment["NT_NO_LABEL_CHECK"] === $Failed);
+
+checkLabels[diagram_, idx_] := If[! TrueQ[$ntCheckLabels], {},
+  Module[{c = labelCensus[diagram], bad},
+    bad = c[[3]];
+    If[bad =!= {},
+      Do[Switch[b[[2]],
+           "plus-free-mismatch", Message[NumTrace::plusfree, idx, b[[1]], Short[diagram, 8]],
+           "private-clash",      Message[NumTrace::privclash, idx, b[[1]], Short[diagram, 8]],
+           _,                    Message[NumTrace::badlabel, idx, b[[1]], b[[2]], Short[diagram, 8]]],
+         {b, bad}];
+      Abort[]];
+    c[[1]]]];

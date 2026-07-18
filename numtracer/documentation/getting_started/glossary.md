@@ -41,6 +41,13 @@ MPoly
 : The engine's multivariate polynomial in the frame's scalar symbols, carrying inverse atoms. Every
   contraction returns one.
 
+LorentzEnv / SUNEnv
+: The small factory objects that bind a size once and mint every polynomial or colour factor. A
+  `LorentzEnv env(nsym)` binds the symbol-space size and is the sole construction path for
+  `MPoly`/`DPoly` — you call `env.var(i)`, `env.constant(c)`, `env.numeric_value(…)` on it rather
+  than passing `nsym` per call. A `SUNEnv sun(N)` is the analogous ergonomic wrapper binding an
+  SU($N$) rank for the colour builders.
+
 Lowering (CSE + Horner)
 : The build-time passes that turn an `MPoly` into flat, straight-line real arithmetic — Horner
   factoring plus common-subexpression elimination. See [CSE and Horner lowering](../internals/cse-and-lowering.md).

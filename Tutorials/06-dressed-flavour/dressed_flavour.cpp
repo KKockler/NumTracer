@@ -25,7 +25,7 @@
 // We validate the two invariants the physics rests on: the COLLAPSE (all dressings equal recovers
 // the flavour-blind number the plain fold gives) and the DROP (a -1 component == dressing it with
 // a zero function).
-#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_dressed + SUN::diagFund / diagAdj / deltaFund / deltaAdj
+#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_dressed + SUNEnv diagFund / diagAdj / deltaFund / deltaAdj
 
 #include <cmath>
 #include <cstdio>
@@ -52,13 +52,17 @@ static Cx eval_poly(const net::SUNPoly &p, double (*D)(int)) {
 int main() {
   bool ok = true;
 
+  // Bind each SU(N) group rank once; the builders below route through the matching env.
+  net::SUNEnv sun2(2); // SU(2) flavour doublet (section A)
+  net::SUNEnv sun3(3); // SU(3) colour adjoint (section B)
+
   // ---- A. Fundamental: a u/d isospin doublet (SU(2) flavour) --------------------------------
   //
   // A closed flavour delta-loop over the doublet, its delta made flavour-DIAGONAL: component 0 (u)
   // carries dressing-id 0, component 1 (d) carries id 1. diagFund(N, i, j, comp2dr) is that delta;
   // deltaFund(N, j, i) closes the loop. The fold gives the SUNPoly  D_u + D_d.
   const net::SUNPoly ud = net::sun_value_dressed(
-      {net::SUN::diagFund(2, i, j, {0, 1}), net::SUN::deltaFund(2, j, i)});
+      {sun2.diagFund(i, j, {0, 1}), sun2.deltaFund(j, i)});
 
   auto broken = [](int id) { return id == 0 ? 2.0 : 5.0; }; // D_u = 2, D_d = 5 (broken isospin)
   auto ones = [](int) { return 1.0; };                      // all dressings equal to 1
@@ -68,7 +72,7 @@ int main() {
 
   // DROP: the same loop dressing ONLY component 0 (id -1 drops component 1) folds to just D_u.
   const net::SUNPoly u_only = net::sun_value_dressed(
-      {net::SUN::diagFund(2, i, j, {0, -1}), net::SUN::deltaFund(2, j, i)});
+      {sun2.diagFund(i, j, {0, -1}), sun2.deltaFund(j, i)});
   const Cx u_drop = eval_poly(u_only, broken); // D_u = 2
 
   std::printf("A. fundamental u/d doublet (SU(2) flavour)\n");
@@ -86,7 +90,7 @@ int main() {
   cartan[2] = 0;                  // lambda_3 -> dressing-id 0  (Z_3)
   cartan[7] = 1;                  // lambda_8 -> dressing-id 1  (Z_8)
   const net::SUNPoly cond = net::sun_value_dressed(
-      {net::SUN::diagAdj(3, i, j, cartan), net::SUN::deltaAdj(3, j, i)});
+      {sun3.diagAdj(i, j, cartan), sun3.deltaAdj(j, i)});
   const Cx cond_blind = eval_poly(cond, ones); // Z_3 + Z_8 at 1 -> 2
 
   // The colour-BLIND adjoint loop, every component dressed by one id, is the collapse baseline:
@@ -94,7 +98,7 @@ int main() {
   std::vector<int> all8(8);
   for (int a = 0; a < 8; ++a) all8[a] = a;
   const net::SUNPoly full = net::sun_value_dressed(
-      {net::SUN::diagAdj(3, i, j, all8), net::SUN::deltaAdj(3, j, i)});
+      {sun3.diagAdj(i, j, all8), sun3.deltaAdj(j, i)});
   const Cx full_blind = eval_poly(full, ones); // 8
 
   // DROP == zero-dressing: the Cartan-only poly equals the full poly with the other six dressings

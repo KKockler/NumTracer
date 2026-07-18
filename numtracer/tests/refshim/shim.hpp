@@ -126,6 +126,11 @@ namespace shimdress
   inline double hPiL(double x) { return 0.8 + 0.35 * std::sin(0.4 * x); }
   inline double zSigL(double x) { return 1.0 / (1.0 + 0.15 * x * x) + 0.6; }
   inline double zPiL(double x) { return 1.0 / (1.0 + 0.2 * x * x) + 0.7; }
+  // Identically-zero dressing. Used to switch a whole vertex topology off so a flow can be
+  // decomposed into its topologies by polynomial subtraction (see compare_ym_za4_num.cpp) —
+  // a full-strength compare is dominated by the largest topology and hides an error in a
+  // smaller one.
+  inline double zero(double) { return 0.0; }
 } // namespace shimdress
 
 // Bundle of interpolators. The first seven are the ORDER the gauge-sector generated

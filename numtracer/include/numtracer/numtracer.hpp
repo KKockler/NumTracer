@@ -39,6 +39,7 @@
 #include "numtracer/numeric/spinor_mat.hpp"       // IWYU pragma: export
 #include "numtracer/numeric/numeric_contract.hpp" // IWYU pragma: export
 #include "numtracer/numeric/numeric_driver.hpp"   // IWYU pragma: export
+#include "numtracer/numeric/env.hpp"              // IWYU pragma: export (LorentzEnv factory)
 
 // Codegen: the real-SSA CSE, the MPoly lowering, the emitter, and the emitted-kernel support layer
 // (numtracer::complex / numtracer::compute) that a generated kernel compiles against.

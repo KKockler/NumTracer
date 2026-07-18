@@ -99,10 +99,10 @@ namespace numtracer::numeric
     inline std::array<MPoly, 4> mom_components(int nsym, const std::vector<std::pair<double, int>> &vlc,
                                                const std::vector<std::array<MPoly, 4>> &comp)
     {
-      std::array<MPoly, 4> r = {MPoly(nsym), MPoly(nsym), MPoly(nsym), MPoly(nsym)};
+      std::array<MPoly, 4> r = {MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym)};
       for (const auto &[coeff, vid] : vlc) {
         const auto &cv = comp[vid];
-        const MPoly s = MPoly::constant(nsym, Cx{coeff, 0});
+        const MPoly s = MPolyFactory::constant(nsym, Cx{coeff, 0});
         for (int mu = 0; mu < 4; ++mu)
           r[mu] = r[mu] + s * cv[mu];
       }
@@ -212,7 +212,7 @@ namespace numtracer::numeric
     int total = 1;
     for (int k = 0; k < f; ++k)
       total *= 4;
-    F.v.assign(total, MPoly(nsym));
+    F.v.assign(total, MPolyFactory::zero(nsym));
     if (ng % 2 == 1) return F; // odd → all zero
 
     // Precompute each factor's Weyl 2×2 blocks (P = upper-right, Q = lower-left) once. The fold carries
@@ -247,9 +247,9 @@ namespace numtracer::numeric
     // γ5 = diag(+I,−I) (Weyl): block-diagonal, so it costs no multiply and never flips the parity — it just
     // negates one running block (upper when the product is antidiagonal, lower when diagonal). A leading γ5
     // seeds the product as diag(+I,−I).
-    const B2 id2 = {MPoly::constant(nsym, Cx{1, 0}), MPoly(nsym), MPoly(nsym), MPoly::constant(nsym, Cx{1, 0})};
+    const B2 id2 = {MPolyFactory::constant(nsym, Cx{1, 0}), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::constant(nsym, Cx{1, 0})};
     auto neg2 = [&](const B2 &x) {
-      return B2{MPoly(nsym) - x[0], MPoly(nsym) - x[1], MPoly(nsym) - x[2], MPoly(nsym) - x[3]};
+      return B2{MPolyFactory::zero(nsym) - x[0], MPolyFactory::zero(nsym) - x[1], MPolyFactory::zero(nsym) - x[2], MPolyFactory::zero(nsym) - x[3]};
     };
     // BARE commutator [A,B] = A·B − B·A is block-diagonal (A,B antidiagonal ⇒ A·B diagonal), like γ5 so it
     // never flips the parity: upper = P_a Q_b − P_b Q_a, lower = Q_a P_b − Q_b P_a, from the (upper-right,
@@ -358,66 +358,66 @@ namespace numtracer::numeric
       Factor F;
       if (el.kind == NElem::Metric) { // metric δ_{a,b}
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPoly(nsym));
+        F.v.assign(16, MPolyFactory::zero(nsym));
         for (int i = 0; i < 4; ++i)
-          F.v[i * 4 + i] = MPoly::constant(nsym, Cx{1, 0});
+          F.v[i * 4 + i] = MPolyFactory::constant(nsym, Cx{1, 0});
       } else if (el.kind == NElem::Vector) { // vector on id a
         F.ids = {el.a};
         auto cc = mom_components(nsym, el.vlc, comp);
         F.v = {cc[0], cc[1], cc[2], cc[3]};
       } else if (el.kind == NElem::ProjT) { // transverse projector P_T(k)_{a,b} = δ − k_a k_b INV(k)
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPoly(nsym));
+        F.v.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp);
-        const MPoly at = MPoly::atom(nsym, el.atom);
+        const MPoly at = MPolyFactory::atom(nsym, el.atom);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j) {
-            MPoly e = (i == j) ? MPoly::constant(nsym, Cx{1, 0}) : MPoly(nsym);
+            MPoly e = (i == j) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             e = e - (k[i] * k[j]) * at;
             F.v[i * 4 + j] = std::move(e);
           }
       } else if (el.kind == NElem::ProjL) { // longitudinal projector P_L(k)_{a,b} = k_a k_b INV(k)
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPoly(nsym));
+        F.v.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp);
-        const MPoly at = MPoly::atom(nsym, el.atom);
+        const MPoly at = MPolyFactory::atom(nsym, el.atom);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
             F.v[i * 4 + j] = (k[i] * k[j]) * at;
       } else if (el.kind == NElem::ProjM) { // magnetic projector P_M_{i,j}=δ_{ij}−k_i k_j INVS(k) (spatial)
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPoly(nsym));
+        F.v.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp); // spatial part: zero the temporal (slot 0) component
-        const MPoly atS = MPoly::atom(nsym, el.atomS);
+        const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j) {
-            MPoly e = (i == j && i > 0) ? MPoly::constant(nsym, Cx{1, 0}) : MPoly(nsym);
+            MPoly e = (i == j && i > 0) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             if (i > 0 && j > 0) e = e - (k[i] * k[j]) * atS;
             F.v[i * 4 + j] = std::move(e);
           }
       } else if (el.kind == NElem::ProjE) { // electric projector P_E = P_T − P_M
         F.ids = {el.a, el.b};
-        F.v.assign(16, MPoly(nsym));
+        F.v.assign(16, MPolyFactory::zero(nsym));
         auto k = mom_components(nsym, el.vlc, comp);
-        const MPoly at = MPoly::atom(nsym, el.atom);
-        const MPoly atS = MPoly::atom(nsym, el.atomS);
+        const MPoly at = MPolyFactory::atom(nsym, el.atom);
+        const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j) {
-            MPoly full = (i == j) ? MPoly::constant(nsym, Cx{1, 0}) : MPoly(nsym);
+            MPoly full = (i == j) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             full = full - (k[i] * k[j]) * at; // P_T entry
-            MPoly mag = (i == j && i > 0) ? MPoly::constant(nsym, Cx{1, 0}) : MPoly(nsym);
+            MPoly mag = (i == j && i > 0) ? MPolyFactory::constant(nsym, Cx{1, 0}) : MPolyFactory::zero(nsym);
             if (i > 0 && j > 0) mag = mag - (k[i] * k[j]) * atS; // P_M entry
             F.v[i * 4 + j] = full - mag;
           }
       } else { // Levi-Civita ε_{a,b,c,d}
         F.ids = {el.a, el.b, el.c, el.d};
-        F.v.assign(256, MPoly(nsym));
+        F.v.assign(256, MPolyFactory::zero(nsym));
         for (int i = 0; i < 4; ++i)
           for (int j = 0; j < 4; ++j)
             for (int p = 0; p < 4; ++p)
               for (int q = 0; q < 4; ++q) {
                 const double s = levi(i, j, p, q);
-                if (s != 0.0) F.v[((i * 4 + j) * 4 + p) * 4 + q] = MPoly::constant(nsym, Cx{s, 0});
+                if (s != 0.0) F.v[((i * 4 + j) * 4 + p) * 4 + q] = MPolyFactory::constant(nsym, Cx{s, 0});
               }
       }
       return F;
@@ -475,7 +475,7 @@ namespace numtracer::numeric
       int outTotal = 1;
       for (int k = 0; k < outRank; ++k)
         outTotal *= 4;
-      out.v.assign(outTotal, MPoly(nsym));
+      out.v.assign(outTotal, MPolyFactory::zero(nsym));
       // map output position -> union position (output is union with elimPos removed).
       std::vector<int> outToUnion;
       for (int p = 0; p < unionRank; ++p)
@@ -489,10 +489,10 @@ namespace numtracer::numeric
           idxVal[outToUnion[k]] = r % 4;
           r /= 4;
         }
-        MPoly acc(nsym);
+        MPoly acc = MPolyFactory::zero(nsym);
         for (int elimVal = 0; elimVal < 4; ++elimVal) {
           idxVal[elimPos] = elimVal;
-          MPoly prod = MPoly::constant(nsym, Cx{1, 0});
+          MPoly prod = MPolyFactory::constant(nsym, Cx{1, 0});
           bool zero = false;
           for (std::size_t fIdx = 0; fIdx < group.size() && !zero; ++fIdx) {
             int idx = 0;
@@ -588,9 +588,9 @@ namespace numtracer::numeric
         facs = std::move(rest);
       }
       // remaining factors are scalars (no ids): multiply their single entries.
-      MPoly prod = MPoly::constant(nsym, Cx{1, 0});
+      MPoly prod = MPolyFactory::constant(nsym, Cx{1, 0});
       for (const Factor &F : facs)
-        prod = prod * (F.v.empty() ? MPoly(nsym) : F.v[0]);
+        prod = prod * (F.v.empty() ? MPolyFactory::zero(nsym) : F.v[0]);
       return prod;
     }
 
@@ -606,14 +606,14 @@ namespace numtracer::numeric
     inline MPoly close_free_legs(int nsym, const Factor &T, const std::vector<MPoly> &atomDen = {},
                                  const std::vector<std::vector<int>> &units = {})
     {
-      if (T.ids.empty()) return T.v.empty() ? MPoly::constant(nsym, Cx{1, 0}) : T.v[0];
+      if (T.ids.empty()) return T.v.empty() ? MPolyFactory::constant(nsym, Cx{1, 0}) : T.v[0];
       bool allZero = true;
       for (const MPoly &v : T.v)
         if (!v.empty()) {
           allZero = false;
           break;
         }
-      if (allZero) return MPoly(nsym); // odd γ-count: trace ≡ 0
+      if (allZero) return MPolyFactory::zero(nsym); // odd γ-count: trace ≡ 0
       std::vector<int> s = T.ids;
       std::sort(s.begin(), s.end());
       bool paired = true;
@@ -670,7 +670,7 @@ namespace numtracer::numeric
     inline MPoly close_loops(int nsym, const std::vector<Factor> &fs, const std::vector<MPoly> &atomDen = {},
                              const std::vector<std::vector<int>> &units = {})
     {
-      if (fs.empty()) return MPoly::constant(nsym, Cx{1, 0});
+      if (fs.empty()) return MPolyFactory::constant(nsym, Cx{1, 0});
       if (fs.size() == 1) return close_free_legs(nsym, fs[0], atomDen, units);
       return contract_factors(nsym, fs, atomDen, units); // multiple loops: contract their shared legs
     }
@@ -822,7 +822,7 @@ namespace numtracer::numeric
     // external line, tied only by gluon propagators) — trace each into its own Lorentz tensor; the
     // gluon legs they share contract via the Lorentz net below. tr(1)=4 rides each loop's trace.
     std::vector<ndetail::Factor> loops = ndetail::dirac_loop_factors(nsym, dirac, comp);
-    MPoly result(nsym);
+    MPoly result = MPolyFactory::zero(nsym);
     for (const NTerm &nt : lorentz) {
       // fold same-momentum projector chains (P·P→P, orthogonal→0) before expansion; no-op unless present.
       std::vector<NElem> elems = nt.e;
@@ -836,7 +836,7 @@ namespace numtracer::numeric
       // contract_factors consumes its `facs` argument by value — move so the per-term
       // factor list is built once, not copied again into the call.
       MPoly term = ndetail::contract_factors(nsym, std::move(facs));
-      term = term * MPoly::constant(nsym, co);
+      term = term * MPolyFactory::constant(nsym, co);
       result = result + term;
     }
     if (lorentz.empty())
@@ -883,7 +883,7 @@ namespace numtracer::numeric
     std::vector<MPoly> aden = atomDen;
     for (MPoly &a : aden)
       a = reduce_units(a, units);
-    MPoly result(nsym);
+    MPoly result = MPolyFactory::zero(nsym);
     for (const network::PTerm &pt : lor) {
       // build the numeric element list, then fold same-momentum projector chains before expansion.
       std::vector<NElem> elems;
@@ -900,7 +900,7 @@ namespace numtracer::numeric
       // move the per-term factor list into contract_factors (consumed by value) — avoids
       // a redundant deep copy of every Factor's MPoly entries.
       MPoly term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
-      term = term * MPoly::constant(nsym, co);
+      term = term * MPolyFactory::constant(nsym, co);
       result = result + term;
     }
     if (lor.empty())
@@ -968,7 +968,7 @@ namespace numtracer::numeric
     inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                ContractFn &&contract)
     {
-      DPoly out(nsym);
+      DPoly out = DPolyFactory::zero(nsym);
       const int nSlots = static_cast<int>(slots.size());
       // The dressed chain is a quark line with ≥1 closed spinor loop ((LoopSep markers)+1). A combination
       // that collapses a WHOLE loop to the identity (every slot on it takes the δ option, no fixed γ) leaves
@@ -1004,7 +1004,7 @@ namespace numtracer::numeric
           for (int c = 0; c < nCollapsed; ++c) combCoeff = combCoeff * Cx{4, 0};
           MPoly mp = contract(concrete);
           if (!mp.empty()) {
-            mp = mp * MPoly::constant(nsym, combCoeff);
+            mp = mp * MPolyFactory::constant(nsym, combCoeff);
             out.add(dmono_sorted(std::move(dressMono)), mp);
           }
         }
@@ -1067,20 +1067,20 @@ namespace numtracer::numeric
             if (e.inv > maxId) maxId = e.inv;   // full 1/k² atom (ProjT/ProjL/ProjE)
             if (e.invS > maxId) maxId = e.invS; // spatial 1/|k⃗|² atom (ProjE/ProjM)
           }
-    std::vector<MPoly> atomDen(maxId + 1, MPoly(nsym));
+    std::vector<MPoly> atomDen(maxId + 1, MPolyFactory::zero(nsym));
     for (const network::NetVal &nv : lors)
       for (const network::PTerm &pt : nv)
         for (const network::Elem &e : pt.e)
           if (isProj(e)) {
             const auto &cv = comp[e.vid];
             if (e.inv >= 0) { // full k² = Σ_μ comp[μ]²
-              MPoly k2(nsym);
+              MPoly k2 = MPolyFactory::zero(nsym);
               for (int mu = 0; mu < 4; ++mu)
                 k2 = k2 + cv[mu] * cv[mu];
               atomDen[e.inv] = std::move(k2);
             }
             if (e.invS >= 0) { // spatial |k⃗|² = Σ_{μ=1..3} comp[μ]² (component 0 = temporal)
-              MPoly ks2(nsym);
+              MPoly ks2 = MPolyFactory::zero(nsym);
               for (int mu = 1; mu < 4; ++mu)
                 ks2 = ks2 + cv[mu] * cv[mu];
               atomDen[e.invS] = std::move(ks2);

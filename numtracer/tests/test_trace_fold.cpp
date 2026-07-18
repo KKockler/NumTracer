@@ -16,6 +16,7 @@
 //   - both backends: MPoly (plain) and DPoly (dressed)
 //   - the degenerate shapes that the binary counter gets wrong if the carry is off by one: 0, 1, 2, 3
 //     and 7 terms (7 = 0b111 leaves three unmerged partials on the stack -> the leftover sweep)
+#include "numtracer/numeric/env.hpp"
 #include "numtracer/numeric/trace_fold.hpp"
 
 #include <cstdio>
@@ -43,8 +44,9 @@ namespace
   // that a dropped or double-counted term cannot cancel out of the total by luck.
   MPoly trace_of(int k)
   {
-    MPoly p = MPoly::mono(NSYM, {k % 3, k % 2, 0}, Cx{1.0 + k, 0.5 * k});
-    return p + MPoly::mono(NSYM, {0, 0, 1}, Cx{static_cast<double>(k), 0.0});
+    LorentzEnv env(NSYM);
+    MPoly p = env.mono({k % 3, k % 2, 0}, Cx{1.0 + k, 0.5 * k});
+    return p + env.mono({0, 0, 1}, Cx{static_cast<double>(k), 0.0});
   }
 
   bool same(const MPoly &a, const MPoly &b)
@@ -91,7 +93,7 @@ namespace
   template <class P, class TraceFn>
   P left_fold(const std::vector<int> &idx, const std::vector<Cx> &sc, TraceFn &&trace)
   {
-    P acc(NSYM);
+    P acc = zero_like<P>(NSYM); // MPoly/DPoly route through the private-factory attorney; Counted uses its ctor
     for (std::size_t j = 0; j < idx.size(); ++j)
       acc = acc + scale_trace(NSYM, trace(idx[j]), sc[j]);
     return acc;
@@ -159,7 +161,8 @@ int main()
   run_backend<DPoly>("DPoly", [](int k) {
     // A dressed trace: the same kinematic polynomial under a dressing monomial that varies with k, so
     // the DPoly merge (which is keyed on the dressing monomial) is exercised rather than bypassed.
-    DPoly d(NSYM);
+    LorentzEnv env(NSYM);
+    DPoly d = env.dzero();
     d.add(dmono_sorted(DMono{k % 2, k % 3}), trace_of(k));
     return d;
   });
@@ -205,8 +208,9 @@ int main()
 
   // poly_bytes must actually track size — it is what the generator reports as the trace table's RAM
   // cost, and a constant would silently hide the one way this design can regress (peak RSS).
-  check(poly_bytes(MPoly(NSYM)) == 0, "poly_bytes: empty is 0");
-  check(poly_bytes(trace_of(4)) > poly_bytes(MPoly::constant(NSYM, Cx{1, 0})), "poly_bytes: grows with terms");
+  LorentzEnv env(NSYM);
+  check(poly_bytes(env.zero()) == 0, "poly_bytes: empty is 0");
+  check(poly_bytes(trace_of(4)) > poly_bytes(env.constant(Cx{1, 0})), "poly_bytes: grows with terms");
 
   if (failures) {
     std::printf("trace_fold: %d FAILURES\n", failures);

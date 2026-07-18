@@ -35,8 +35,9 @@ enum { mu, nu }; // name the free gamma legs' Lorentz indices (one unscoped enum
 // The numeric path. Momenta are numbers here, so the components are CONSTANT polynomials
 // (nsym = 0 symbols). comp[vid][m] = component m of momentum vid: p -> 0, q -> 1, l -> 2.
 const int nsym = 0;
+nm::LorentzEnv env(nsym); // empty symbol space; env.constant(...) builds the number components
 std::vector<std::array<nm::MPoly, 4>> comp(3);
-// … fill comp[0]=p, comp[1]=q, comp[2]=l with MPoly::constant …
+// … fill comp[0]=p, comp[1]=q, comp[2]=l with env.constant …
 
 // The closed chain p/ gamma^mu q/ gamma^nu, the two free gammas on Lorentz legs mu, nu.
 net::DiracNet chain = {net::dslash({{1.0, 0}}), net::dgamma(mu),
@@ -46,11 +47,11 @@ net::DiracNet chain = {net::dslash({{1.0, 0}}), net::dgamma(mu),
 nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nprojT(mu, nu, {{1.0, 2}}, 0)}}};
 // atomDen[aid] = the polynomial in the DENOMINATOR of inverse-atom `aid`. The projector above
 // declared its 1/l^2 as atom 0, so atomDen[0] = l^2 = sum_m comp[2][m]^2 (here the constant l2).
-nm::MPoly l2poly(nsym);
+nm::MPoly l2poly = env.zero();
 for (int m = 0; m < 4; ++m) l2poly = l2poly + comp[2][m] * comp[2][m];
 std::vector<nm::MPoly> atomDen = {l2poly};
 
-nm::MPoly tr = nm::numeric_value(nsym, chain, lor, comp, atomDen);
+nm::MPoly tr = env.numeric_value(chain, lor, comp, atomDen);
 Cx num = nm::eval(tr, /*symbols*/ {}, /*atom values*/ {1.0 / l2}); // -> T_num
 ```
 

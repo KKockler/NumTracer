@@ -46,11 +46,12 @@ int main() {
   // 0 symbols). comp[vid][m] is component m of momentum vid:  p -> 0, q -> 1, l
   // -> 2.
   const int nsym = 0;
+  nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(3);
   auto setv = [&](int vid, const double v[4]) {
     for (int m = 0; m < 4; ++m)
       comp[static_cast<std::size_t>(vid)][static_cast<std::size_t>(m)] =
-          nm::MPoly::constant(nsym, Cx{v[m], 0});
+          env.constant(Cx{v[m], 0});
   };
   setv(0, pvec);
   setv(1, qvec);
@@ -64,14 +65,14 @@ int main() {
   // momentum vid 2, and its 1/l^2 factor is tracked as inverse-atom id 0 (its
   // value supplied in atomDen below).
   nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nprojT(mu, nu, {{1.0, 2}}, 0)}}};
-  nm::MPoly l2poly(nsym);
+  nm::MPoly l2poly = env.zero();
   for (int m = 0; m < 4; ++m)
     l2poly = l2poly + comp[2][static_cast<std::size_t>(m)] *
                           comp[2][static_cast<std::size_t>(m)];
   std::vector<nm::MPoly> atomDen = {
       l2poly}; // atom 0 = l^2 (so its reciprocal is 1/l^2)
 
-  nm::MPoly tr = nm::numeric_value(nsym, chain, lor, comp, atomDen);
+  nm::MPoly tr = env.numeric_value(chain, lor, comp, atomDen);
   Cx num = nm::eval(tr, /*symbols*/ {}, /*atom values*/ {1.0 / l2});
   const double numeric_val = num.re;
 
@@ -94,15 +95,16 @@ int main() {
   // Horner-factors + CSEs it into a straight-line real program over a shared symbol env `g`, and
   // `emit_cpp` prints the exact `double T_num(const double* f)` a generated kernel would carry.
   const int ns = 3;
-  auto V = [&](int i) { return nm::MPoly::var(ns, i); };            // the i-th symbol
-  auto K = [&](double v) { return nm::MPoly::constant(ns, Cx{v, 0}); };
+  nm::LorentzEnv envs(ns);
+  auto V = [&](int i) { return envs.var(i); };            // the i-th symbol
+  auto K = [&](double v) { return envs.constant(Cx{v, 0}); };
   std::vector<std::array<nm::MPoly, 4>> sc(3);
   sc[0] = {V(0), K(0), K(0), K(0)};                                 // p = (|p|, 0, 0, 0)
   sc[2] = {V(1), V(2), K(0), K(0)};                                 // l = (l0, l1y, 0, 0)
   sc[1] = {sc[2][0] - sc[0][0], sc[2][1], K(0), K(0)};              // q = l - p
   std::vector<nm::MPoly> satomDen = {sc[2][0] * sc[2][0] + sc[2][1] * sc[2][1]}; // atom 0 = l^2
 
-  nm::MPoly trs = nm::numeric_value(ns, chain, lor, sc, satomDen);
+  nm::MPoly trs = envs.numeric_value(chain, lor, sc, satomDen);
   net::GlobalEnv g;
   net::GenProg prog = nm::to_genprog(trs, g);
   std::printf("\nlowered kernel (symbolic components |p|, l0, l1y):\n");

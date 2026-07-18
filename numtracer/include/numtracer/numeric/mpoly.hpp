@@ -81,6 +81,15 @@ namespace numtracer::numeric
 
   using MPolyScratch = gch::small_vector<std::pair<Mono, Cx>, kMPolyScratchInline>;
 
+  // The `nsym`-carrying construction API is closed behind these friends (see @ref LorentzEnv): every
+  // polynomial in one trace must share an `nsym`, so the factories that bake it in are private and the
+  // ONLY sanctioned way to mint one is a @ref LorentzEnv (which holds a fixed `nsym`). @ref MPolyFactory
+  // is a tiny internal attorney that re-exposes the same factories to the trusted cross-header engine
+  // code (contraction / trace-fold), which already threads a single `nsym` and must not route through a
+  // user-facing env. Only names are needed here; the definitions live below / in `numeric/env.hpp`.
+  class LorentzEnv;
+  struct MPolyFactory;
+
   /// @brief Multivariate polynomial: monomial → complex coefficient, over `nsym` user symbols.
   ///
   /// Storage is a **sorted, like-terms-combined `std::vector`** (not a `std::map`): the per-insert
@@ -96,7 +105,26 @@ namespace numtracer::numeric
     /// the dense flows, which are memory-bound before they are time-bound.
     std::vector<std::pair<Mono, Cx>> t; ///< sorted by Mono, like terms combined, no zeros
 
+    // Sanctioned construction paths (see the note above @ref MPoly). The env and the internal attorney
+    // reach the nsym-taking ctor/factories; the in-header arithmetic operators keep constructing result
+    // polynomials directly (they already have a definite `nsym` from their operands), so their bodies
+    // stay byte-for-byte unchanged — the hot path is untouched.
+    friend class LorentzEnv;
+    friend struct MPolyFactory;
+    friend MPoly operator+(const MPoly &a, const MPoly &b);
+    friend MPoly operator-(const MPoly &a, const MPoly &b);
+    friend MPoly operator*(const MPoly &a, const MPoly &b);
+    friend MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen);
+    friend MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups);
+
     MPoly() = default;
+
+  private:
+    // Bare-`nsym` construction — reachable only through @ref LorentzEnv / @ref MPolyFactory (friends).
+    // Making these private is what turns "every MPoly in one trace shares an nsym" from a debug-time
+    // assert into a compile-time guarantee: outside the sanctioned env you cannot mint a non-empty MPoly
+    // with a hand-picked nsym. The empty default ctor above stays public (an nsym==0 zero used by the
+    // operator short-circuits and by std::array/std::vector default members).
     explicit MPoly(int ns) : nsym(ns) {}
 
     /// Build from an unsorted scratch list of (monomial, coeff): sort then combine adjacent equals.
@@ -150,6 +178,7 @@ namespace numtracer::numeric
       return p;
     }
 
+  public:
     int size() const { return t.size(); }
     bool empty() const { return t.empty(); }
 
@@ -167,6 +196,19 @@ namespace numtracer::numeric
         t.insert(it, {m, c});
       }
     }
+  };
+
+  /// @brief Internal attorney re-exposing the private @ref MPoly factories to the trusted cross-header
+  ///        engine code (spinor matrices, contraction, trace-fold). Those functions already carry one
+  ///        definite `nsym` and must not depend on the user-facing @ref LorentzEnv, but they cannot be
+  ///        friended by name (templates / DiracNet-heavy signatures across headers), so the friend
+  ///        surface is localised to this one struct. NOT part of the public API — call sites outside the
+  ///        engine construct polynomials through @ref LorentzEnv.
+  struct MPolyFactory {
+    static MPoly zero(int ns) { return MPoly(ns); }
+    static MPoly constant(int ns, Cx c) { return MPoly::constant(ns, c); }
+    static MPoly atom(int ns, int aid) { return MPoly::atom(ns, aid); }
+    static MPoly from_scratch(int ns, MPolyScratch s) { return MPoly::from_scratch(ns, std::move(s)); }
   };
 
   inline MPoly operator+(const MPoly &a, const MPoly &b)

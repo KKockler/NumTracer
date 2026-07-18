@@ -10,6 +10,7 @@
 //   C) Dressed contraction — a quark line with dressed numerators S(p)=Mq·δ + Z(p)·p̸ kept EAGER and
 //      collected into one DPoly equals the explicit distributed sum Σ_combos (∏dressings)·trace, both
 //      evaluated at random points (≤1e-10), with the trace computed ONCE instead of per combination.
+#include "numtracer/numeric/env.hpp"
 #include "numtracer/numeric/numeric_contract.hpp"
 
 #include <cstdio>
@@ -32,14 +33,15 @@ int main()
   std::printf("== A: DPoly arithmetic ==\n");
   {
     const int nsym = 2;
+    nm::LorentzEnv env(nsym);
     // a = d0 * (x0)  +  {} * (3)
-    nm::DPoly a(nsym);
-    a.add(nm::DMono{0}, nm::MPoly::var(nsym, 0));
-    a.add(nm::DMono{}, nm::MPoly::constant(nsym, Cx{3, 0}));
+    nm::DPoly a = env.dzero();
+    a.add(nm::DMono{0}, env.var(0));
+    a.add(nm::DMono{}, env.constant(Cx{3, 0}));
     // b = d0 * (x1) + d1 * (2)
-    nm::DPoly b(nsym);
-    b.add(nm::DMono{0}, nm::MPoly::var(nsym, 1));
-    b.add(nm::DMono{1}, nm::MPoly::constant(nsym, Cx{2, 0}));
+    nm::DPoly b = env.dzero();
+    b.add(nm::DMono{0}, env.var(1));
+    b.add(nm::DMono{1}, env.constant(Cx{2, 0}));
     nm::DPoly sum = a + b;   // d0*(x0+x1) + d1*2 + {}*3
     nm::DPoly prod = a * b;  // collects d0*d0, d0*d1, {}*d0, {}*d1
     std::vector<double> x = {0.4, -0.7};
@@ -62,21 +64,22 @@ int main()
   std::printf("\n== B: dressing-free DPoly == MPoly path ==\n");
   {
     const int nsym = 8; // p:0..3, q:4..7
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(2);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][mu] = nm::MPoly::var(nsym, mu);
-      comp[1][mu] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][mu] = env.var(mu);
+      comp[1][mu] = env.var(4 + mu);
     }
     // tr(γ^μ p̸ γ_μ q̸) closed by a metric
     network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101),
                                network::dslash({{1.0, 1}})};
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::MPoly mp = nm::numeric_value(nsym, chain, lor, comp, {});
+    nm::MPoly mp = env.numeric_value(chain, lor, comp, {});
     // same chain expressed as a slot-free dressed chain
     std::vector<nm::DChainTok> dchain;
     for (const auto &f : chain)
       dchain.push_back(nm::dtfix(f));
-    nm::DPoly dp = nm::numeric_value_dressed(nsym, dchain, /*slots*/ {}, lor, comp, {});
+    nm::DPoly dp = env.numeric_value_dressed(dchain, /*slots*/ {}, lor, comp, {});
     bool oneTerm = (dp.size() == 1) && dp.t[0].first.empty();
     bool mpEqual = oneTerm && (dp.t[0].second.t.size() == mp.t.size());
     if (mpEqual)
@@ -106,17 +109,18 @@ int main()
     //   option 0: identity δ with coeff Mq (dressing atom 0 = "Mq")
     //   option 1: slash with momentum, coeff 1, dressing atom 1 (for p) / 2 (for q) = "Z(p)"/"Z(q)"
     const int nsym = 8; // p:0..3, q:4..7
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(2);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][mu] = nm::MPoly::var(nsym, mu);
-      comp[1][mu] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][mu] = env.var(mu);
+      comp[1][mu] = env.var(4 + mu);
     }
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
     nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
     nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dgamma(100)), nm::dtslot(0),
                                          nm::dtfix(network::dgamma(101)), nm::dtslot(1)};
-    nm::DPoly dp = nm::numeric_value_dressed(nsym, dchain, {sP, sQ}, lor, comp, {});
+    nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, {});
 
     // distributed reference: enumerate the 2×2 structure choices explicitly
     auto refTrace = [&](int cp, int cq, const std::vector<double> &x) {
@@ -124,7 +128,7 @@ int main()
       if (cp == 1) c.push_back(network::dslash({{1.0, 0}}));
       c.push_back(network::dgamma(101));
       if (cq == 1) c.push_back(network::dslash({{1.0, 1}}));
-      nm::MPoly t = nm::numeric_value(nsym, c, lor, comp, {});
+      nm::MPoly t = env.numeric_value(c, lor, comp, {});
       return nm::eval(t, x, {});
     };
 
@@ -158,20 +162,21 @@ int main()
   {
     // tr( [γ^100,γ^101] · S(p) · γ^102 · γ^103 ), free legs closed by metrics 100-102, 101-103.
     const int nsym = 4; // p:0..3
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(1);
     for (int mu = 0; mu < 4; ++mu)
-      comp[0][mu] = nm::MPoly::var(nsym, mu);
+      comp[0][mu] = env.var(mu);
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 102), nm::nmet(101, 103)}}};
     nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dcomm(100, 101)), nm::dtslot(0),
                                          nm::dtfix(network::dgamma(102)), nm::dtfix(network::dgamma(103))};
-    nm::DPoly dp = nm::numeric_value_dressed(nsym, dchain, {sP}, lor, comp, {});
+    nm::DPoly dp = env.numeric_value_dressed(dchain, {sP}, lor, comp, {});
     auto refTrace = [&](int cp, const std::vector<double> &x) {
       network::DiracNet c = {network::dcomm(100, 101)};
       if (cp == 1) c.push_back(network::dslash({{1.0, 0}}));
       c.push_back(network::dgamma(102));
       c.push_back(network::dgamma(103));
-      return nm::eval(nm::numeric_value(nsym, c, lor, comp, {}), x, {});
+      return nm::eval(env.numeric_value(c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;
@@ -201,23 +206,24 @@ int main()
   {
     // tr( γ^100 γ^101 · S(p) · [γ^102,γ^103] · S(q) ), free legs closed by metrics 100-102, 101-103.
     const int nsym = 8; // p:0..3, q:4..7
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(2);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][mu] = nm::MPoly::var(nsym, mu);
-      comp[1][mu] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][mu] = env.var(mu);
+      comp[1][mu] = env.var(4 + mu);
     }
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 102), nm::nmet(101, 103)}}};
     nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
     nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dgamma(100)), nm::dtfix(network::dgamma(101)),
                                          nm::dtslot(0), nm::dtfix(network::dcomm(102, 103)), nm::dtslot(1)};
-    nm::DPoly dp = nm::numeric_value_dressed(nsym, dchain, {sP, sQ}, lor, comp, {});
+    nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, {});
     auto refTrace = [&](int cp, int cq, const std::vector<double> &x) {
       network::DiracNet c = {network::dgamma(100), network::dgamma(101)};
       if (cp == 1) c.push_back(network::dslash({{1.0, 0}}));
       c.push_back(network::dcomm(102, 103));
       if (cq == 1) c.push_back(network::dslash({{1.0, 1}}));
-      return nm::eval(nm::numeric_value(nsym, c, lor, comp, {}), x, {});
+      return nm::eval(env.numeric_value(c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;
@@ -248,24 +254,25 @@ int main()
   {
     // tr( γ^100 · S(p) · [γ^101, r̸] · S(q) ), free legs closed by metric 100-101.  r = comp[2].
     const int nsym = 12; // p:0..3, q:4..7, r:8..11
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][mu] = nm::MPoly::var(nsym, mu);
-      comp[1][mu] = nm::MPoly::var(nsym, 4 + mu);
-      comp[2][mu] = nm::MPoly::var(nsym, 8 + mu);
+      comp[0][mu] = env.var(mu);
+      comp[1][mu] = env.var(4 + mu);
+      comp[2][mu] = env.var(8 + mu);
     }
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
     nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
     nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dgamma(100)), nm::dtslot(0),
                                          nm::dtfix(network::dcomm_fs(101, {{1.0, 2}})), nm::dtslot(1)};
-    nm::DPoly dp = nm::numeric_value_dressed(nsym, dchain, {sP, sQ}, lor, comp, {});
+    nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, {});
     auto refTrace = [&](int cp, int cq, const std::vector<double> &x) {
       network::DiracNet c = {network::dgamma(100)};
       if (cp == 1) c.push_back(network::dslash({{1.0, 0}}));
       c.push_back(network::dcomm_fs(101, {{1.0, 2}}));
       if (cq == 1) c.push_back(network::dslash({{1.0, 1}}));
-      return nm::eval(nm::numeric_value(nsym, c, lor, comp, {}), x, {});
+      return nm::eval(env.numeric_value(c, lor, comp, {}), x, {});
     };
     int worst = 0;
     double maxerr = 0.0;

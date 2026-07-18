@@ -23,6 +23,7 @@
 // k, a, b carry symbolic MPoly components; each net is contracted once and evaluated at many points.
 // Build via the test CMake (adds -I include). Prints ALL TESTS PASSED / exits non-zero on failure.
 #include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/numeric/env.hpp"
 
 #include <array>
 #include <cmath>
@@ -54,16 +55,17 @@ int main()
 {
   // a 4th momentum u = (1,0,0,0) (the heat-bath / temporal unit vector) to probe P_M's temporal rows.
   constexpr int uVid = 3;
+  nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(4);
   for (int mu = 0; mu < 4; ++mu) {
-    comp[kVid][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 0 + mu);
-    comp[aVid][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
-    comp[bVid][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 8 + mu);
-    comp[uVid][static_cast<std::size_t>(mu)] = nm::MPoly::constant(nsym, Cx{mu == 0 ? 1.0 : 0.0, 0});
+    comp[kVid][static_cast<std::size_t>(mu)] = env.var(0 + mu);
+    comp[aVid][static_cast<std::size_t>(mu)] = env.var(4 + mu);
+    comp[bVid][static_cast<std::size_t>(mu)] = env.var(8 + mu);
+    comp[uVid][static_cast<std::size_t>(mu)] = env.constant(Cx{mu == 0 ? 1.0 : 0.0, 0});
   }
   // full 1/k² atom (id 0): atomDen[0] = k² = Σ_μ comp[k][μ]²;
   // spatial 1/|k⃗|² atom (id 1): atomDen[1] = |k⃗|² = Σ_{μ=1..3} comp[k][μ]² (component 0 = temporal).
-  nm::MPoly k2(nsym), ks2(nsym);
+  nm::MPoly k2 = env.zero(), ks2 = env.zero();
   for (int mu = 0; mu < 4; ++mu)
     k2 = k2 + comp[kVid][static_cast<std::size_t>(mu)] * comp[kVid][static_cast<std::size_t>(mu)];
   for (int mu = 1; mu < 4; ++mu)
@@ -72,34 +74,34 @@ int main()
 
   // contract each identity's net ONCE (symbolic in k/a/b); evaluate at many points below.
   // index convention: 10/11 are the outer (closed) legs, 12 the inner contracted leg.
-  const nm::MPoly aPTb = nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPLb = nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly adotb = nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), vecLeg(10, bVid)}), comp, atomDen);
-  const nm::MPoly trPT = nm::numeric_value(nsym, {}, net({projT(10, 11), nm::nmet(10, 11)}), comp, atomDen);
-  const nm::MPoly trPL = nm::numeric_value(nsym, {}, net({projL(10, 11), nm::nmet(10, 11)}), comp, atomDen);
+  const nm::MPoly aPTb = env.numeric_value({},net({vecLeg(10, aVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly aPLb = env.numeric_value({},net({vecLeg(10, aVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly adotb = env.numeric_value({},net({vecLeg(10, aVid), vecLeg(10, bVid)}), comp, atomDen);
+  const nm::MPoly trPT = env.numeric_value({},net({projT(10, 11), nm::nmet(10, 11)}), comp, atomDen);
+  const nm::MPoly trPL = env.numeric_value({},net({projL(10, 11), nm::nmet(10, 11)}), comp, atomDen);
   const nm::MPoly aPTPTb =
-      nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projT(10, 12), projT(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+      env.numeric_value({},net({vecLeg(10, aVid), projT(10, 12), projT(12, 11), vecLeg(11, bVid)}), comp, atomDen);
   const nm::MPoly aPLPLb =
-      nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projL(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+      env.numeric_value({},net({vecLeg(10, aVid), projL(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
   const nm::MPoly aPTPLb =
-      nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projT(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly kPTb = nm::numeric_value(nsym, {}, net({vecLeg(10, kVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly kPLb = nm::numeric_value(nsym, {}, net({vecLeg(10, kVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly kdotb = nm::numeric_value(nsym, {}, net({vecLeg(10, kVid), vecLeg(10, bVid)}), comp, atomDen);
-  const nm::MPoly bPTa = nm::numeric_value(nsym, {}, net({vecLeg(10, bVid), projT(10, 11), vecLeg(11, aVid)}), comp, atomDen);
+      env.numeric_value({},net({vecLeg(10, aVid), projT(10, 12), projL(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly kPTb = env.numeric_value({},net({vecLeg(10, kVid), projT(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly kPLb = env.numeric_value({},net({vecLeg(10, kVid), projL(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly kdotb = env.numeric_value({},net({vecLeg(10, kVid), vecLeg(10, bVid)}), comp, atomDen);
+  const nm::MPoly bPTa = env.numeric_value({},net({vecLeg(10, bVid), projT(10, 11), vecLeg(11, aVid)}), comp, atomDen);
 
   // finite-T electric / magnetic projectors
-  const nm::MPoly aPEb = nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projE(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly aPMb = nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly trPE = nm::numeric_value(nsym, {}, net({projE(10, 11), nm::nmet(10, 11)}), comp, atomDen);
-  const nm::MPoly trPM = nm::numeric_value(nsym, {}, net({projM(10, 11), nm::nmet(10, 11)}), comp, atomDen);
+  const nm::MPoly aPEb = env.numeric_value({},net({vecLeg(10, aVid), projE(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly aPMb = env.numeric_value({},net({vecLeg(10, aVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly trPE = env.numeric_value({},net({projE(10, 11), nm::nmet(10, 11)}), comp, atomDen);
+  const nm::MPoly trPM = env.numeric_value({},net({projM(10, 11), nm::nmet(10, 11)}), comp, atomDen);
   const nm::MPoly aPEPEb =
-      nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projE(10, 12), projE(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+      env.numeric_value({},net({vecLeg(10, aVid), projE(10, 12), projE(12, 11), vecLeg(11, bVid)}), comp, atomDen);
   const nm::MPoly aPMPMb =
-      nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projM(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+      env.numeric_value({},net({vecLeg(10, aVid), projM(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
   const nm::MPoly aPEPMb =
-      nm::numeric_value(nsym, {}, net({vecLeg(10, aVid), projE(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
-  const nm::MPoly uPMb = nm::numeric_value(nsym, {}, net({vecLeg(10, uVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
+      env.numeric_value({},net({vecLeg(10, aVid), projE(10, 12), projM(12, 11), vecLeg(11, bVid)}), comp, atomDen);
+  const nm::MPoly uPMb = env.numeric_value({},net({vecLeg(10, uVid), projM(10, 11), vecLeg(11, bVid)}), comp, atomDen);
 
   std::mt19937 rng(2024);
   std::uniform_real_distribution<double> U(-1.0, 1.0);

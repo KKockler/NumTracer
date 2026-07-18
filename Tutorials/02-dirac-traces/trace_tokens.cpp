@@ -27,17 +27,18 @@ int main() {
   // Momentum components as symbols: p -> 0..3, q -> 4..7. comp[vid][m] is the
   // m-th component of momentum vid, here just the symbol itself.
   const int nsym = 8;
+  nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(2);
   for (int m = 0; m < 4; ++m) {
-    comp[0][static_cast<std::size_t>(m)] = nm::MPoly::var(nsym, m);
-    comp[1][static_cast<std::size_t>(m)] = nm::MPoly::var(nsym, 4 + m);
+    comp[0][static_cast<std::size_t>(m)] = env.var(m);
+    comp[1][static_cast<std::size_t>(m)] = env.var(4 + m);
   }
 
   // (1) tr(p/ q/): a closed chain of two slashed momenta (no free legs, no
   // Lorentz network).
   net::DiracNet chainPQ = {net::dslash({{1.0, 0}}), net::dslash({{1.0, 1}})};
   nm::MPoly trPQ =
-      nm::numeric_value(nsym, chainPQ, /*lorentz*/ {}, comp, /*atomDen*/ {});
+      env.numeric_value(chainPQ, /*lorentz*/ {}, comp, /*atomDen*/ {});
 
   // (2) tr(gamma^mu p/ gamma_mu q/): two FREE gamma legs whose Lorentz indices
   // mu, nu are tied together by a metric. A Lorentz network (NNet) is a sum of
@@ -46,7 +47,7 @@ int main() {
   net::DiracNet chainG = {net::dgamma(mu), net::dslash({{1.0, 0}}),
                           net::dgamma(nu), net::dslash({{1.0, 1}})};
   nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(mu, nu)}}};
-  nm::MPoly trG = nm::numeric_value(nsym, chainG, lor, comp, {});
+  nm::MPoly trG = env.numeric_value(chainG, lor, comp, {});
 
   // Evaluate both at one point.
   std::vector<double> x = {1.0, 0.5, -0.3, 0.2, 0.8, -0.4, 1.2, 0.1};

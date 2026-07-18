@@ -95,6 +95,15 @@ scaleStrInv[str_, s_] := "sc<numtracer::Lit<numtracer::Cx{" <> cppNum[s] <> ", 0
 wrapContractInv[{one_}] := one;
 wrapContractInv[many_] := "contract(" <> StringRiffle[many, ", "] <> ")";
 
+MakeNTKernel::eagernn = "compileTInv: an eagerly-summed structure has a NON-NUMERIC per-structure \
+scalar coefficient, which et::add cannot fold (it scales each structure by a compile-time Lit). \
+The sum should have been distributed by expandBridges (DSL.m) or collected into an ntDressedNum. \
+Offending sum:\n`1`";
+MakeNTKernel::tleak = "compileTInv: un-lowered TENSOR structure reached the scalar fallthrough — it \
+would be CForm'd into C++ as a bare scalar with its indices silently dropped (this is what caused \
+the ZAAqbq metric leak). Every tensor head must be handled by builderInv or one of the \
+Power/Times/Plus branches. Offending structure:\n`1`";
+
 (* MEMOIZED: the projector/Lorentz net builder is called with mostly repeated inputs — the same
    transverse-projector structures recur across every diagram/branch, so a dense flow makes orders of
    magnitude more calls than it has distinct arguments. Cache by a hash of the args; $ctCache is cleared
@@ -121,7 +130,15 @@ compileTInvBody[e_, ids_, env_, mask_, nc_] := Which[
     Module[{cs = compileTInv[#, ids, env, mask, nc] & /@ (List @@ e)},
       If[! AllTrue[cs[[All, 2]], NumericQ], Message[MakeNTKernel::eagernn, e]; Abort[]];
       {"add(" <> StringRiffle[MapThread[scaleStrInv, {cs[[All, 1]], cs[[All, 2]]}], ", "] <> ")", 1}],
-  True, {"", e}];
+  (* a genuine scalar coefficient: no builder, the expression IS the scalar *)
+  scalarQ[e],
+    {"", e},
+  (* Anything else still carries a TENSOR head but matched none of the branches above, so it
+     would be emitted as a bare C++ scalar with its indices silently dropped (the ZAAqbq metric
+     leak, see the Power comment above). Fail loudly instead — this is the Lorentz/colour
+     analogue of the Dirac leak guard below. *)
+  True,
+    Message[MakeNTKernel::tleak, Short[e, 6]]; Abort[]];
 
 (* ---- colour/Lorentz sector split for a colour-ENTANGLED Lorentz/Dirac component -----------
    The full quark-gluon vertex basis (AqbqDirect147 structures 4/7) produces a quark-loop
@@ -146,7 +163,7 @@ mergeColNet[a_, b_] := "SUNNet{" <> StringDrop[StringDrop[a, 7], -1] <> "," <> S
    {c1 -> name1, …, Default -> defName}: `ci` are 1-based component indices, `namei` scalar dressing
    symbols; components with no rule (and no Default) vanish. colFacG registers each distinct
    (name, scale) leaf under a small integer id `dr` and bakes a per-component id vector
-   (component → dr, -1 = drop) into the emitted SUN::diag{Fund,Adj}(...,{d0,…}) factor. The C++ seam
+   (component → dr, -1 = drop) into the emitted sun<n>.diag{Fund,Adj}(...,{d0,…}) factor. The C++ seam
    folds the net to a SUNPoly over these ids, and the integrand multiplies in the runtime sum
    Σ_t coeff_t Π name(scale) — an ordinary scalar-dressing token, no array. Reset per generation. *)
 $diagDrTable = <||>; $diagDrByKey = <||>; $diagDrCounter = 0;
@@ -461,18 +478,21 @@ splitColourGroupsInv[factors0_, ids_, env_, mask_, nc_] := Module[
         type). Each head carries its own group rank N as the leading argument, so one net can mix
         several groups (e.g. colour SU(Nc) ⊗ flavour SU(Nf)) — sun_net.hpp's sun_value_cx
         contracts each rank separately and multiplies. Returns {colourNetString, factoredScalar}. *)
+(* Each factor is minted by the per-rank `sun<n>` SUNEnv (declared in the generator main, one per
+   distinct rank appearing in the colour nets), so the group rank is written once, not on every factor.
+   `sun<n>` is the network::SUNEnv analogue of the numeric LorentzEnv. *)
 colFacG[ntSUNf[n_, a_, b_, c_], ids_] :=
-  "SUN::f(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> ToString[ids[c]] <> ")";
+  "sun" <> ToString[n] <> ".f(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> ToString[ids[c]] <> ")";
 colFacG[ntSUNDeltaAdj[n_, a_, b_], ids_] :=
-  "SUN::deltaAdj(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> ")";
-colFacG[ntSUNT[n_, a_, i_, j_], ids_]      := "SUN::T(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
-colFacG[ntSUNDeltaFund[n_, i_, j_], ids_]  := "SUN::deltaFund(" <> ToString[n] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
+  "sun" <> ToString[n] <> ".deltaAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> ")";
+colFacG[ntSUNT[n_, a_, i_, j_], ids_]      := "sun" <> ToString[n] <> ".T(" <> ToString[ids[a]] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
+colFacG[ntSUNDeltaFund[n_, i_, j_], ids_]  := "sun" <> ToString[n] <> ".deltaFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> ")";
 (* per-component diagonal dressings: parse the spec into a per-component dressing-id vector
    (component → dr, -1 = drop; 1-based physics indices) and emit a diag factor carrying it. *)
 colFacG[ntSUNDiagFund[n_, i_, j_, spec_, scale_], ids_] :=
-  "SUN::diagFund(" <> ToString[n] <> "," <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n]] <> ")";
+  "sun" <> ToString[n] <> ".diagFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n]] <> ")";
 colFacG[ntSUNDiagAdj[n_, a_, b_, spec_, scale_], ids_] :=
-  "SUN::diagAdj(" <> ToString[n] <> "," <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n^2 - 1]] <> ")";
+  "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n^2 - 1]] <> ")";
 compileColG[e_, ids_] := Module[{parts = If[Head[e] === Times, List @@ e, {e}], sc, tn},
   (* a colour/flavour factor raised to an integer power (e.g. deltaAdjFlav^2 from a CLOSED meson
      loop: delta_adj(a,b)^2 -> the flavour trace N^2-1) must be expanded into repeated SUNNet
@@ -693,7 +713,7 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := "DSlot{" <> StringRiffle[
         core, scalar and rest SEPARATELY so the contraction stays deferred (rest emitted once, shared
         across a colour group). A dressed chain returns the ntDressedCore[chain, slots] marker instead. *)
 compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
-  {diracFacs, loops, loopStrs, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed,
+  {diracFacs, loops, loopStrs, nEmptyLoops, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed,
    vecOf},
   (* μ -> the momentum q of an ntVec[q,μ] factor, built ONCE per call: tokenOf would otherwise rescan the
      whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
@@ -740,6 +760,18 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
          If[dressed, "dtfix(" <> t <> ")", t]]]];
   (* one token-string per spinor loop (mapped in order so the slot/slashVec side effects accumulate) *)
   loopStrs = (StringRiffle[tokenOf /@ #, ", "]) & /@ loops;
+  (* COLLAPSED (token-free) spinor loops. orderDiracFacs drops δ "connector" factors, so a loop built
+     ONLY from ntDeltaDirac (a bare closed spinor δ-loop, e.g. <P_2,T_2> of AqbqDirect8) yields an
+     EMPTY token list. Downstream, ndetail::split_loops discards empty segments, so such a loop
+     contributes NO factor at all and its tr(1) = 4 is silently lost — a 4x undercount per collapsed
+     loop. (The DRESSED path already compensates for exactly this, restoring 4^(#collapsed loops); see
+     the comment on nloops in numeric_value_dressed_netval. The bare path had no such compensation.)
+     Fix it HERE rather than in C++: only the front end can tell a loop that collapsed to the identity
+     (tr(1) = 4) from a component with no spinor loop at all (a pure-gauge diagram, where 4 must NOT be
+     applied) — by the time the chain reaches the runtime both look like an empty DiracNet. compileDirac
+     is only ever entered with diracFacs =!= {}, so every loop counted here is a genuine spinor loop.
+     Flows whose every loop keeps a fixed γ never collapse => nEmpty == 0 => kernels byte-identical. *)
+  nEmptyLoops = Count[loopStrs, ""];
   restFacs = DeleteCases[factors, Alternatives @@ Join[diracFacs, slashVecs]];
   (* LOUD GUARD against the silent dressed-numerator fall-through. `diracFacs` captures only BARE Dirac
      heads; a dressed propagator-numerator sum (Mq·δ − I·Z·γ·p̸) that was NEITHER distributed
@@ -776,7 +808,7 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
             slotV = "std::vector<DSlot>{" <> StringRiffle[slots, ", "] <> "}"},
       {ntDressedCore[chain, slotV], restCompiled[[2]], restCompiled[[1]]}],
     Module[{core = "DiracNet{" <> StringRiffle[loopStrs, ", dloopsep(), "] <> "}"},
-      {core, restCompiled[[2]], restCompiled[[1]]}]]];
+      {core, restCompiled[[2]] * 4^nEmptyLoops, restCompiled[[1]]}]]];
 
 (* ---- numeric (matrix-product) backend: component table + user symbols (task #22) -------------
    The numeric backend has NO sp-invariant basis: it evaluates scalar products numerically from each
@@ -849,9 +881,11 @@ numericComponents[env_, frame_, symDefs_, unitGroups_:{}] := Module[
       Abort[]]];
   usyms = Sort @ DeleteDuplicates @ Flatten[Variables /@ Values[compExpr]];
   nsym = Length[usyms];
+  (* Emit through the generator's `env` (a LorentzEnv bound to nsym) — the sole construction path for
+     MPoly now that the bare-nsym factories are private. *)
   mpcpp[e_] := Module[{rules = CoefficientRules[e, usyms]},
-    If[rules === {}, "MPoly(" <> ToString[nsym] <> ")",
-      "(" <> StringRiffle[("MPoly::mono(" <> ToString[nsym] <> ",{" <>
+    If[rules === {}, "env.zero()",
+      "(" <> StringRiffle[("env.mono({" <>
           StringRiffle[ToString /@ #[[1]], ","] <> "},Cx{" <> cppNum[#[[2]]] <> ",0})") & /@ rules, " + "] <> ")"]];
   compCpp = Association @ KeyValueMap[#1 -> (mpcpp /@ #2) &, compExpr];
   vfill[s_] := If[KeyExistsQ[symDefs, s], cppFlat[symDefs[s]], SymbolName[s]];
@@ -1091,18 +1125,21 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
   (* component-table init: comp[base][mu] = <MPoly builder>, skipping structural zeros. *)
   compInit = StringJoin @ KeyValueMap[Function[{base, comps},
      StringJoin @ MapIndexed[Function[{s, mu},
-        If[s === "MPoly(" <> bb[nsym] <> ")", "",
+        If[s === "env.zero()", "",
            "  comp[" <> bb[base] <> "][" <> bb[mu[[1]] - 1] <> "] = " <> s <> ";\n"]], comps]], compCpp];
   main = StringJoin[Flatten[{
     "int main(int argc, char** argv){\n",
     "  std::string decor = \"static inline\"; std::string hns = \"" <> nsInner <> "\";\n",
     "  for(int a=1;a<argc;++a){ std::string s=argv[a]; if(s==\"-d\"&&a+1<argc) decor=argv[++a]; else if(s==\"-n\"&&a+1<argc) hns=argv[++a]; }\n",
     "  const int nsym = " <> bb[nsym] <> ";\n",
-    "  std::vector<std::array<MPoly,4>> comp(" <> bb[maxBase + 1] <> ", {MPoly(nsym),MPoly(nsym),MPoly(nsym),MPoly(nsym)});\n",
-    compInit,
-    "  std::vector<std::string> symNames = {" <> StringRiffle[("\"" <> # <> "\"") & /@ symNames, ","] <> "};\n",
+    (* units is emitted BEFORE the LorentzEnv because the env binds both nsym and the unit groups;
+       comp/atomDen and the trace entry points are then built through `env`. *)
     "  std::vector<std::vector<int>> units = {" <>
       StringRiffle[("{" <> StringRiffle[bb /@ #, ","] <> "}") & /@ unitG, ","] <> "};\n",
+    "  LorentzEnv env(nsym, units);\n",
+    "  std::vector<std::array<MPoly,4>> comp(" <> bb[maxBase + 1] <> ", {env.zero(),env.zero(),env.zero(),env.zero()});\n",
+    compInit,
+    "  std::vector<std::string> symNames = {" <> StringRiffle[("\"" <> # <> "\"") & /@ symNames, ","] <> "};\n",
     (* the DISTINCT-trace tables (see the global sub-term dedup). Flat, indexed by trace id: a plain
        trace has an empty chain (contract via sdn[k]), a dressed one uses sdch[k]/sdsl[k] via
        numeric_value_dressed_netval. sdch/sdsl are emitted only when the kernel has dressed nets. *)
@@ -1122,7 +1159,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     (* the projector atom denominators are keyed by ATOM ID (e.inv/e.invS), not by position, and each
        id is filled idempotently — and the distinct traces cover every lnet that occurs. So scanning
        the deduped table gives the same atomDen as scanning every occurrence did. *)
-    "  auto atomDen = collect_atom_denoms(nsym, sln, comp);\n",
+    "  auto atomDen = env.collect_atom_denoms(sln, comp);\n",
     "  for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels\n",
     "  const bool ntprof = (std::getenv(\"NT_GEN_PROFILE\")!=nullptr);\n",
     "  unsigned hw=std::thread::hardware_concurrency(); if(!hw)hw=4u;\n",
@@ -1141,22 +1178,26 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "  auto trace=[&](int k)->" <> PT <> "{\n",
     If[hasDressed,
       "    return sdch[k].empty()\n" <>
-      "      ? DPoly::fromMPoly(numeric_value_netval(nsym, sdn[k], sln[k], comp, atomDen, units))\n" <>
-      "      : numeric_value_dressed_netval(nsym, sdch[k], sdsl[k], sln[k], comp, atomDen, units);\n",
-      "    return numeric_value_netval(nsym, sdn[k], sln[k], comp, atomDen, units);\n"],
+      "      ? env.fromMPoly(env.numeric_value_netval(sdn[k], sln[k], comp, atomDen))\n" <>
+      "      : env.numeric_value_dressed_netval(sdch[k], sdsl[k], sln[k], comp, atomDen);\n",
+      "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"],
     "  };\n",
     (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (numeric/trace_fold.hpp). *)
     "  auto tA=std::chrono::steady_clock::now();\n",
-    "  std::vector<" <> PT <> "> T = contract_traces<" <> PT <> ">(nsym, nCache, hw, trace);\n",
+    "  std::vector<" <> PT <> "> T = env.contract_traces<" <> PT <> ">(nCache, hw, trace);\n",
     "  if(ntprof){ std::size_t tb=0; for(auto &p: T) tb+=poly_bytes(p);\n",
     "    std::fprintf(stderr,\"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\\n\",\n",
     "      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), hw); }\n",
     (* PHASE B — each net folds its traces with its scalars, as a balanced tree. Traces beyond nCache
        are recomputed here; by construction those are referenced once, so nothing is computed twice. *)
     "  auto tB=std::chrono::steady_clock::now();\n",
-    "  std::vector<" <> PT <> "> mp = fold_nets<" <> PT <> ">(nsym, sidx, dsc, T, nCache, hw, trace);\n",
+    "  std::vector<" <> PT <> "> mp = env.fold_nets<" <> PT <> ">(sidx, dsc, T, nCache, hw, trace);\n",
     "  if(ntprof) std::fprintf(stderr,\"[num] phase B: fold %d nets, %.1f s (W=%u)\\n\", " <> bb[nNet] <>
       ", std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), hw);\n"}]],
+    (* one SUNEnv per distinct group rank appearing in the colour nets (colFacG emits `sun<n>.` factors),
+       so the rank is written once. Scan the assembled net strings for the `sun<digits>.` tokens. *)
+    StringJoin["  SUNEnv sun" <> # <> "(" <> # <> ");\n" & /@
+      DeleteDuplicates@Flatten@StringCases[colourNets, "sun" ~~ r : DigitCharacter .. ~~ "." :> r]],
     "  std::vector<SUNNet> colnets = {" <> StringRiffle[colourNets, ","] <> "};\n",
     "  std::vector<numtracer::Cx> colv(" <> bb[nNet] <> "); for(int i=0;i<" <> bb[nNet] <> ";++i) colv[i]=sun_value_cx(colnets[i]);\n",
     "  std::vector<std::vector<int>> groups = {" <>
@@ -1168,8 +1209,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "  std::vector<int> realOnly = {" <> StringRiffle[
        If[Length[realOnlyG] === nGrp, (If[TrueQ[#], "1", "0"]) & /@ realOnlyG, Table["0", {nGrp}]], ","] <> "};\n",
     If[hasDressed,
-      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc(nsym); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n",
-      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc(nsym); for(int d: grp) acc = acc + mp[d]*MPoly::constant(nsym, colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n"],
+      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n",
+      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc = env.zero(); for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n"],
     "  FillFormulas fm;\n",
     "  fm.var = [](int id)->std::string{\n",
     Table["    if(id==" <> bb[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],
@@ -1362,14 +1403,42 @@ resolveIncludeDir[] := Module[{envDir, dir, pathsFile},
    `<prefix>/lib` sibling of the include dir, and the in-tree `<repo>/numtracer/build` default build
    dir. Returns the path, or $Failed — in which case the generator falls back to a self-contained
    header-only compile (`-DNUMTRACER_HEADER_ONLY=1`), which still works but pays the old compile floor. *)
-resolveGenLib[incDir_] := Module[{env, base, cands},
+(* The generator compiles gen_*.cpp against the CURRENT headers in incDir but LINKS the prebuilt
+   archive. Those two must come from the same source vintage: the engine's types (MPoly's storage and
+   its construction path, SUNNet, the fold buffers) are defined in the headers and compiled into the
+   archive, so a header edit that is not followed by a library rebuild is a silent ODR/ABI mismatch —
+   the generator RUNS, emits a plausible kernels.hh, and the numbers are wrong. Nothing downstream can
+   catch it: kernel.hh only NAMES the traces (s1..sN) and is emitted by the Mathematica layer, so it
+   stays byte-identical while every trace body in kernels.hh changes underneath it — which is exactly
+   how a stale archive silently corrupted a flow's ZA4 and survived a "kernel.hh unchanged" check.
+   mtime is a coarse proxy for provenance, but the failure it guards is silent and total, so err loud:
+   a library older than any header it was built from is never trustworthy. *)
+MakeNTKernel::stalelib = "The prebuilt engine archive\n  `1`\nis OLDER than the header\n  `2`\nthat \
+the generator will compile against. Linking them mixes two source vintages of the engine's types \
+(MPoly/SUNNet/fold buffers) — an ODR/ABI mismatch that SILENTLY produces wrong traces in kernels.hh \
+while leaving kernel.hh byte-identical. Rebuild the library first, e.g.\n  cmake --build \
+<repo>/numtracer/build --target NumTracer\nthen regenerate. (Set NT_GEN_LIB to a specific archive, or \
+NT_ALLOW_STALE_LIB=1 to override — the latter is almost never right.)";
+
+genLibStaleQ[lib_, incDir_] := Module[{hdrs, newest},
+  hdrs = FileNames["*.hpp" | "*.h", incDir, Infinity];
+  If[hdrs === {}, Return[False]];
+  newest = Max[AbsoluteTime /@ (FileDate[#, "Modification"] & /@ hdrs)];
+  AbsoluteTime[FileDate[lib, "Modification"]] < newest];
+
+resolveGenLib[incDir_] := Module[{env, base, cands, lib},
   env = Environment["NT_GEN_LIB"];
-  If[StringQ[env] && FileExistsQ[env], Return[env]];
-  base = DirectoryName[incDir];   (* <prefix> (installed) or <repo>/numtracer (in-tree): parent of include/ *)
-  cands = {
-    FileNameJoin[{base, "lib", "libNumTracer.a"}],      (* installed layout *)
-    FileNameJoin[{base, "build", "libNumTracer.a"}]};   (* in-tree default build dir *)
-  SelectFirst[cands, FileExistsQ, $Failed]];
+  lib = If[StringQ[env] && FileExistsQ[env], env,
+    base = DirectoryName[incDir];  (* <prefix> (installed) or <repo>/numtracer (in-tree): parent of include/ *)
+    cands = {
+      FileNameJoin[{base, "lib", "libNumTracer.a"}],      (* installed layout *)
+      FileNameJoin[{base, "build", "libNumTracer.a"}]};   (* in-tree default build dir *)
+    SelectFirst[cands, FileExistsQ, $Failed]];
+  If[lib =!= $Failed && Environment["NT_ALLOW_STALE_LIB"] === $Failed && genLibStaleQ[lib, incDir],
+    Module[{hdrs = FileNames["*.hpp" | "*.h", incDir, Infinity], newest},
+      newest = First @ SortBy[hdrs, -AbsoluteTime[FileDate[#, "Modification"]] &];
+      Message[MakeNTKernel::stalelib, lib, newest]; Abort[]]];
+  lib];
 
 (* ---- semantic complexQ: probe whether the imaginary part actually vanishes -------------------
    The syntactic `complexQ = !FreeQ[Diagrams, Complex]` only sees that SOME diagram coefficient carries
@@ -1484,7 +1553,7 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
         True, "RePart"]];
 
 (* ---- group-diagonal dressing fold: SUNPoly via the validated C++ engine ---------------------
-   Each diag-dressed colour-net STRING (carrying SUN::diag{Fund,Adj}(...,{d0,…}) factors) is folded
+   Each diag-dressed colour-net STRING (carrying sun<n>.diag{Fund,Adj}(...,{d0,…}) factors) is folded
    by sun_value_dressed in a tiny build-time program (the same emit/compile/run seam as the imaginary
    probe), returning per net a list of terms {coeffRe, coeffIm, {dr, ...}} (a flat list of dressing
    ids, repetition = power). Reuses the numeric engine verbatim, so the per-component colour weights
@@ -1495,7 +1564,11 @@ diagColPolys[colnetStrs_, includeDir_] := Module[
   src = StringJoin[
     "#include \"numtracer/network/sun_net.hpp\"\n#include <cstdio>\n#include <vector>\n",
     "using namespace numtracer; using namespace numtracer::network;\n",
-    "int main(){\n  std::vector<SUNNet> nets = {" <> StringRiffle[colnetStrs, ", "] <> "};\n",
+    "int main(){\n",
+    (* one SUNEnv per distinct rank in the diag colour nets (colFacG emits `sun<n>.diag…` factors). *)
+    StringJoin["  SUNEnv sun" <> # <> "(" <> # <> ");\n" & /@
+      DeleteDuplicates@Flatten@StringCases[colnetStrs, "sun" ~~ r : DigitCharacter .. ~~ "." :> r]],
+    "  std::vector<SUNNet> nets = {" <> StringRiffle[colnetStrs, ", "] <> "};\n",
     "  for(std::size_t n=0;n<nets.size();++n){\n",
     "    SUNPoly p = sun_value_dressed(nets[n]);\n",
     "    std::printf(\"NET %zu %zu\\n\", n, p.size());\n",
@@ -1736,7 +1809,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        `Σ_t coeff_t Π name(scale)` — ordinary scalar-dressing tokens — multiplied into the integrand.
        The Dirac/Lorentz trace is still computed ONCE, not a diagram per component. *)
     diagTokExpr = Table[1, {Length[colourNets]}];
-    dressedIdx = Select[Range[Length[colourNets]], StringContainsQ[colourNets[[#]], "SUN::diag"] &];
+    dressedIdx = Select[Range[Length[colourNets]], StringContainsQ[colourNets[[#]], ".diag"] &];
     If[dressedIdx =!= {},
       Module[{polys, resolveScale,
               incDir = OptionValue["IncludeDir"] /. Automatic :> resolveIncludeDir[]},

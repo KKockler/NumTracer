@@ -17,17 +17,18 @@ using numtracer::Cx;
 
 int main() {
   // We treat the 8 components of two momenta p, q as symbols 0..7:
-  //   MPoly::var(nsym, i) is "the i-th symbol". p_mu = symbol mu, q_mu = symbol 4+mu.
+  //   env.var(i) is "the i-th symbol". p_mu = symbol mu, q_mu = symbol 4+mu.
   const int nsym = 8;
+  nm::LorentzEnv env(nsym);
   std::array<nm::MPoly, 4> p, q;
   for (int mu = 0; mu < 4; ++mu) {
-    p[static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, mu);
-    q[static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
+    p[static_cast<std::size_t>(mu)] = env.var(mu);
+    q[static_cast<std::size_t>(mu)] = env.var(4 + mu);
   }
 
-  // slashC(nsym, comp) = sum_mu comp[mu] * gamma^mu : the slashed momentum as a 4x4 of MPoly.
-  nm::Mat4 ps = nm::slashC(nsym, p);
-  nm::Mat4 qs = nm::slashC(nsym, q);
+  // env.slashC(comp) = sum_mu comp[mu] * gamma^mu : the slashed momentum as a 4x4 of MPoly.
+  nm::Mat4 ps = env.slashC(p);
+  nm::Mat4 qs = env.slashC(q);
 
   // tr(p/ q/) is the trace of the matrix product. The result is a polynomial in the 8 symbols.
   nm::MPoly tr = nm::mtrace(nm::matmul(ps, qs));

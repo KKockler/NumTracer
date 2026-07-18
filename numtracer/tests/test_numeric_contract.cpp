@@ -12,6 +12,7 @@
 // and compared to the numeric truth to ≤ 1e-12. Build via the test CMake (adds -I include).
 #include "oracle/dense_trace.hpp"          // chiral_gamma_trace<K> (test-only γ-trace oracle)
 #include "numtracer/dirac/dirac_data.hpp"  // kGamma
+#include "numtracer/numeric/env.hpp"
 #include "numtracer/numeric/numeric_contract.hpp"
 
 #include <array>
@@ -98,14 +99,15 @@ int main()
   std::printf("== A: all-slash chains tr(p1..pK) vs chiral_gamma_trace ==\n");
   for (int K : {2, 3, 4, 5, 6, 7, 8, 9, 10}) {
     const int nsym = 4 * K;
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(static_cast<std::size_t>(K));
     for (int m = 0; m < K; ++m)
       for (int mu = 0; mu < 4; ++mu)
-        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 * m + mu);
+        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
     network::DiracNet chain;
     for (int m = 0; m < K; ++m)
       chain.push_back(network::dslash({{1.0, m}}));
-    nm::MPoly tr = nm::numeric_value(nsym, chain, /*lorentz*/ {}, comp, /*atomDen*/ {});
+    nm::MPoly tr = env.numeric_value(chain, /*lorentz*/ {}, comp, /*atomDen*/ {});
     // random point
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
@@ -156,14 +158,15 @@ int main()
   std::printf("\n== B: tr(g^mu p g_mu q) via metric closure ==\n");
   {
     const int nsym = 8; // p:0..3, q:4..7
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(2);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, mu);
-      comp[1][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
+      comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
     network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101), network::dslash({{1.0, 1}})};
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::MPoly tr = nm::numeric_value(nsym, chain, lor, comp, {});
+    nm::MPoly tr = env.numeric_value(chain, lor, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
@@ -185,21 +188,22 @@ int main()
   std::printf("\n== C: P(k) contracting tr(g^mu p g^nu q) ==\n");
   auto runProj = [&](bool monomial) {
     const int nsym = 10; // p:0..3, q:4..7, l1:8, l2:9
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, mu);
-      comp[1][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
+      comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
-    comp[2][0] = nm::MPoly::var(nsym, 8);                // k_0 = l1
-    if (!monomial) comp[2][1] = nm::MPoly::var(nsym, 9); // k_1 = l2 (shifted-like → non-monomial k²)
+    comp[2][0] = env.var(8);                // k_0 = l1
+    if (!monomial) comp[2][1] = env.var(9); // k_1 = l2 (shifted-like → non-monomial k²)
     // atomDen[0] = k² = Σ comp[2][μ]²
-    nm::MPoly k2(nsym);
+    nm::MPoly k2 = env.zero();
     for (int mu = 0; mu < 4; ++mu)
       k2 = k2 + comp[2][static_cast<std::size_t>(mu)] * comp[2][static_cast<std::size_t>(mu)];
     std::vector<nm::MPoly> atomDen = {k2};
     network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101), network::dslash({{1.0, 1}})};
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nprojT(100, 101, {{1.0, 2}}, 0)}}};
-    nm::MPoly tr = nm::numeric_value(nsym, chain, lor, comp, atomDen);
+    nm::MPoly tr = env.numeric_value(chain, lor, comp, atomDen);
     // does any monomial still carry the atom?
     bool hasAtom = false;
     for (const auto &[m, c] : tr.t)
@@ -245,18 +249,19 @@ int main()
   std::printf("\n== D: numeric_value_netval over network::NetVal (generator path) ==\n");
   {
     const int nsym = 10;
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, mu);
-      comp[1][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
+      comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
-    comp[2][0] = nm::MPoly::var(nsym, 8);
-    comp[2][1] = nm::MPoly::var(nsym, 9); // non-monomial k² → atom survives
+    comp[2][0] = env.var(8);
+    comp[2][1] = env.var(9); // non-monomial k² → atom survives
     network::DiracNet chain = {network::dgamma(100), network::dslash({{1.0, 0}}), network::dgamma(101), network::dslash({{1.0, 1}})};
     // Lorentz net via the SAME inv builders the generator emits: P(k)_{100,101}, k = vec id 2, 1/k² env id 7.
     network::NetVal lor = network::projT(100, 101, 2, 7);
-    std::vector<nm::MPoly> atomDen = nm::collect_atom_denoms(nsym, {lor}, comp);
-    nm::MPoly tr = nm::numeric_value_netval(nsym, chain, lor, comp, atomDen);
+    std::vector<nm::MPoly> atomDen = env.collect_atom_denoms({lor}, comp);
+    nm::MPoly tr = env.numeric_value_netval(chain, lor, comp, atomDen);
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
@@ -286,21 +291,22 @@ int main()
   std::printf("\n== E: 3-free-leg chain vs dirac_value reference (asymmetric intermediate) ==\n");
   {
     const int nsym = 12; // p0:0-3, p1:4-7, k:8 (loop dir), m:9..11 spare
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu) {
-      comp[0][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, mu);
-      comp[1][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
+      comp[0][static_cast<std::size_t>(mu)] = env.var(mu);
+      comp[1][static_cast<std::size_t>(mu)] = env.var(4 + mu);
     }
-    comp[2][0] = nm::MPoly::var(nsym, 8);
-    comp[2][1] = nm::MPoly::var(nsym, 9); // non-monomial k
+    comp[2][0] = env.var(8);
+    comp[2][1] = env.var(9); // non-monomial k
     network::DiracNet chain = {network::dgamma(50),         network::dslash({{1.0, 0}}), network::dgamma(51),
                            network::dslash({{1.0, 1}}), network::dgamma(52),         network::dslash({{1.0, 0}})};
     // net contracting legs 50,51 (one projector) and 52 (projector to an aux leg closed by a vector).
     network::NetVal net = network::contract(network::projT(50, 51, 2, 90), network::projT(52, 60, 2, 91), network::vec(60, 0));
-    std::vector<nm::MPoly> atomDen = nm::collect_atom_denoms(nsym, {net}, comp);
-    nm::MPoly mine = nm::numeric_value_netval(nsym, chain, net, comp, atomDen);
+    std::vector<nm::MPoly> atomDen = env.collect_atom_denoms({net}, comp);
+    nm::MPoly mine = env.numeric_value_netval(chain, net, comp, atomDen);
     network::NetVal full = network::contract(network::dirac_value(chain, 900000), net);
-    nm::MPoly ref = nm::numeric_value_netval(nsym, network::DiracNet{}, full, comp, atomDen);
+    nm::MPoly ref = env.numeric_value_netval(network::DiracNet{}, full, comp, atomDen);
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
@@ -321,11 +327,12 @@ int main()
   std::printf("\n== F: gamma5 chains vs direct 4x4 (nGamma5) ==\n");
   auto g5closed = [&](const char *tag, const network::DiracNet &chain, int K, auto buildTruth) {
     const int nsym = 4 * K;
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(static_cast<std::size_t>(K));
     for (int m = 0; m < K; ++m)
       for (int mu = 0; mu < 4; ++mu)
-        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 * m + mu);
-    nm::MPoly tr = nm::numeric_value(nsym, chain, {}, comp, {});
+        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
+    nm::MPoly tr = env.numeric_value(chain, {}, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
@@ -354,10 +361,11 @@ int main()
   //     tr(γ5 γ^μ p̸ γ_μ q̸ r̸ s̸) = Σ_μ tr(γ5 γ^μ p̸ γ^μ q̸ r̸ s̸)  (= −2 tr(γ5 p̸ q̸ r̸ s̸) ≠ 0).
   {
     const int nsym = 16; // p:0-3 q:4-7 r:8-11 s:12-15
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(4);
     for (int m = 0; m < 4; ++m)
       for (int mu = 0; mu < 4; ++mu)
-        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 * m + mu);
+        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
     network::DiracNet chain = {network::dg5(),
                            network::dgamma(100),
                            network::dslash({{1.0, 0}}),
@@ -366,7 +374,7 @@ int main()
                            network::dslash({{1.0, 2}}),
                            network::dslash({{1.0, 3}})};
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::MPoly tr = nm::numeric_value(nsym, chain, lor, comp, {});
+    nm::MPoly tr = env.numeric_value(chain, lor, comp, {});
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);
@@ -394,10 +402,11 @@ int main()
   std::printf("\n== G: commutator token dcomm vs explicit [X,Y] 4x4 (free/free, slash/slash, free/slash) ==\n");
   {
     const int nsym = 12; // p:0-3, q:4-7, r:8-11  (p,q close the chain; r is leg-B's slash momentum)
+    nm::LorentzEnv env(nsym);
     std::vector<std::array<nm::MPoly, 4>> comp(3);
     for (int mu = 0; mu < 4; ++mu)
       for (int m = 0; m < 3; ++m)
-        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 * m + mu);
+        comp[static_cast<std::size_t>(m)][static_cast<std::size_t>(mu)] = env.var(4 * m + mu);
     std::vector<double> x(static_cast<std::size_t>(nsym));
     for (double &v : x)
       v = U(rng);

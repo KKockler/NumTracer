@@ -20,6 +20,7 @@
 // spatial components are random — a genuinely broken-O(4) Dirac × projector trace. Prints
 // ALL TESTS PASSED / exits non-zero on failure.
 #include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/numeric/env.hpp"
 
 #include <array>
 #include <cmath>
@@ -39,13 +40,14 @@ constexpr double ZAE = 1.3, ZAM = 0.7; // placeholder transverse/longitudinal gl
 
 int main()
 {
+  nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(2);
   for (int mu = 0; mu < 4; ++mu) {
-    comp[pVid][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 0 + mu);
-    comp[lVid][static_cast<std::size_t>(mu)] = nm::MPoly::var(nsym, 4 + mu);
+    comp[pVid][static_cast<std::size_t>(mu)] = env.var(0 + mu);
+    comp[lVid][static_cast<std::size_t>(mu)] = env.var(4 + mu);
   }
   // l² (atom 0) and spatial |l⃗|² (atom 1, component 0 = temporal dropped).
-  nm::MPoly l2(nsym), ls2(nsym);
+  nm::MPoly l2 = env.zero(), ls2 = env.zero();
   for (int mu = 0; mu < 4; ++mu)
     l2 = l2 + comp[lVid][static_cast<std::size_t>(mu)] * comp[lVid][static_cast<std::size_t>(mu)];
   for (int mu = 1; mu < 4; ++mu)
@@ -59,7 +61,7 @@ int main()
   const nm::NNet gluon = {nm::NTerm{Cx{ZAE, 0}, {nm::nprojE(100, 101, {{1.0, lVid}}, 0, 1)}},
                           nm::NTerm{Cx{ZAM, 0}, {nm::nprojM(100, 101, {{1.0, lVid}}, 1)}}};
 
-  const nm::MPoly N = nm::numeric_value(nsym, chain, gluon, comp, atomDen);
+  const nm::MPoly N = env.numeric_value(chain, gluon, comp, atomDen);
 
   std::mt19937_64 rng(20260622);
   std::uniform_real_distribution<double> Usp(-2.0, 2.0), UT(0.05, 0.6);

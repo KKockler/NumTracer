@@ -4,7 +4,7 @@
 // C_F delta_ik with C_F = (N^2-1)/2N = 4/3 for SU(3). A colour network with no free indices is
 // just a number: numtracer::network::sun_value_cx contracts it over the typed-out SU(N)
 // tables. We compute C_F this way and check it against its known closed form.
-#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_cx + SUN::f / SUN::T / SUN::deltaAdj / SUN::deltaFund
+#include <numtracer.hpp> // the whole NumTracer API — here: sun_value_cx + SUNEnv (f / T / deltaAdj / deltaFund builders)
 
 #include <cmath>
 #include <cstdio>
@@ -20,16 +20,20 @@ enum {
 };
 
 int main() {
-  // SUN::T(g, a, A, B) = (T^a)_{AB} in SU(g): adjoint index a, fundamental row A, column B.
+  // Bind the SU(N) group rank once in a SUNEnv, so the factor builders don't repeat it. `sun3` mints
+  // factors for SU(3); a flavour SU(2) sector would use a separate `SUNEnv sun2(2)`.
+  net::SUNEnv sun3(3);
+
+  // sun3.T(a, A, B) = (T^a)_{AB} in SU(3): adjoint index a, fundamental row A, column B.
   // Sharing the gluon index a sums it; the fundamental labels A -> B -> A close the
   // quark line into a loop. The closed trace is tr(T^a T^a) = (N^2-1)/2 = C_F * N.
-  net::SUNNet trTT = {net::SUN::T(3, a, A, B), net::SUN::T(3, a, B, A)};
+  net::SUNNet trTT = {sun3.T(a, A, B), sun3.T(a, B, A)};
   const Cx t = net::sun_value_cx(trTT); // = 4 for SU(3)
   const double CF = t.re / 3.0;        // C_F = tr / N = 4 / 3
 
   // A second classic, fully closed: f^{abc} f^{abc} = N(N^2-1) = 24 for SU(3).
-  // SUN::f(g, a, b, c) = f^{abc}; the two copies share all three adjoint indices a, b, c.
-  const Cx ff = net::sun_value_cx({net::SUN::f(3, a, b, c), net::SUN::f(3, a, b, c)});
+  // sun3.f(a, b, c) = f^{abc}; the two copies share all three adjoint indices a, b, c.
+  const Cx ff = net::sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, c)});
 
   std::printf("tr(T^a T^a)      = %g   (expect 4)\n", t.re);
   std::printf("C_F = tr / N     = %g   (expect 4/3 = %g)\n", CF, 4.0 / 3.0);

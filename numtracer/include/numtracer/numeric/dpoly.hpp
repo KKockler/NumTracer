@@ -53,16 +53,31 @@ namespace numtracer::numeric
     return r;
   }
 
+  // The `nsym`-carrying construction API is closed behind these friends, exactly as for @ref MPoly:
+  // @ref LorentzEnv is the sole user-facing path and @ref DPolyFactory the internal attorney for the
+  // trusted contraction/trace-fold code. (`mpoly.hpp`, included above, already forward-declares
+  // @ref LorentzEnv; declare the DPoly attorney here.)
+  struct DPolyFactory;
+
   /// @brief A dressing polynomial: sorted-by-@ref DMono, like terms combined, no empty `MPoly` coeffs.
   struct DPoly {
     int nsym = 0;
     std::vector<std::pair<DMono, MPoly>> t; ///< sorted by DMono; each MPoly is non-empty
 
-    DPoly() = default;
-    explicit DPoly(int ns) : nsym(ns) {}
+    // Sanctioned construction paths (see @ref MPoly). The in-header DPoly arithmetic keeps constructing
+    // results directly, so the dressing hot path is unchanged.
+    friend class LorentzEnv;
+    friend struct DPolyFactory;
+    friend DPoly operator+(const DPoly &a, const DPoly &b);
+    friend DPoly operator*(const DPoly &a, const DPoly &b);
+    friend DPoly scaleCx(const DPoly &a, Cx c);
 
-    bool empty() const { return t.empty(); }
-    int size() const { return static_cast<int>(t.size()); }
+    DPoly() = default;
+
+  private:
+    // Bare-`nsym` construction — reachable only through @ref LorentzEnv / @ref DPolyFactory (friends);
+    // see @ref MPoly. The empty default ctor above stays public.
+    explicit DPoly(int ns) : nsym(ns) {}
 
     /// A `DPoly` that is just a single un-dressed kinematic polynomial (empty dressing monomial).
     /// The no-dressing case: lowering this is byte-for-byte the plain-`MPoly` path.
@@ -72,6 +87,10 @@ namespace numtracer::numeric
       if (!p.empty()) d.t.push_back({DMono{}, p});
       return d;
     }
+
+  public:
+    bool empty() const { return t.empty(); }
+    int size() const { return static_cast<int>(t.size()); }
 
     /// Accumulate `p` into the coefficient of dressing monomial `d` (kept sorted; `d` already sorted).
     /// Drops the term if the resulting `MPoly` is empty (full cancellation).
@@ -87,6 +106,13 @@ namespace numtracer::numeric
         t.insert(it, {d, p});
       }
     }
+  };
+
+  /// @brief Internal attorney re-exposing the private @ref DPoly factories to the trusted engine code
+  ///        (the dressed contraction / trace-fold), mirroring @ref MPolyFactory. Not public API.
+  struct DPolyFactory {
+    static DPoly zero(int ns) { return DPoly(ns); }
+    static DPoly fromMPoly(const MPoly &p) { return DPoly::fromMPoly(p); }
   };
 
   inline DPoly operator+(const DPoly &a, const DPoly &b)
@@ -135,7 +161,7 @@ namespace numtracer::numeric
   {
     DPoly r(a.nsym);
     if (c.re == 0 && c.im == 0) return r;
-    const MPoly cc = MPoly::constant(a.nsym, c);
+    const MPoly cc = MPolyFactory::constant(a.nsym, c);
     r.t.reserve(a.t.size());
     for (const auto &[d, mp] : a.t) {
       MPoly s = mp * cc;
