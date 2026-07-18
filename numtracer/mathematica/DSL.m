@@ -17,7 +17,7 @@
 tensorQ[_ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
         _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
         _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
-        _ntSUNDiagFund | _ntSUNDiagAdj | _ntDressedNum] = True;
+        _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum] = True;
 tensorQ[_] = False;
 
 (* The 4 SU(N) group heads carry their rank N as the FIRST argument, so colour SU(Nc),
@@ -32,7 +32,7 @@ tensorQ[_] = False;
    by sun_value_dressed at codegen time. *)
 adjointSUNQ[_ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj] = True;  (* group-adjoint heads (bridge with Lorentz) *)
 adjointSUNQ[_] = False;
-fundamentalSUNQ[_ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund] = True;   (* group-fundamental heads (quark-line) *)
+fundamentalSUNQ[_ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntEpsFund] = True;   (* group-fundamental heads (quark-line) *)
 fundamentalSUNQ[_] = False;
 
 (* The SU(N) rank a group head builds against: its leading argument. *)
@@ -59,6 +59,8 @@ labelsOf[ntSUNDeltaFund[_, i_, j_]]  := {i, j};
 labelsOf[ntSUNDiagFund[_, i_, j_, _, _]] := {i, j};  (* per-component-dressed fundamental δ *)
 labelsOf[ntSUNDiagAdj[_, a_, b_, _, _]]  := {a, b};  (* per-component-dressed adjoint δ *)
 labelsOf[ntEpsilon[a_, b_, c_, d_]]  := {a, b, c, d};
+(* SU(N) fundamental Levi-Civita: N indices, all of them contraction labels. *)
+labelsOf[h_ntEpsFund] := Rest[List @@ h];
 (* ntDressedNum[options, din, dout] — a dressed propagator numerator kept EAGER (symbolic dressing
    collection). `options` is a tensor-FREE list of {coeffExpr, spec} (spec = {"ident"} | {"slash",vlc})
    so it exposes only its spinor in/out labels; the dressing collection is folded in C++ (one DPoly
@@ -103,6 +105,12 @@ needsInvSQ[_]                  = False;
    the second occurrence and insert the matching identity (Lorentz metric for a
    Lorentz index, adjoint delta for a colour index): P^mu_mu = P^{mu nu} d_{mu nu}.
    This keeps every index appearing on two distinct tensors, as the engine needs. *)
+(* NOTE on Plus: tensorQ[Plus[...]] is False (head-matching with a catch-all), so a SUM vertex takes
+   the `! tensorQ` branch and passes through untouched — a repeated index INSIDE a summand is then
+   never split. That is safe only because a self-trace within one summand of an eager sum has never
+   been produced by a flow; labelCensus's Plus branch would flag the resulting free-index mismatch if
+   it were. Left as-is deliberately: relabelling inside a summand would have to keep every summand's
+   free-index set aligned (the et::add precondition), which this factor-local rewrite cannot see. *)
 splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
   Function[f, If[! tensorQ[f], AppendTo[res, f],
     (* The connecting identity reuses the SAME group rank N as the head it closes: an
@@ -126,7 +134,7 @@ splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
 scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
                        _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
                        _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
-                       _ntSUNDiagFund | _ntSUNDiagAdj | _ntDressedNum];
+                       _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum];
 
 (* The free (uncontracted) index labels of a tensor (sub)expression. A product sums
    indices that appear twice (free = appear once); a sum's summands share free indices
@@ -365,6 +373,210 @@ expandBridges[e : Power[b_Plus, n_Integer]] /; n >= 2 && distributeQ[b] :=
   (Message[NumTrace::bridgepow, n, Short[b, 6]]; Abort[]);
 expandBridges[e_] := e;
 
+(* ---- fixed Lorentz components (the finite-T γ0/γi split) ---------------------
+
+   The four-quark Fierz bases (and any finite-T 3+1 split) are written with Lorentz indices pinned
+   to a CONCRETE component: ntGamma[0, d1, d2] is γ^0, not "γ^μ with a label named 0". The DSL's
+   label machinery has no such notion — labelsOf[ntGamma[mu,...]] returns {mu,...} unconditionally
+   — so that literal 0 was read as an ordinary contraction label, appeared in a dozen factors at
+   once, and checkLabels aborted with the (correct but baffling) `privclash`.
+
+   The fix is a REWRITE, not new machinery: a fixed component is a contraction with the constant
+   unit basis vector e_i, so
+
+       γ^i          ->  ntGamma[μ, d1, d2] ntVec[ntUnitVec[i], μ]     (μ a fresh private dummy)
+       g^{i ν}      ->  ntVec[ntUnitVec[i], ν]
+       g^{i j}      ->  δ_ij                                          (Euclidean metric)
+       σ's free leg ->  the existing SLASH leg against ntUnitVec[i]
+
+   ntUnitVec[i] is an ordinary MOMENTUM symbol (momentumOf picks it up, buildEnv gives it a Base),
+   whose frame components NumTrace injects as UnitVector[4, i+1]. Downstream nothing changes:
+   compileDirac's vecOf already turns a γ whose μ carries an ntVec into `dslash({{1.0, base}})`,
+   which is exactly γ contracted with that vector. So this needs NO new DFac kind and NO C++ change
+   — a fixed-component γ IS a slash, and frameMask prunes the three zero components for free.
+
+   Applied BEFORE expandBridges/checkLabels, so no integer Lorentz slot ever reaches the label
+   machinery and tensorQ/labelsOf/freeIdx/labelCensus stay untouched. (ntVec[q, i_Integer] is NOT
+   rewritten: it is already the scalar component q_i, resolved by the frame in the coefficient.) *)
+
+(* Each rewritten γ needs its OWN dummy — Unique[] inside the RHS fires once per match. *)
+expandFixedComponents[e_] := e //. {
+  ntGamma[i_Integer, d1_, d2_] :>
+    With[{mu = Unique["fixc$"]}, ntGamma[mu, d1, d2] ntVec[ntUnitVec[i], mu]],
+  ntMetric[i_Integer, j_Integer] :> If[i === j, 1, 0],
+  ntMetric[i_Integer, nu_] :> ntVec[ntUnitVec[i], nu],
+  ntMetric[nu_, i_Integer] :> ntVec[ntUnitVec[i], nu],
+  ntSigma[{"free", i_Integer}, legB_, d1_, d2_] :>
+    ntSigma[{"slash", {{1, ntUnitVec[i]}}}, legB, d1, d2],
+  ntSigma[legA_, {"free", i_Integer}, d1_, d2_] :>
+    ntSigma[legA, {"slash", {{1, ntUnitVec[i]}}}, d1, d2],
+  ntEpsilon[a___, i_Integer, b___] :>
+    With[{mu = Unique["fixc$"]}, ntEpsilon[a, mu, b] ntVec[ntUnitVec[i], mu]]};
+
+(* The unit vectors a rewritten network needs, as frame entries. Component i (0-based, 0 = the
+   temporal/Matsubara direction) is UnitVector[4, i+1]. *)
+unitVecFrame[net_] := Association[
+  (# -> UnitVector[4, First[#] + 1]) & /@ DeleteDuplicates[Cases[net, _ntUnitVec, {0, Infinity}]]];
+
+(* A component index outside 0..3 is a caller error (a mis-set 3+1 convention), not a tracer bug. *)
+NumTrace::fixcomp = "Fixed Lorentz component `1` is out of range: a component index must be 0..3 \
+(0 = temporal). Check the basis's 3+1 convention.";
+
+(* ---- SU(N) FUNDAMENTAL Levi-Civita -------------------------------------------
+
+   ntEpsFund[N, i1, ..., iN] is the totally antisymmetric invariant of SU(N) in the FUNDAMENTAL
+   space, so it carries exactly N indices (colour SU(3): 3; isospin SU(2): 2). It reaches us from
+   FunKit's epsFundCol/epsFundFlav, which the four-quark Fierz bases use for their diquark /
+   colour-antisymmetric channels.
+
+   Like the fixed-component gamma, this is a REWRITE into primitives the engine already has, not a
+   new engine token: an epsilon is contracted ONLY in pairs (a lone epsilon is not an SU(N)
+   invariant), and a pair folds to a determinant of Kronecker deltas,
+
+       eps_{a1..ak c1..cm} eps_{a1..ak d1..dm}  =  k! * det( delta_{c_p d_q} )        (m = N - k)
+
+   which is exactly ntSUNDeltaFund. So there is NO C++ change: SUNFac's fixed 3-slot layout never
+   has to represent an N-index object. The result is a Plus of delta products with numeric
+   coefficients, which lands on the constant-colour branch-list path (compileColGSum in Codegen.m).
+
+   Applied BEFORE expandBridges/checkLabels so the object those validate is the one that compiles.
+
+   WHY THE HEAD IS DELIBERATELY NOT REGISTERED IN Codegen's colour tables (ctHeadsInv / colFacG /
+   labelDimAssoc): an ntEpsFund that somehow survives this rewrite must FAIL, not be emitted. It then
+   trips colFacG's catch-all (MakeNTKernel::colleak) and, behind that, ntExportCpp's nt*-head regex. *)
+
+(* The dimension of the index space an epsilon head lives in. One line today; the single point a
+   hypothetical adjoint epsilon (dimension N^2-1) would extend. *)
+epsDimOf[ntEpsFund[n_, __]] := n;
+
+(* The pair contraction, written DIMENSION-PARAMETRIC (dim and the delta constructor are the only
+   things that were N-specific). That makes it unit-testable at dim = 2..5 against LeviCivitaTensor
+   without any head existing at those dimensions — see the gate's brute-force oracle. *)
+$ntEpsMaxPairTerms = 720;   (* 6!; 7! = 5040 would breach $ntColSumMaxBranches (4096) on its own *)
+NumTrace::epsbig = "expandFundEps: an epsilon pair in dimension `1` sharing `2` index/indices \
+expands to `3`! = `4` Kronecker-delta terms (limit `5`). Emitting these would hand the colour \
+branch-list lowering a list it would either reject far downstream with an opaque branch count, or \
+— worse — accept and turn into a generator source large enough to OOM the C++ compiler, with \
+nothing pointing at a Levi-Civita as the cause. Contract more indices between the two epsilons, or \
+raise $ntEpsMaxPairTerms if a flow genuinely needs this.";
+
+epsPairExpand[dim_Integer, uu_List, vv_List, deltaOf_] := Module[
+  {shared, cA, cB, posA, posB, sgn, k, m},
+  shared = Intersection[uu, vv];
+  k = Length[shared]; m = dim - k;
+  If[m! > $ntEpsMaxPairTerms,
+    Message[NumTrace::epsbig, dim, k, m, m!, $ntEpsMaxPairTerms]; Abort[]];
+  cA = DeleteCases[uu, Alternatives @@ shared];   (* order-preserving complements *)
+  cB = DeleteCases[vv, Alternatives @@ shared];
+  (* the sign of moving the shared labels to the front of each epsilon, computed from POSITIONS (a
+     Signature on the symbol list itself would sort by symbol NAME, which is meaningless here) *)
+  posA = Flatten[Position[uu, #, {1}, 1] & /@ Join[shared, cA]];
+  posB = Flatten[Position[vv, #, {1}, 1] & /@ Join[shared, cB]];
+  sgn = Signature[posA] Signature[posB];
+  sgn k! Total[(Signature[#] Times @@ MapThread[deltaOf, {cA, cB[[#]]}]) & /@ Permutations[Range[m]]]];
+
+NumTrace::epsrank = "expandFundEps: a fundamental Levi-Civita with `1` indices at rank N = `2`. The \
+fundamental epsilon of SU(N) carries EXACTLY N indices (SU(3) colour: 3; SU(2) isospin: 2). A \
+mismatch means the rank injected by FromFunKit disagrees with the basis (e.g. a flavour epsilon \
+routed to the colour rank, or Nc unset). Contracting it anyway would build a determinant of the \
+wrong size and return a silently wrong number. Offending factor:\n`3`";
+NumTrace::epsodd = "expandFundEps: `1` FUNDAMENTAL Levi-Civita factor(s) survived the pair \
+contraction. A fundamental epsilon is contracted ONLY in pairs (eps.eps = k! det(delta)); a lone \
+one is not an SU(N) invariant and has no representation in the engine. The input carries an odd \
+number of them AT ONE RANK — a basis/contraction error. (A pair STRADDLING an eager Plus is not \
+this case: it is joined by distributing into the sum, see expandFundEpsRec. The ADJOINT epsilon \
+does not come through here at all — at rank 2 it is rewritten to f^abc in FromFunKit.) \
+Offending factor(s):\n`2`";
+NumTrace::epsambig = "expandFundEps: `1` fundamental Levi-Civita factors of the SAME rank N = `2` \
+remain, and the best available pairing shares NO index, so which two are partners is not \
+determined. Rank alone does not identify the index SPACE — at Nc == Nf a colour and a flavour \
+epsilon are indistinguishable here, and pairing across the two spaces is not an identity at all: \
+it contracts colour indices against flavour ones and returns a silently wrong number. Refusing \
+rather than guessing. Offending factors:\n`3`";
+
+(* Contract every epsilon pair, one multiplicative context at a time. *)
+expandFundEps[e_] := Module[{res},
+  res = expandFundEpsRec[e];
+  With[{left = Cases[res, _ntEpsFund, {0, Infinity}]},
+    If[left =!= {}, Message[NumTrace::epsodd, Length[left], Short[left, 4]]; Abort[]]];
+  res];
+
+expandFundEpsRec[e_Plus] := expandFundEpsRec /@ e;
+(* eps^2 is a self-contraction of an epsilon with itself: every index is shared, so k = N, m = 0 and
+   the value is N!. Compute it ARITHMETICALLY — do NOT write this as expandFundEpsRec[b b], because
+   Times immediately re-collapses two identical factors back to b^2 and the rule recurses until
+   $IterationLimit. (Exactly the trap the diracParities Power clause documents.) Anything above the
+   square is an odd/malformed count and falls through to the epsodd guard. *)
+expandFundEpsRec[Power[b_ntEpsFund, 2]] := Module[{idx = Rest[List @@ b], d = epsDimOf[b]},
+  If[Length[idx] =!= d, Message[NumTrace::epsrank, Length[idx], d, b]; Abort[]];
+  If[Length[DeleteDuplicates[idx]] =!= Length[idx], 0,
+     epsPairExpand[d, idx, idx, ntSUNDeltaFund[d, #1, #2] &]]];
+expandFundEpsRec[e_Times] := Module[{fs, eps, rest, cand, pair, uu, vv, plusEps, host, others},
+  (* recurse into the factors FIRST: an epsilon pair frequently lives inside a Plus factor (a
+     multi-term projector), and pairing only at this level would leave it untouched — the survivors
+     then trip the epsodd guard, which is correct but unhelpful. *)
+  fs = expandFundEpsRec /@ (List @@ e);
+  eps = Cases[fs, _ntEpsFund];
+  (* Times @@ fs, NOT e: the factors were just recursed into (a Plus factor typically had its own
+     pairs contracted), so returning the original here would silently discard that work. The test is
+     FreeQ over all of fs, not just the bare factors: an epsilon may still sit inside a Plus factor
+     awaiting a partner from out here (the straddle case handled at the bottom). *)
+  If[FreeQ[fs, _ntEpsFund], Return[Times @@ fs, Module]];
+  (* validate arity, and kill a degenerate epsilon (a repeated index) before anything else *)
+  Function[h, With[{idx = Rest[List @@ h]},
+     If[Length[idx] =!= epsDimOf[h],
+       Message[NumTrace::epsrank, Length[idx], epsDimOf[h], h]; Abort[]];
+     If[Length[DeleteDuplicates[idx]] =!= Length[idx], Return[0, Module]]]] /@ eps;
+  rest = DeleteCases[fs, _ntEpsFund];
+  (* Pair greedily by shared-index count, highest first: the pair sharing most indices contracts to
+     the fewest terms ((N-k)!). Any pairing WITHIN ONE INDEX SPACE gives the same VALUE — eps.eps =
+     k! det(delta) is an identity that holds whatever else multiplies it — so only the term count
+     depends on the choice.
+     Candidates are restricted to EQUAL RANK. Pairing two epsilons of different rank is not a weaker
+     identity, it is nonsense: epsPairExpand would build a determinant sized by one partner's rank
+     and silently DROP the surplus indices of the other. That is exactly how a rank-2 flavour epsilon
+     got contracted against a rank-3 colour one in the four-quark Fierz diquark vertex — one colour
+     leg vanished, the two summands of the eager vertex sum ended up exposing DIFFERENT free indices,
+     and the failure surfaced far downstream as NumTrace::plusfree. Unequal ranks are left unpaired
+     here and reported by the epsodd guard, which names them. *)
+  While[Length[eps] >= 2,
+    cand = Select[Subsets[Range[Length[eps]], {2}],
+             epsDimOf[eps[[#[[1]]]]] === epsDimOf[eps[[#[[2]]]]] &];
+    If[cand === {}, Break[]];
+    pair = First@MaximalBy[cand,
+             Length[Intersection[Rest[List @@ eps[[#[[1]]]]], Rest[List @@ eps[[#[[2]]]]]]] &];
+    uu = Rest[List @@ eps[[pair[[1]]]]]; vv = Rest[List @@ eps[[pair[[2]]]]];
+    (* Equal rank is necessary but NOT sufficient to identify partners: at Nc == Nf a colour and a
+       flavour epsilon carry the same rank. Sharing an index proves they meet; sharing none leaves it
+       undetermined, so a zero-overlap choice is only safe when it is FORCED (exactly two of this
+       rank left — under a well-formed input each space carries an even count, so two survivors of
+       one rank must be partners). Otherwise refuse. *)
+    If[Intersection[uu, vv] === {} &&
+       Count[eps, h_ /; epsDimOf[h] === epsDimOf[eps[[pair[[1]]]]]] > 2,
+      Message[NumTrace::epsambig,
+        Count[eps, h_ /; epsDimOf[h] === epsDimOf[eps[[pair[[1]]]]]],
+        epsDimOf[eps[[pair[[1]]]]], Short[Select[eps, epsDimOf[#] === epsDimOf[eps[[pair[[1]]]]] &], 6]];
+      Abort[]];
+    AppendTo[rest, epsPairExpand[epsDimOf[eps[[pair[[1]]]]], uu, vv,
+                     With[{n = epsDimOf[eps[[pair[[1]]]]]}, ntSUNDeltaFund[n, #1, #2] &]]];
+    eps = Delete[eps, {{pair[[1]]}, {pair[[2]]}}]];
+  (* STRADDLE: an epsilon's partner may sit inside an eager Plus factor (or in a DIFFERENT Plus
+     factor) rather than out here, so no amount of pairing at one multiplicative level can join
+     them — e.g. eps_col[a,A1,A3] eps_flav[F1,F3] * (eps_col[a,A2,A4] eps_flav[F2,F4] D1 - ...),
+     the diquark vertex of the four-quark Fierz bases. eps.eps = k! det(delta) is only applicable
+     where both partners multiply each other, so distribute the remaining factors into ONE such sum
+     and recurse; each step removes one epsilon-bearing Plus, so this terminates.
+     Times, never Expand: a summand's own internal sums (the Dirac structure sum here) stay intact,
+     so this costs the epsilon-bearing sum's width and nothing more. *)
+  If[eps =!= {} || ! FreeQ[rest, _ntEpsFund],
+    plusEps = Select[rest, Head[#] === Plus && ! FreeQ[#, _ntEpsFund] &];
+    If[plusEps =!= {},
+      host   = First[plusEps];
+      others = Times @@ Join[DeleteCases[rest, host, {1}, 1], eps];
+      Return[Plus @@ (expandFundEpsRec[others #] & /@ (List @@ host)), Module]]];
+  Times @@ Join[rest, eps]];   (* a leftover odd epsilon rides along to the epsodd guard *)
+expandFundEpsRec[e_] := e;
+
 (* ---- env-id layout ---------------------------------------------------------- *)
 
 (* Assign each distinct momentum a Base (4 consecutive Var ids) and, where a
@@ -389,7 +601,7 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
 Options[NumTrace] = {"Frame" -> <||>, "Args" -> {}, "Dressings" -> {}, "DressingCollection" -> True};
 
 NumTrace[net_, OptionsPattern[]] := Module[
-  {frame, args, dress, badRanks, diagrams, allMom, invMom, invSMom, env, nenv, diags},
+  {frame, args, dress, badRanks, net2, diagrams, allMom, invMom, invSMom, env, nenv, diags},
   frame  = OptionValue["Frame"];
   args   = OptionValue["Args"];
   dress  = OptionValue["Dressings"];
@@ -403,7 +615,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
      group matrices). Every group head's leading argument N is checked up front, so an
      undefined symbol aborts with a clear message rather than being baked into the kernel. *)
   badRanks = DeleteDuplicates @ Select[
-    Cases[net, h : (_ntSUNf | _ntSUNDeltaAdj | _ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntSUNDiagAdj) :> sunRankOf[h], Infinity],
+    Cases[net, h : (_ntSUNf | _ntSUNDeltaAdj | _ntSUNT | _ntSUNDeltaFund | _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund) :> sunRankOf[h], Infinity],
     ! (IntegerQ[#] && # >= 1) &];
   If[badRanks =!= {},
     Print["NumTrace: every SU(N) head must carry an integer rank N >= 1 as its first argument ",
@@ -417,11 +629,21 @@ NumTrace[net_, OptionsPattern[]] := Module[
     Print["NumTrace: flavour Nf is not a defined integer (symbolic Nf present in the network). ",
           "Call SetNf[2] (TensorBases) before generating."]; Abort[]];
 
+  (* FIXED LORENTZ COMPONENTS (γ^0 & co, the finite-T 3+1 split used by the four-quark Fierz bases)
+     are rewritten into contractions with constant unit basis vectors FIRST, so that no integer
+     Lorentz slot ever reaches the label machinery below. See expandFixedComponents. The unit
+     vectors join the frame as ordinary momenta, so every existing frame builder stays untouched. *)
+  net2 = expandFundEps @ expandFixedComponents[net];
+  With[{bad = DeleteDuplicates @ Cases[net2, ntUnitVec[i_] :> i, {0, Infinity}]},
+    If[! AllTrue[bad, IntegerQ[#] && 0 <= # <= 3 &],
+      Message[NumTrace::fixcomp, Select[bad, ! (IntegerQ[#] && 0 <= # <= 3) &]]; Abort[]]];
+  frame = Join[frame, unitVecFrame[net2]];
+
   (* the top-level sum is the (linear) sum of DIAGRAMS; keep single-sector vertex sums eager
      via et::add, but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
      into one giant ETensor. *)
   ntLog["[prof] NumTrace expandBridges: ", First@AbsoluteTiming[
-  diagrams = With[{ex = expandBridges[net]}, If[Head[ex] === Plus, List @@ ex, {ex}]];], " s"];
+  diagrams = With[{ex = expandBridges[net2]}, If[Head[ex] === Plus, List @@ ex, {ex}]];], " s"];
   (* odd-trace vanishing: a closed Dirac trace of an ODD number of gammas is identically zero
      (and would otherwise carry a spurious imaginary I^odd coefficient from the vertex/basis
      normalizations). Drop such diagrams. (gamma5-bearing traces are exempt from the rule.)
@@ -453,9 +675,11 @@ NumTrace[net_, OptionsPattern[]] := Module[
       DeleteDuplicates[Sort /@ frees]]];], " s"];
 
   (* global env layout: every distinct momentum, and which ones need a 1/q^2 slot *)
-  allMom = DeleteDuplicates @ Cases[net, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
-  invMom = DeleteDuplicates @ Cases[net, f_?(needsInvQ) :> momentumOf[f], Infinity];
-  invSMom = DeleteDuplicates @ Cases[net, f_?(needsInvSQ) :> momentumOf[f], Infinity];
+  (* net2, not net: the unit basis vectors introduced by expandFixedComponents are ordinary
+     momenta and MUST get an env Base, or compileDirac's slash emission finds them absent. *)
+  allMom = DeleteDuplicates @ Cases[net2, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
+  invMom = DeleteDuplicates @ Cases[net2, f_?(needsInvQ) :> momentumOf[f], Infinity];
+  invSMom = DeleteDuplicates @ Cases[net2, f_?(needsInvSQ) :> momentumOf[f], Infinity];
   {env, nenv} = buildEnv[allMom, invMom, invSMom];
 
   ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ",
@@ -502,11 +726,20 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
        splitColourGroupsInv/compileDirac like any other Dirac structure. NOTE this is only correct
        together with the collapsed-loop tr(1)=4 restoration in compileDirac (see nEmptyLoops there):
        orderDiracFacs drops δ connectors, so the loop arrives token-free and the runtime's split_loops
-       would otherwise discard it, giving a kernel 4x too small. *)
+       would otherwise discard it, giving a kernel 4x too small.
+       The SAME reasoning covers the pure-LORENTZ heads. A momentum-free closed metric loop
+       (g_{μν} g^{μν} = D, the "ZAAqbq metric leak" shape) or a fully-contracted ntEpsilon pair from a
+       γ5 trace is likewise momentum-free but not colour, and was emitted as
+       `colFacG[ntMetric[v1,v2], <|v1 -> 0, ...|>]` straight into the generator .cpp. Reproduced with
+       ntMetric[v1,v2] ntMetric[v2,v1] × ntVec[q1,a1] ntVec[ql,a1]. compileTInv/builderInv already
+       handle both heads, so making the component non-constant is all that is needed.
+       In short: "Constant" must mean "a constant SU(N) component", so EVERY non-SU(N) tensor head
+       belongs in this list — it is not merely a momentum test. *)
     "Components" -> (<|"Factors" -> orderFactors[#],
                        "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
                                               _ntElectricProj | _ntMagneticProj | _ntDressedNum |
-                                              _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac]|> &
+                                              _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac |
+                                              _ntMetric | _ntEpsilon]|> &
                      /@ connectedComponents[tensorF])
   |>
 ];

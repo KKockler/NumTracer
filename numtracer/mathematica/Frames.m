@@ -46,6 +46,27 @@ propFrame[p_, l1_, cos1_, q1_, ql_] :=
 sp3Frame[p_, l1_, cos1_, cos2_, q1_, q2_, q3_, ql_] :=
   <|q1 -> p {1, 0, 0, 0}, q2 -> p {-1/2, Sqrt[3] / 2, 0, 0}, q3 -> p {-1/2, -Sqrt[3] / 2, 0, 0}, ql -> l1 {cos1, Sqrt[1 - cos1^2] cos2, Sqrt[(1 - cos1^2) (1 - cos2^2)], 0}|>;
 
+(* Three externals in a GENERAL configuration + loop with two angles.
+
+   sp3Frame pins the symmetric point (|p_i| all equal, p_i.p_j = -p^2/2), which is a MEASURE-ZERO
+   slice of the 3-point phase space — and some tensor bases are degenerate exactly there. The full
+   AqbqDirect basis is the case in point: its 12 structures are linearly DEPENDENT at the symmetric
+   point (Det[TBGetMetric["AqbqDirect"]] = 0), so its inverse metric is 0/0 and every dual projector
+   built from it comes out Indeterminate. A basis-orthonormality check must therefore be traced in a
+   GENERAL frame, or it is only testing the tracer on a special point where the algebra degenerates.
+
+   Two independent external magnitudes p1m, p2m and the angle cosP between them; the third leg is
+   fixed by momentum conservation q3 = -(q1+q2), so |q3| varies independently of |q1|,|q2|. The loop
+   keeps sp3Frame's parametrisation (cos1 to axis 0, cos2 in the 0-1 plane). Setting
+   p1m == p2m and cosP == -1/2 recovers the symmetric point exactly. *)
+
+gen3Frame[p1m_, p2m_, cosP_, l1_, cos1_, cos2_, q1_, q2_, q3_, ql_] :=
+  Module[{v1, v2},
+    v1 = p1m {1, 0, 0, 0};
+    v2 = p2m {cosP, Sqrt[1 - cosP^2], 0, 0};
+    <|q1 -> v1, q2 -> v2, q3 -> -(v1 + v2),
+      ql -> l1 {cos1, Sqrt[1 - cos1^2] cos2, Sqrt[(1 - cos1^2) (1 - cos2^2)], 0}|>];
+
 (* Four externals at the symmetric point + loop with three angles. (A4)
 
    The four external gluons sit at the vertices of a regular tetrahedron in the 3D

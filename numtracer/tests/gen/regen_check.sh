@@ -23,7 +23,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 GEN="$REPO/numtracer/tests/gen"
 BUILD="${NT_BUILD_DIR:-$REPO/numtracer/build}"
 
-restore() { git -C "$REPO" checkout -- numtracer/tests/gen/ 2>/dev/null; }
+# Restore ONLY the generated artifacts (*.hh). This directory also holds 50+ tracked SOURCE files —
+# the .wls generators, the .m fixtures, this script, README.md — and a blanket
+# `git checkout -- numtracer/tests/gen/` reverted those too, silently discarding source edits made
+# during a run. That is not hypothetical: it wiped a newly added assertion out of
+# gen_multiterm_proj_numeric.wls and left the previously generated header on disk, so the very next
+# codegen run passed while testing a kernel its generator no longer produced — a FALSE GREEN. It also
+# ate this script's own DEFAULT_FLOWS edits three times. Regenerated kernels are the only thing that
+# needs reverting; sources must survive.
+restore() { git -C "$REPO" checkout -- 'numtracer/tests/gen/*.hh' 2>/dev/null; }
 
 CTEST_MODE=0
 case "${1:-}" in
@@ -45,6 +53,12 @@ DEFAULT_FLOWS=(
   # all-delta spinor loop keeping its tr(1)=4 (a 0.25 ratio in compare_multiterm_proj_num means that
   # regressed). Emits two kernels: Multiterm_proj_num_kernel and Deltaloop_num_kernel.
   gen_multiterm_proj_numeric
+  # Projector orthonormality on a REAL basis (AqbqDirect147) through the full pipeline.
+  gen_ortho_numeric
+  # FIXED Lorentz components (gamma^0, the finite-T 3+1 split). Hand-built, cheap. Was registered as
+  # a ctest but NOT here, so the codegen suite — the only one that re-runs the generators — was blind
+  # to it: a mathematica/ change could break this generator and every test would still pass.
+  gen_fixedcomp_numeric
   # The dense sub-term-dedup flow. Emits TWO kernels in one run (dedup ON, and a dedup-OFF control);
   # compare_zaaqbq1_small grades one against the other. The slowest flow here (~90 s), almost all of
   # it the dedup-OFF control — which is the speedup being tested.

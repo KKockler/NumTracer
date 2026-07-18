@@ -6,6 +6,15 @@
 //        are REAL (Elem::vlc is std::pair<double,int>). A complex coefficient on such a term would
 //        have its imaginary part silently dropped; the collapse must refuse it loudly instead.
 //   (B3) an EMPTY colour network is the identity factor (1), not a UnionFind(-1)/degenerate path.
+//   (C1) dirac_value's gamma-parity count must treat a Comm (sigma) as TWO gammas and a LoopSep as
+//        NONE — and, since its Wick recursion can trace neither, must refuse both loudly. The old
+//        `!= Gamma5` count called each ONE gamma, which inverted the verdict in both directions:
+//        {sigma,gamma,gamma} (4 gammas, nonzero trace) was reported as an odd chain and returned a
+//        structural ZERO, while {sigma,gamma} (3 gammas, vanishing trace) passed the even gate into
+//        trace_rec, whose pair_factor read the Comm's empty vlc and silently collapsed it. This
+//        function is the cross-validation ORACLE in test_numeric_contract.cpp, so a wrong verdict
+//        here would "confirm" a wrong engine result.
+#include "numtracer/network/dirac.hpp"
 #include "numtracer/network/network.hpp"
 #include "numtracer/network/sun_net.hpp"
 #include "numtracer/sun/sun_data.hpp"
@@ -48,6 +57,30 @@ int main() {
     const SUNPoly p = sun_value_dressed(SUNNet{});
     const bool unit = (p.size() == 1 && p[0].dress.empty() && p[0].coeff.re == 1.0 && p[0].coeff.im == 0.0);
     ok("sun_value_dressed(empty) == single unit term", unit);
+  }
+
+  // ---- C1: dirac_value refuses tokens its Wick recursion cannot trace ------------------------
+  {
+    using namespace numtracer::network;
+    auto refuses = [&](const DiracNet &ch) {
+      try {
+        (void)dirac_value(ch, 900000);
+        return false;
+      } catch (const std::exception &) {
+        return true;
+      }
+    };
+    // physically 4 gammas (nonzero trace) — the old count said "odd" and returned a structural zero
+    ok("dirac_value refuses {sigma,gamma,gamma}", refuses({dcomm(0, 1), dgamma(2), dgamma(3)}));
+    // physically 3 gammas (vanishing trace) — the old count said "even" and fell into trace_rec
+    ok("dirac_value refuses {sigma,gamma}", refuses({dcomm(0, 1), dgamma(2)}));
+    ok("dirac_value refuses a LoopSep chain", refuses({dgamma(0), dloopsep(), dgamma(1)}));
+
+    // plain gamma/slash chains must be completely unaffected by the guard + recount
+    ok("even gamma chain still traces", !dirac_value({dgamma(0), dgamma(1)}, 900000).empty());
+    ok("odd gamma chain still vanishes", dirac_value({dgamma(0), dgamma(1), dgamma(2)}, 900000).empty());
+    ok("slash pair still traces",
+       !dirac_value({dslash({{1.0, 0}}), dslash({{1.0, 4}})}, 900000).empty());
   }
 
   std::printf("\n%s (%d failure%s)\n", fail ? "TESTS FAILED" : "ALL TESTS PASSED", fail, fail == 1 ? "" : "s");

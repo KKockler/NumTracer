@@ -58,8 +58,67 @@ sunMap[nc_, nf_] := <|
   "FCol" -> (ntSUNf[nc, ##] &), "deltaAdjCol" -> (ntSUNDeltaAdj[nc, ##] &),
   "TCol" -> (ntSUNT[nc, ##] &), "deltaFundCol" -> (ntSUNDeltaFund[nc, ##] &),
   "fFlav" -> (ntSUNf[nf, ##] &), "deltaAdjFlav" -> (ntSUNDeltaAdj[nf, ##] &),
-  "tauFlav" -> (ntSUNT[nf, ##] &), "deltaFlavFundGen" -> (ntSUNDeltaFund[nf, ##] &)
+  "tauFlav" -> (ntSUNT[nf, ##] &), "deltaFlavFundGen" -> (ntSUNDeltaFund[nf, ##] &),
+  (* FUNDAMENTAL Levi-Civita: N indices (colour SU(3) -> 3, isospin SU(2) -> 2). Contracted into
+     Kronecker deltas by expandFundEps in DSL.m — no engine token. *)
+  "epsFundCol" -> (ntEpsFund[nc, ##] &), "epsFundFlav" -> (ntEpsFund[nf, ##] &),
+  (* ADJOINT Levi-Civita, SU(2) ONLY — see adjEps. *)
+  "epsAdjCol" -> (adjEps[nc, ##] &), "epsAdjFlav" -> (adjEps[nf, ##] &)
 |>;
+
+(* ---- adjoint Levi-Civita: SU(2) ONLY ---------------------------------------------------------
+   The adjoint of SU(N) has dimension N^2-1, so its epsilon carries N^2-1 indices: 3 for SU(2), but
+   8 for SU(3). ShowFormTracerDefinitions[] displays `epsAdjCol[a, b, c]` with a generic THREE-index
+   signature, which makes a 3-index adjoint epsilon at Nc=3 look legal. It is not — that is the
+   likely mistake, so the refusal below names it.
+
+   !! SU(2) ONLY !!  At rank 2 (and ONLY at rank 2) the adjoint epsilon coincides with the structure
+   constant: eps^{abc} = f^{abc}, exactly, coefficient +1. This is NOT a general fact — for SU(3),
+   f^{abc} is not an epsilon at all (it is not totally antisymmetric in the same sense and has
+   different nonzero entries), so nothing here may be read as an SU(N) statement.
+
+   The +1 is derived from NumTracer's OWN conventions, not assumed: sun_net.hpp:233-247 builds the
+   N=2 generators as T^a = sigma^a/2 in (x,y,z) order, and sun_net.hpp:225 defines
+   f^{abc} = -2i tr([T^a,T^b] T^c). With [T^a,T^b] = i eps^{abc} T^c and tr(T^c T^d) = delta^{cd}/2
+   this gives f^{abd} = eps^{abd}. It is still pinned by a test (a contraction LINEAR in the
+   coefficient, so a sign flip cannot hide) rather than trusted.
+
+   Rewriting to ntSUNf reuses an already-tested primitive and — unlike a pair-contraction scheme —
+   accepts an UNPAIRED adjoint epsilon (eps^{abc} T^b T^c and friends), which is common and
+   perfectly well-defined. *)
+(* FunKit's DECLARED head vocabulary (ShowFormTracerDefinitions[]). The closed-world list the guard
+   in FromFunKit checks against: every one of these must be mapped, or refused on purpose. *)
+$funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "sp", "sps",
+  "deltaDirac", "gamma", "gamma5", "sigma", "transProj", "longProj",
+  "deltaAdjCol", "deltaFundCol", "FCol", "TCol", "epsAdjCol", "epsFundCol",
+  "deltaAdjFlav", "deltaFundFlav", "fFlav", "tauFlav", "TFlav",
+  "epsAdjFlav", "epsFundFlav", "deltaFlavFundGen", "epsLorentz"};
+(* Handled outside `map`: TFlav by the hasIso rewrite above. *)
+$ffHandledElsewhere = {"TFlav"};
+FromFunKit::untranslated = "the FunKit head(s) `1` appear in the input but have no entry in \
+$ffMap / sunMap. An untranslated head does NOT fail loudly downstream: DSL.m's scalarQ is a FreeQ \
+over the KNOWN nt* heads, so an unknown head is classified as a SCALAR COEFFICIENT — its indices \
+become invisible to labelsOf/freeIdx, the diagram reports spurious free (open) legs, checkLabels \
+accepts it (open legs are legal), and the raw head is CForm'd into the generated C++. This is how \
+epsFundCol/epsFundFlav went undetected. Add a $ffMap/sunMap entry, or refuse the input explicitly.";
+(* epsLorentz is REFUSED on purpose, not mapped: it is the 3D SPATIAL epsilon (O(3) after the
+   heat-bath split), whereas ntEpsilon is 4D and hard-wired to four labels (DSL.m labelsOf,
+   Codegen.m builderInv and the Length[lst] == 4 reconstruction). Mapping one onto the other is a
+   silent dimension error. The pair route is cheap (2 terms at D=3) but produces SPATIAL deltas, and
+   NumTracer has no spatial-delta head — ntMetric is the 4D Euclidean metric and would wrongly
+   include the temporal component. So the blocker is a missing head, not cost: the fix is a spatial
+   delta, not more epsilon machinery. It falls through to FromFunKit::untranslated. *)
+
+FromFunKit::epsadj = "Adjoint Levi-Civita at SU(`1`) with `2` indices. NumTracer supports the \
+adjoint epsilon ONLY at rank 2, where eps^abc coincides exactly with the structure constant f^abc \
+(T^a = sigma^a/2, f = -2i tr([T^a,T^b]T^c); see sun_net.hpp:225) and is rewritten to ntSUNf[2,...]. \
+That identification is SU(2)-SPECIFIC and does NOT generalise. At SU(`1`) the adjoint epsilon \
+carries `3` indices, not `2` — ShowFormTracerDefinitions[] shows epsAdjCol[a,b,c] only as a generic \
+three-index illustration, and taking that arity literally at rank > 2 is the likely mistake here. \
+Aborting rather than guessing: a rank/arity mismatch would silently contract against the wrong \
+group.";
+adjEps[n_, idx__] := If[n === 2 && Length[{idx}] === 3, ntSUNf[2, idx],
+  Message[FromFunKit::epsadj, n, Length[{idx}], n^2 - 1]; Abort[]];
 
 (* Contract the flavour Kronecker deltas: their indices are disjoint from every tensor
    sector, so a chain collapses (delta[x,y] delta[y,z] -> delta[x,z]) and a closed loop
@@ -101,6 +160,19 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, re
     expr //. {Global`TFlav[0, f1_, f2_] :> ntSUNDeltaFund[nf, f1, f2]/Sqrt[2 Global`Nf],
               Global`TFlav[a_, f1_, f2_]  :> ntSUNT[nf, a, f1, f2]},
     expr];
+  (* ---- THE ROOT-CLASS GUARD ------------------------------------------------------------------
+     An untranslated FunKit head does NOT fail loudly downstream. DSL.m's scalarQ is a FreeQ over the
+     KNOWN nt* heads, so an unknown head is classified as a SCALAR COEFFICIENT: its indices become
+     invisible to labelsOf/freeIdx, the diagram reports spurious free (open) legs, checkLabels
+     accepts it (open legs are legal), and the raw Mathematica head is CForm'd into the generated
+     C++. That is exactly how epsFundCol/epsFundFlav went undetected through a whole debugging
+     session — the visible symptom was 8 dangling indices three layers away from the cause.
+     So: refuse any head from FunKit's declared vocabulary that has no entry in the map.
+     NOTE the map is completed CONDITIONALLY just above (the hasIso branch promotes deltaFundFlav),
+     so this must read `map`, never $ffMap — reading the wrong one is itself a way to be misled. *)
+  With[{present = DeleteDuplicates @ Cases[isoRewritten, (h_Symbol)[___] :> SymbolName[h], {0, Infinity}]},
+    With[{leftover = Complement[Intersection[present, $funKitHeads], Keys[map], $ffHandledElsewhere]},
+      If[leftover =!= {}, Message[FromFunKit::untranslated, leftover]; Abort[]]]];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
   ntLog["[prof] FromFunKit (head rewrite + expandBridges): ",
     First@AbsoluteTiming[res = contractFlavour @ expandBridges[

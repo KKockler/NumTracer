@@ -41,6 +41,10 @@ ntMetric::usage = "ntMetric[mu, nu] — Euclidean Lorentz metric delta_{mu nu}."
 
 ntVec::usage = "ntVec[q, mu] — tensor leg q_mu of momentum q (mu a symbolic Lorentz label). ntVec[q, i] with a literal INTEGER i (0-based, 0 = temporal/Matsubara) is the scalar component q_i, resolved by the frame like ntSP — used for finite-T objects such as ntVec[p, 0] = pi T.";
 
+ntEpsFund::usage = "ntEpsFund[N, i1, ..., iN] -- the SU(N) FUNDAMENTAL Levi-Civita (totally antisymmetric invariant), carrying exactly N indices (colour SU(3): 3; isospin SU(2): 2). Comes from FunKit's epsFundCol/epsFundFlav. Never reaches the C++ engine: NumTrace contracts epsilon PAIRS into Kronecker deltas (eps.eps = k! det(delta)) via expandFundEps, since a lone epsilon is not an SU(N) invariant. The ADJOINT epsilon is separate and SU(2)-only -- there eps^abc = f^abc exactly, so FromFunKit rewrites it to ntSUNf[2,...]; that identification does NOT generalise to SU(N).";
+
+ntUnitVec::usage = "ntUnitVec[i] — the constant unit basis 4-vector e_i (i = 0..3, 0 = temporal/Matsubara). Not written by hand: NumTrace introduces it when it rewrites a FIXED-component Lorentz index (gamma^0 and friends, the finite-T 3+1 split used by the four-quark Fierz bases) into a contraction with e_i, and injects its components into the frame. A fixed-component gamma is therefore emitted as an ordinary slash.";
+
 ntTransProj::usage = "ntTransProj[q, mu, nu] — transverse projector P_{mu nu}(q) = delta - q_mu q_nu/q^2 (valid at finite T).";
 
 ntLongProj::usage = "ntLongProj[q, mu, nu] — longitudinal projector q_mu q_nu/q^2.";
@@ -89,6 +93,7 @@ ntDeltaDirac::usage = "ntDeltaDirac[din, dout] — spinor identity delta (Dirac:
 propFrame::usage = "propFrame[p, l1, cos1, q1, ql] — one external direction (q1 along axis 0) + loop (ql in the 0-1 plane at angle cos1). The Zc/ZA symmetric-point kinematics.";
 
 sp3Frame::usage = "sp3Frame[p, l1, cos1, cos2, q1, q2, q3, ql] — three externals at the symmetric point (120 deg in the 0-1 plane) + loop with two angles. The A3 kinematics.";
+gen3Frame::usage = "gen3Frame[p1m, p2m, cosP, l1, cos1, cos2, q1, q2, q3, ql] — three externals in a GENERAL configuration (independent magnitudes p1m,p2m and opening angle cosP; q3 = -(q1+q2)) + loop with two angles. Use instead of sp3Frame whenever the symmetric point would be a degenerate slice: the full AqbqDirect basis, for one, has Det[Gram] = 0 there. p1m==p2m, cosP==-1/2 recovers sp3Frame.";
 
 sp4Frame::usage = "sp4Frame[p, l1, cos1, cos2, phi, q1, q2, q3, q4, ql] — four externals at a regular tetrahedron + loop with three angles. The A4 kinematics.";
 

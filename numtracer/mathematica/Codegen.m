@@ -44,6 +44,38 @@ cppNum[x_] := ToString[CForm[N[x, 17]]];
    literals, so CppForm's line-wrapping (newlines) must be collapsed or they break the string. *)
 cppFlat[e_] := StringReplace[FunKit`CppForm[e], {"\n" -> " ", "\r" -> " ", "\t" -> " "}];
 
+(* ---- the single emission chokepoint --------------------------------------------------------
+   EVERY generated file goes through here. Nothing else may call Export on generated source.
+
+   The failure this exists for: an expression that reached the emitter WITHOUT being lowered to C++
+   gets ToString'd verbatim into the file. It has happened three times — the ZAAqbq metric leak
+   (`colFacG[ntMetric[...], <|...|>]`), a degenerate Gram emitting `return Indeterminate;`, and the
+   four-quark Fierz flavour sum (`colFacG[Plus[...], <|...|>]`). Each time the symptom appeared
+   layers away from the cause: a clang syntax error naming a column of a 7000-character line, or —
+   the dangerous variant — a leak whose text happens to BE valid C++ and compiles into a silently
+   wrong kernel.
+
+   A textual assertion catches the whole class at the one place it must pass through, regardless of
+   which upstream dispatcher grew a hole. Structural guards upstream (tleak/colleak/eagernn) give
+   better messages and should stay; this is the backstop that cannot be forgotten.
+
+   `nt` heads are matched with a word boundary so ordinary C++ identifiers containing "nt"
+   (`constant`, `int`, `point`) do not trip it. *)
+$ntCppLeakPatterns = {
+  RegularExpression["(?<![A-Za-z0-9_])nt[A-Z][A-Za-z0-9]*\\["],  (* any nt* DSL head, un-lowered *)
+  "colFacG[", "compileColG[", "compileTInv[", "colourFactorProd[",
+  "Indeterminate", "DirectedInfinity", "ComplexInfinity", "$Failed", "Missing["};
+ntExportCpp[file_, text_] := (
+  Function[patt, Module[{pos = StringPosition[text, patt, 1]},
+     If[pos =!= {},
+       (* quote the leak IN CONTEXT — the matched token alone rarely identifies which structure it
+          came from, and the emitted lines are thousands of characters wide. *)
+       Message[MakeNTKernel::cppleak, "ntExportCpp", StringTake[text, First[pos]],
+         file <> "\n  context: ..." <> StringTake[text,
+           {Max[1, pos[[1, 1]] - 150], Min[StringLength[text], pos[[1, 2]] + 150]}] <> "..."];
+       Abort[]]]] /@ $ntCppLeakPatterns;
+  Export[file, text, "Text"]);
+
 (* ---- GlobalCollect: dressing-coefficient decomposition (the Route-B front-end) ----------------
    A diagram's dressing/kinematic coefficient is decomposed into a SUM of monomials, each
    {numericCoeff, {atomExpr...}}. An ATOM is a maximal non-numeric multiplicative factor that the
@@ -103,6 +135,22 @@ MakeNTKernel::tleak = "compileTInv: un-lowered TENSOR structure reached the scal
 would be CForm'd into C++ as a bare scalar with its indices silently dropped (this is what caused \
 the ZAAqbq metric leak). Every tensor head must be handled by builderInv or one of the \
 Power/Times/Plus branches. Offending structure:\n`1`";
+MakeNTKernel::colleak = "compileColG: a factor of a CONSTANT SU(N) component matched none of the \
+colFacG head rules, so it would be ToString'd into the generated C++ as raw Mathematica (e.g. \
+`colFacG[Plus[...], <|...|>]`), which does not compile. Every factor of a constant component must \
+be one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUNDiag{Fund,Adj}). \
+A Plus here means a colour/flavour sum reached the flat compiler instead of compileColGSum; any \
+other head means the \"Constant\" head list in DSL.m analyseDiagram has drifted. Offending \
+factor:\n`1`";
+MakeNTKernel::colpow = "compileColG: a colour/flavour SUM raised to the integer power `1`. \
+Expanding it by repetition would duplicate the summands' index labels, so the same label would \
+appear on 2k tensors and the et/SUNNet contraction would silently mis-pair them into a wrong \
+number — and checkLabels has already run by this point, so nothing downstream would notice. \
+(This is the colour analogue of NumTrace::bridgepow.) Refusing instead. Offending base:\n`2`";
+MakeNTKernel::cppleak = "`1`: the generated source still contains un-lowered Mathematica — the \
+text `2` appears in it. Writing it would produce a file that either fails to compile or, worse, \
+compiles into a silently wrong kernel. This means some expression reached the emitter without \
+being turned into C++; the fragment above should identify which. Offending file:\n`3`";
 
 (* MEMOIZED: the projector/Lorentz net builder is called with mostly repeated inputs — the same
    transverse-projector structures recur across every diagram/branch, so a dense flow makes orders of
@@ -493,14 +541,56 @@ colFacG[ntSUNDiagFund[n_, i_, j_, spec_, scale_], ids_] :=
   "sun" <> ToString[n] <> ".diagFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n]] <> ")";
 colFacG[ntSUNDiagAdj[n_, a_, b_, spec_, scale_], ids_] :=
   "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n^2 - 1]] <> ")";
+(* CATCH-ALL, and it must stay LAST: the six rules above are the only lowerable colour factors.
+   Without this a non-matching factor returns UNEVALUATED and StringRiffle happily ToString's it
+   into the generator .cpp — `colFacG[Plus[...], <|v1 -> 0, ...|>]` — which is how the four-quark
+   Fierz flavour sum surfaced (as a clang syntax error, three layers away from its cause).
+   compileTInv has had exactly this guard (MakeNTKernel::tleak) since the ZAAqbq metric leak;
+   colFacG was the one per-head dispatcher in this file with neither a Plus branch nor a
+   fallthrough. Fail loudly and locally instead. *)
+colFacG[e_, _] := (Message[MakeNTKernel::colleak, Short[e, 6]]; Abort[]);
+
 compileColG[e_, ids_] := Module[{parts = If[Head[e] === Times, List @@ e, {e}], sc, tn},
+  (* A colour/flavour SUM raised to a power cannot be expanded by repetition: the copies would share
+     index labels (see MakeNTKernel::colpow). Refuse before the rewrite below can do it. *)
+  Cases[parts, Power[b_Plus, k_Integer?Positive] /; ! scalarQ[b] :>
+    (Message[MakeNTKernel::colpow, k, Short[b, 6]]; Abort[])];
   (* a colour/flavour factor raised to an integer power (e.g. deltaAdjFlav^2 from a CLOSED meson
      loop: delta_adj(a,b)^2 -> the flavour trace N^2-1) must be expanded into repeated SUNNet
      factors so the C++ sun_value contracts the shared indices — colFacG handles a single head,
-     not Power[head,k], so an un-expanded power leaks Mathematica syntax into the generator. *)
-  parts = parts /. Power[b_, k_Integer?Positive] /; ! scalarQ[b] :> Sequence @@ ConstantArray[b, k];
+     not Power[head,k], so an un-expanded power leaks Mathematica syntax into the generator.
+     Restricted to a BARE group head: the old `! scalarQ[b]` guard also admitted Power[Plus[..],k]
+     and Power[Times[..],k], whose repetition duplicates labels rather than closing a self-trace. *)
+  parts = parts /. Power[b_, k_Integer?Positive] /; MatchQ[b, Alternatives @@ ctHeadsInv] :>
+                     Sequence @@ ConstantArray[b, k];
   sc = Select[parts, scalarQ]; tn = Select[parts, ! scalarQ[#] &];
   {"SUNNet{" <> StringRiffle[colFacG[#, ids] & /@ tn, ", "] <> "}", Times @@ sc}];
+
+(* ---- a colour/flavour component that is a SUM ------------------------------------------------
+   `SUNNet` is a flat PRODUCT (std::vector<SUNFac>) with no sum node and no coefficient field, and
+   mergeColNet splices `SUNNet{...}` literals by string surgery — so a sum cannot be represented
+   inside one net, and there is no colour analogue of compileTInv's `add(...)`.
+
+   It does not need one. Colour folds to a SCALAR (sun_value_cx -> Cx), and the generator already
+   sums colour structures by emitting SEVERAL nets that share a group:
+       for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]);
+   So a summed colour component lowers to a LIST of {net, scalar} branches — the same shape
+   chunkLorInv already returns and its callers already loop over.
+
+   ONE Expand over the product of all the diagram's constant components does the cross-product in
+   one step (the same device splitColourGroupsInv uses for its entangled sums), so several summed
+   constant components do not need pairwise outer products.
+
+   Reached only from the CONSTANT-component path: splitColourGroupsInv's colProd is a level-1
+   Cases over an already-Expanded branch, hence flat by construction, and keeps using compileColG. *)
+$ntColSumMaxBranches = 4096;
+MakeNTKernel::colsum = "compileColGSum: a constant colour/flavour component expands to `1` summed \
+branches (limit `2`). Each branch costs one emitted SUNNet and one net record, so this would blow \
+up the generator. Raise $ntColSumMaxBranches if the flow genuinely needs it.";
+compileColGSum[e_, ids_] := Module[{terms = With[{x = Expand[e]}, If[Head[x] === Plus, List @@ x, {x}]]},
+  If[Length[terms] > $ntColSumMaxBranches,
+    Message[MakeNTKernel::colsum, Length[terms], $ntColSumMaxBranches]; Abort[]];
+  compileColG[#, ids] & /@ terms];
 
 (* ---- et-vs-numeric size guard for a FUNDAMENTAL colour/flavour component ----------
    A small generator contraction (a quark loop's T^a) instantiates fine as an et ETensor and folds
@@ -509,14 +599,27 @@ compileColG[e_, ids_] := Module[{parts = If[Head[e] === Times, List @@ e, {e}], 
    still-open axis extents (adjoint N^2-1, fundamental N) at each step — which directly predicts the
    ETensor type size. Above the threshold the component takes the numeric SUNNet path instead. *)
 $NumTracerFundETMaxEntries = 200000;
+(* `tensorQ` is HEAD-matching with a `tensorQ[_] = False` catch-all, so tensorQ[Plus[...]] is False —
+   a Plus is neither scalarQ nor tensorQ. `Select[facs, tensorQ]` therefore SILENTLY DROPS a sum
+   vertex, which here would understate the contraction width and could route a component to the et
+   path that belongs on the numeric one (the OOM $NumTracerFundETMaxEntries exists to prevent).
+   Flatten a Plus to its widest summand instead: every summand shares the sum's free indices, so the
+   summand with the most/widest labels bounds the whole sum. *)
+tensorPartsOf[facs_] := Flatten[Function[f,
+   Which[tensorQ[f],       {f},
+         Head[f] === Plus, tensorPartsOf[List @@ MaximalBy[List @@ f, LeafCount][[1]]],
+         Head[f] === Times, tensorPartsOf[List @@ f],
+         Head[f] === Power && IntegerQ[f[[2]]] && f[[2]] >= 1 && ! scalarQ[f],
+                            ConstantArray[tensorPartsOf[{f[[1]]}], f[[2]]],
+         True,             {}]] /@ facs];
 labelDimAssoc[facs_] := Module[{assoc = <||>},
   Function[h, With[{n = sunRankOf[h]}, Switch[h,
       _ntSUNf | _ntSUNDeltaAdj | _ntSUNDiagAdj, (assoc[#] = n^2 - 1) & /@ labelsOf[h],
       _ntSUNT, (assoc[First[labelsOf[h]]] = n^2 - 1; (assoc[#] = n) & /@ Rest[labelsOf[h]]),
-      _ntSUNDeltaFund | _ntSUNDiagFund, (assoc[#] = n) & /@ labelsOf[h]]]] /@ Select[facs, tensorQ];
+      _ntSUNDeltaFund | _ntSUNDiagFund, (assoc[#] = n) & /@ labelsOf[h]]]] /@ tensorPartsOf[facs];
   assoc];
 fundMetric[facs_] := Module[
-  {tn = orderFactors[Select[facs, tensorQ]], dimA = labelDimAssoc[facs], cnt = <||>, widest = 1, open},
+  {tn = orderFactors[tensorPartsOf[facs]], dimA = labelDimAssoc[facs], cnt = <||>, widest = 1, open},
   Do[(cnt[#] = Lookup[cnt, #, 0] + 1) & /@ labelsOf[f];
      open = Keys[Select[cnt, OddQ]];
      widest = Max[widest, Times @@ (dimA /@ open)], {f, tn}];
@@ -713,7 +816,7 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] := "DSlot{" <> StringRiffle[
         core, scalar and rest SEPARATELY so the contraction stays deferred (rest emitted once, shared
         across a colour group). A dressed chain returns the ntDressedCore[chain, slots] marker instead. *)
 compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
-  {diracFacs, loops, loopStrs, nEmptyLoops, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed,
+  {diracFacs, loops, loopStrs, loopStrsBare, nEmptyLoops, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed,
    vecOf},
   (* μ -> the momentum q of an ntVec[q,μ] factor, built ONCE per call: tokenOf would otherwise rescan the
      whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
@@ -772,6 +875,22 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
      is only ever entered with diracFacs =!= {}, so every loop counted here is a genuine spinor loop.
      Flows whose every loop keeps a fixed γ never collapse => nEmpty == 0 => kernels byte-identical. *)
   nEmptyLoops = Count[loopStrs, ""];
+  (* REACHABILITY (checked 2026-07-18, and why the riffle below filters anyway): a token-free loop
+     consists only of ntDeltaDirac, which carries NO Lorentz and NO colour label, so it can never
+     share a label with another spinor loop — connectedComponents always isolates it into its own
+     component. Hence loopStrs is exactly {""} whenever it holds an empty entry, and the empty entry
+     is never adjacent to a non-empty one. Verified: a net with an all-δ loop, a γ loop and a colour
+     loop splits into 3 components, the δ one reporting loops = {{}}.
+     The filter is still applied because StringRiffle over a list MIXING "" with real tokens would
+     emit stray commas — `DiracNet{, dloopsep(), dgamma(0)}` — which is a C++ syntax error in leading
+     or middle position but a LEGAL trailing comma in last position. That is a correctness that
+     depends on loop ORDER, which nothing enforces; it would become reachable the moment a Dirac head
+     that carries a Lorentz index can also be token-free. Filtering makes the emission order-blind.
+     Applied ONLY to the bare branch below: the DRESSED chain must keep every segment, because the
+     runtime derives nCollapsed from the LoopSep marker count (numeric_contract.hpp:979-1003) and
+     dropping a segment would silently change it. A dressed loop is never token-free at codegen time
+     anyway — an ntDressedNum is itself a chain token (a dtslot). *)
+  loopStrsBare = DeleteCases[loopStrs, ""];
   restFacs = DeleteCases[factors, Alternatives @@ Join[diracFacs, slashVecs]];
   (* LOUD GUARD against the silent dressed-numerator fall-through. `diracFacs` captures only BARE Dirac
      heads; a dressed propagator-numerator sum (Mq·δ − I·Z·γ·p̸) that was NEITHER distributed
@@ -807,7 +926,7 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
     Module[{chain = "std::vector<DChainTok>{" <> StringRiffle[loopStrs, ", dtfix(dloopsep()), "] <> "}",
             slotV = "std::vector<DSlot>{" <> StringRiffle[slots, ", "] <> "}"},
       {ntDressedCore[chain, slotV], restCompiled[[2]], restCompiled[[1]]}],
-    Module[{core = "DiracNet{" <> StringRiffle[loopStrs, ", dloopsep(), "] <> "}"},
+    Module[{core = "DiracNet{" <> StringRiffle[loopStrsBare, ", dloopsep(), "] <> "}"},
       {core, restCompiled[[2]] * 4^nEmptyLoops, restCompiled[[1]]}]]];
 
 (* ---- numeric (matrix-product) backend: component table + user symbols (task #22) -------------
@@ -1528,7 +1647,7 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
     "  std::printf(\"%.10e %.10e %.10e %.10e %.10e %ld\\n\", mim, mdiff, mre, mrim, mrdiff, ok); return 0; }\n"];
   cppFile = FileNameJoin[{$TemporaryDirectory, "ntprobe_" <> StringReplace[nsHome, {":" -> "_"}] <> ".cpp"}];
   bin = StringReplace[cppFile, ".cpp" -> ""];
-  Export[cppFile, src, "Text"];
+  ntExportCpp[cppFile, src];
   rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> tracesDir <> "' '" <> cppFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
   If[rc =!= 0, ntLog["[probe] compile failed (rc=", rc, ") — keeping complex kernel (conservative)"]; Return["Complex"]];
   Run["'" <> bin <> "' > '" <> bin <> ".out'"];
@@ -1578,7 +1697,7 @@ diagColPolys[colnetStrs_, includeDir_] := Module[
     "      std::printf(\"\\n\"); } }\n  return 0;\n}\n"];
   cppFile = FileNameJoin[{$TemporaryDirectory, "ntdiagpoly.cpp"}];
   bin = StringReplace[cppFile, ".cpp" -> ""];
-  Export[cppFile, src, "Text"];
+  ntExportCpp[cppFile, src];
   rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> includeDir <> "' '" <> cppFile <> "' -o '" <> bin <>
            "' 2> '" <> bin <> ".cerr'"];
   If[rc =!= 0,
@@ -1697,18 +1816,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
      ntVec[q_, ii_Integer] :> resolveComponents[q, frame][[ii + 1]]}];
   Module[{diagData = {}},
     ntLog["[prof] per-diagram net-build (", Length[k["Diagrams"]], " diagrams): ", First@AbsoluteTiming[
-    MapIndexed[Function[{diag, di}, Module[{coeff, col = "SUNNet{}", colTok = "", entries = {}, d = di[[1]] - 1,
-        pureLorAcc = {}, nNonConst = 0, nNCDirCol = 0, diracComps = {},
-        nFundConst = Count[diag["Components"],
-          c_ /; c["Constant"] && ! FreeQ[c["Factors"], _ntSUNT | _ntSUNDeltaFund]]},
+    MapIndexed[Function[{diag, di}, Module[{coeff, colBr, constAcc = {}, colTok = "", entries = {}, d = di[[1]] - 1,
+        pureLorAcc = {}, nNonConst = 0, nNCDirCol = 0, diracComps = {}},
       coeff = diag["Coeff"] /. {
     ntSP[x_, y_] :> resolveComponents[x, frame] . resolveComponents[y, frame],
     ntSPS[x_, y_] :> Rest[resolveComponents[x, frame]] . Rest[resolveComponents[y, frame]],
     ntVec[q_, i_Integer] :> resolveComponents[q, frame][[i + 1]]};
-      (* one fundamental constant component -> the legacy `_col<d>` name (kernels stay byte-identical);
-         several (e.g. a Yukawa loop's flavour AND colour traces) -> tag each `_col<d>_<ci>`. *)
-      MapIndexed[Function[{comp, ci}, Module[{str, scal,
-          tag = If[nFundConst > 1, ToString[d] <> "_" <> ToString[ci[[1]] - 1], ToString[d]]},
+      MapIndexed[Function[{comp, ci}, Module[{},
         If[comp["Constant"],
           (* Constant SU(N) component — colour and/or flavour, fundamental and/or adjoint: every group
              head carries its own rank N, so all fold through the SINGLE numeric SUNNet path
@@ -1718,10 +1832,15 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
              dressing coefficient and the consumer takes Re, so the imaginary part survives. ACCUMULATE
              components — a Yukawa loop carries SEVERAL constant components (a colour trace AND a flavour
              trace); mergeColNet folds them together so none is dropped (a bare `col = str` would keep
-             only the last, e.g. the δ^ii = Nf factor, giving a ~50% wrong trace). Single-component
-             flows are unchanged: mergeColNet["SUNNet{}", str] == str. *)
-          ({str, scal} = compileColG[Times @@ comp["Factors"], diag["Ids"]]; coeff *= scal;
-           col = mergeColNet[col, str]),
+             only the last, e.g. the δ^ii = Nf factor, giving a ~50% wrong trace).
+             ACCUMULATE THE FACTORS and compile once after the loop (see colBr below) rather than
+             compiling per component and splicing the strings with mergeColNet: a constant component
+             may be a PLUS (the four-quark Fierz flavour structure δδ - 4·T·T is one), which has no
+             single-net representation, and one Expand of the whole constant product does the
+             cross-product across several summed components in one step. Compiling the product is
+             equivalent to the old per-component splice — mergeColNet only concatenates factor
+             lists — so single-branch flows regenerate byte-identically. *)
+          constAcc = Join[constAcc, comp["Factors"]],
           (* Non-constant component. The DISCONNECTED components of ONE diagram MULTIPLY (their scalar
              trace values `Times @@ toks`) — they are NOT separate summed diagrams. Collect them so
              the post-loop assembly can form the
@@ -1736,6 +1855,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
              (nNCDirCol++; AppendTo[diracComps, splitColourGroupsInv[comp["Factors"], diag["Ids"], env, mask, nc]]),
              pureLorAcc = Join[pureLorAcc, comp["Factors"]]])]]],
         diag["Components"]];
+      (* The diagram's CONSTANT colour/flavour part, as a list of {netString, scalar} branches — one
+         branch unless a constant component was a sum. Colour folds to a scalar (sun_value_cx -> Cx)
+         and the generator already sums colour by emitting several nets into one group, so a summed
+         colour component costs one extra net record per branch and needs no C++ support. *)
+      colBr = If[constAcc === {}, {{"SUNNet{}", 1}}, compileColGSum[Times @@ constAcc, diag["Ids"]]];
       (* ---- assemble the diagram's nets from its non-constant components -----------------------------
          A diagram with K disconnected non-constant components is a PRODUCT of K independent closed
          scalars (each a Dirac/colour trace or a pure-Lorentz scalar): `coeff * Times @@ toks`.
@@ -1771,7 +1895,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                             chunkLorInv[Times @@ pureLorAcc, diag["Ids"], env, mask, nc]),
               True,      {}]},
             scalarleakCheck[baseEntries];
-            Do[appendRec[{mergeColNet[col, e[[1]]], e[[2]], coeff e[[3]], e[[4]], None, None}],
+            Do[appendRec[{mergeColNet[cb[[1]], e[[1]]], e[[2]], coeff cb[[2]] e[[3]], e[[4]], None, None}],
+               {cb, colBr},
                {e, If[baseEntries === {}, {{"SUNNet{}", {"konst(1.0)"}, 1, {{"", 1}}}}, baseEntries]}]],
           (* ---- >= 2 factors: factored product of disconnected components ----
              EVERY non-constant component becomes its OWN fused trace group: its colour-branch entries
@@ -1791,9 +1916,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                Do[appendRec[{e[[1]], e[[2]], 1, ({#[[1]], #[[2]] e[[3]]} &) /@ e[[4]], None, fid}],
                   {e, compEntries}]],
               {ci, 1, Length[factorComps]}];
-           (* the anchor: a trivial unit net carrying the diagram coeff, the constant colour `col`
-              (folded once, via the group sum colv(col)*1), and the list of component factor ids. *)
-           appendRec[{col, {"konst(1.0)"}, coeff, {{"", 1}}, factorIds, None}])]]]], k["Diagrams"]]], " s"];
+           (* the anchor: a trivial unit net carrying the diagram coeff, the constant colour branch
+              (folded once, via the group sum colv(net)*1), and the list of component factor ids.
+              ONE anchor per colour branch — each is an independent additive term
+              coeff·scal_b·colv(net_b)·Π(factor traces), and they all reference the SAME factorIds,
+              so the expensive component traces are computed once and shared. *)
+           Do[appendRec[{cb[[1]], {"konst(1.0)"}, coeff cb[[2]], {{"", 1}}, factorIds, None}],
+              {cb, colBr}])]]]], k["Diagrams"]]], " s"];
     (* memo sizes: the net-build's cost is dominated by the DISTINCT Dirac/Lorentz structures, not the
        call count (a dense flow calls these tens of thousands of times for a few hundred distinct
        results). If a flow ever shows these growing with the call count, a memo has stopped hitting. *)
@@ -1925,6 +2054,28 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     If[! FreeQ[invNets, _ntDressedCore],
        fillArgSig = fillArgSig <> StringJoin[(", [[maybe_unused]] double dr_" <> ToString[#]) & /@ Sort[Keys[$drTable]]]]];
 
+  (* LOUD GUARD: the integrand must be numeric-valued before it is lowered to C++. A DEGENERATE input
+     — most often a basis whose Gram is singular at the chosen kinematics, so its inverse metric (and
+     hence every dual projector) carries 0/0 — leaves Indeterminate / ComplexInfinity / DirectedInfinity
+     in the coefficients. FunKit's lowering happily prints those as bare identifiers, emitting e.g.
+     `return Indeterminate;` into the kernel header. That is a Mathematica symbol in generated C++:
+     here it fails to compile only by luck (no such identifier), and a differently-named leak could
+     compile into a silently wrong kernel.
+     Observed with the FULL AqbqDirect basis (12 structures) at the symmetric point: Det[g] = 0 there,
+     because the 12 structures are linearly DEPENDENT at that kinematic configuration — which is why
+     the flows project with a restricted sub-basis. Refuse rather than emit. *)
+  With[{bad = Cases[integrand, Indeterminate | _DirectedInfinity | ComplexInfinity, {0, Infinity}]},
+    If[bad =!= {},
+      Print["[NumTracer] ERROR: the integrand is not numeric — it contains ", Length[bad], " ",
+            "Indeterminate/Infinity value(s), which would be emitted as bare Mathematica symbols in ",
+            "the generated C++ (e.g. `return Indeterminate;`).\n",
+            "  This almost always means a SINGULAR Gram at the chosen kinematics: the basis's ",
+            "structures are linearly dependent there, so the inverse metric — and every dual ",
+            "projector built from it — carries 0/0. Check Det[TBGetMetric[basis]] under the frame's ",
+            "kinematics (e.g. the symmetric point), and project with a restricted sub-basis whose ",
+            "Gram is non-degenerate. Offending value(s): ", Short[DeleteDuplicates[bad], 4]];
+      Abort[]]];
+
   (* the integrand -> C++ lowering (FunKit). Timed separately: it is the one heavy stage between the
      net-build and the generator emit, so without this the [prof] trail has a blind spot. *)
   ntLog["[prof] FunKit kernel/class/header lowering: ", First@AbsoluteTiming[
@@ -1954,13 +2105,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   ntLog["[prof] write generator files (", Length[unitFiles] + 2, " files, ",
         Round[(Total[StringLength /@ genUnits] + StringLength[genDecl] + StringLength[genMain])/1000000.], " MB): ",
     First@AbsoluteTiming[
-      Export[declFile, genDecl, "Text"];
+      ntExportCpp[declFile, genDecl];
       (* each unit #includes the shared decl header so its net builders can call the cross-unit CSE
          accessors (lc<k>()/dc<k>()) and sibling net builders, parsed once per TU. *)
       Module[{uInc = "#include \"" <> FileNameTake[declFile] <> "\"\n"},
-        Do[Export[unitFiles[[u]], uInc <> genUnits[[u]], "Text"], {u, 1, Length[genUnits]}]];
+        Do[ntExportCpp[unitFiles[[u]], uInc <> genUnits[[u]]], {u, 1, Length[genUnits]}]];
       genSrc = genPre <> "\n#include \"" <> FileNameTake[declFile] <> "\"\n\n" <> genMain;
-      Export[genFile, genSrc, "Text"];], " s"];
+      ntExportCpp[genFile, genSrc];], " s"];
   Print["wrote generator: ", genFile, " (+ ", Length[genUnits], " net units + decl header)"];
 
   (* run the generator at codegen time -> the committed straight-line kernel header. The binary's
@@ -2090,7 +2241,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   (* kernel header (write-if-changed). *)
   If[FileExistsQ[kernelFile] && Import[kernelFile, "Text"] === header,
     Print["unchanged: ", kernelFile],
-    Export[kernelFile, header, "Text"]; Print["wrote kernel: ", kernelFile]];
+    ntExportCpp[kernelFile, header]; Print["wrote kernel: ", kernelFile]];
   kernelFile
 ];
 

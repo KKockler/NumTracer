@@ -139,9 +139,31 @@ namespace numtracer::network
   /// @return the trace as a `NetVal` (empty == structural zero, e.g. an odd gamma count).
   inline NetVal dirac_value(const DiracNet &chain, int firstFreeLabel)
   {
+    // trace_rec implements the Wick pairing for FREE/SLASH tokens only: pair_factor treats any
+    // non-Gamma token as a slash and reads its `vlc`, which for a Comm (σ) built from two FREE legs
+    // is EMPTY — vec_lc then folds to the zero 4-vector and the trace silently collapses. LoopSep is
+    // not a gamma at all and would be paired as one. Neither can be traced here, so refuse them
+    // rather than return a plausible-looking wrong answer. (The live engine, numeric_dirac, DOES
+    // handle both; this function is a cross-validation oracle — see tests/test_numeric_contract.cpp.)
+    for (const DFac &d : chain)
+      if (d.kind == DFac::Comm)
+        NT_THROW(std::runtime_error,
+                 "dirac_value: chain contains a Comm (sigma) token, which the Wick-pairing "
+                 "recursion cannot trace (pair_factor would read its empty vlc and silently "
+                 "collapse the trace). Use numeric_dirac for sigma-bearing chains.");
+      else if (d.kind == DFac::LoopSep)
+        NT_THROW(std::runtime_error,
+                 "dirac_value: chain contains a LoopSep marker — split the chain into its "
+                 "independent spinor loops before tracing (see ndetail::split_loops).");
+    // Gamma parity. Count ONLY the antidiagonal-block tokens, exactly as numeric_dirac does
+    // (numeric_contract.hpp): a Comm is two gammas and a LoopSep is none, so both contribute 0 mod 2
+    // — counting either as ONE gamma (the old `!= Gamma5` test) inverted the verdict, returning a
+    // structural zero for a nonzero 4-gamma trace like {sigma, gamma, gamma} and passing a genuinely
+    // odd chain like {sigma, gamma} through to trace_rec. Both are now refused above, but keep the
+    // count in step with its sibling so the two engines cannot drift again.
     std::size_t ng = 0;
     for (const DFac &d : chain)
-      if (d.kind != DFac::Gamma5) ++ng; // count gammas (free + slash)
+      if (d.kind == DFac::Gamma || d.kind == DFac::Slash) ++ng;
     if (ng % 2 == 1) return {};         // odd chain → 0
     int fresh = firstFreeLabel;
     NetVal r = dirac_detail::trace_rec(chain, fresh); // stage 1: no γ5 tokens
