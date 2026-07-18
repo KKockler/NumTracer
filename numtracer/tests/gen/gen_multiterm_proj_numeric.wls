@@ -260,6 +260,43 @@ If[CheckAbort[NumTrace[ntEpsFund[3, u1, u2, u3] ntEpsFund[3, u4, u5, u6] *
   Exit[1]];
 Print["[gen] ok: ambiguous zero-overlap epsilon pairing refused"];
 
+(* Assertion K: a CLOSED colour loop inside a colour-ENTANGLED Plus, i.e. a group head that reaches
+   splitColourGroupsInv as an integer POWER rather than as a bare factor.
+
+   splitColourGroupsInv distributes the entangled Pluses and then splits each branch into a colour
+   product and a Lorentz/Dirac remainder with a LEVEL-1 Cases/DeleteCases, which matches only what is
+   a BARE factor. A group head raised to a power is not, so it stays in the REMAINDER and is handed
+   to the Lorentz-only builderInv, which has no rule for it and CForm's it into the generated C++.
+
+   TWO entangled sums are required to reproduce, and this is the whole subtlety. With one sum the
+   branch's factors reach the split as a LIST (Join of the term's factors and the un-expanded ones),
+   so two identical deltas stay two separate elements and the head pattern matches both. It is
+   Expand[Times @@ needExpand] across SEVERAL sums that multiplies them inside one term, where Times
+   collapses them to deltaFund[3,ck1,ck2]^2 — a closed colour loop, value Nc.
+
+   Both sums must also carry the colour AND the Dirac structure: with colour in a separate factor the
+   two land in disconnected components (they share no label) and colour goes down the constant /
+   compileColGSum path, which has always expanded such powers.
+
+   Oracle — every one of the 4 branches has colour deltaFund^2 = Nc = 3; the Dirac side closes
+   through ntDeltaDirac[dk2,dk1]:
+     (2,3): 6  * tr(1)               = 24        (7,3),(2,5): odd gamma count -> 0
+     (7,5): 35 * tr(q1slash qlslash) = 140*(q1.ql)
+   so the kernel is 3*(24 + 140*(q1.ql)) = 72 + 420*(q1.ql). Constant and momentum-dependent parts
+   are graded together, so dropping either surviving branch is visible. *)
+netK = (2 ntDeltaDirac[dk1, dkx] ntSUNDeltaFund[3, ck1, ck2] +
+        7 ntGamma[mk1, dk1, dkx] ntVec[Global`q1, mk1] ntSUNDeltaFund[3, ck1, ck2]) *
+       (3 ntDeltaDirac[dkx, dk2] ntSUNDeltaFund[3, ck1, ck2] +
+        5 ntGamma[mk2, dkx, dk2] ntVec[Global`ql, mk2] ntSUNDeltaFund[3, ck1, ck2]) *
+       ntDeltaDirac[dk2, dk1];
+ntkK = NumTrace[netK, "Frame" -> frame, "Args" -> args, "Dressings" -> {}];
+MakeNTKernel[ntkK,
+  FileNameJoin[{$gen, "gen_colpow_num.cpp"}],
+  FileNameJoin[{$gen, "Colpow_num_kernel.hh"}],
+  FileNameJoin[{$gen, "Colpow_num_kernels.hh"}],
+  "Name" -> "Colpow_num_kernel", "Namespace" -> "colpow_num", "Dressings" -> {}];
+Print["[gen] ok: closed-colour-loop (deltaFund^2) in an entangled Plus emitted"];
+
 (* Assertion I: the ADJOINT Levi-Civita. !! SU(2) ONLY !! At rank 2 — and ONLY at rank 2 — the
    adjoint epsilon coincides with the structure constant, eps^abc = f^abc exactly (coefficient +1),
    so FromFunKit rewrites it to ntSUNf[2,...]. This is NOT an SU(N) statement: for SU(3),

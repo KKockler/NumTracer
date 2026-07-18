@@ -362,6 +362,14 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_multiterm_proj_num PRIVATE tests/gen)
   target_link_libraries(compare_multiterm_proj_num PRIVATE NumTracer::NumTracer)
 
+  # Four-quark Fierz orthonormality on a REAL basis (FierzCompleteNf2Nc3NJL), kernel from
+  # tests/gen/gen_fierz_ortho_numeric.wls. The only gate with TWO independent spinor lines, and the
+  # only one exercising the SU(N) Levi-Civita contraction (colour AND flavour) on physics input --
+  # including an epsilon pair straddling an eager Plus in the diquark vertex.
+  add_executable(compare_fierz_ortho tests/compare_fierz_ortho.cpp)
+  target_include_directories(compare_fierz_ortho PRIVATE tests/gen)
+  target_link_libraries(compare_fierz_ortho PRIVATE NumTracer::NumTracer)
+
   # Fixed-Lorentz-component gate (gamma^0 & co, the finite-T 3+1 split the four-quark Fierz bases are
   # written in), kernels from tests/gen/gen_fixedcomp_numeric.wls. A fixed component is an index
   # pinned to a CONCRETE value; the DSL had no such notion, so the literal 0 was read as a
@@ -422,6 +430,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME projector_fusion COMMAND test_projector_fusion)
   add_test(NAME proj_num COMMAND compare_proj_num)
   add_test(NAME multiterm_proj_num COMMAND compare_multiterm_proj_num)
+  add_test(NAME fierz_ortho COMMAND compare_fierz_ortho)
   add_test(NAME ortho_num COMMAND compare_ortho_num)
   add_test(NAME fixedcomp_num COMMAND compare_fixedcomp_num)
   add_test(NAME ftproj_num COMMAND compare_ftproj_num)

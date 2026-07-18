@@ -41,6 +41,8 @@
 
 #include "Epsstraddle_num_kernel.hh"
 
+#include "Colpow_num_kernel.hh"
+
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -223,6 +225,34 @@ int main()
   std::printf("epsilon pair straddling a Plus (60) vs analytic:   pointwise=%.3e  maxAbs=%.3e\n", pwS, maxAbsS);
   if (!(pwS < 1e-10 && maxAbsS > 1e-6)) {
     std::printf("TESTS FAILED (straddle: a cross-rank mispairing drops an index and mis-contracts)\n");
+    return 1;
+  }
+
+  // CLOSED colour loop inside a colour-entangled Plus: a group head reaching splitColourGroupsInv as
+  // an integer POWER (deltaFund[3,ck1,ck2]^2 = Nc). It takes TWO entangled sums to create: only
+  // Expand across several sums multiplies the two identical deltas inside one term. That split is a
+  // level-1 Cases/DeleteCases, so a head-only pattern leaves the Power in the Lorentz remainder and
+  // it is CForm'd into the .cpp by the Lorentz-only builderInv.
+  //
+  // Oracle: colour deltaFund^2 = Nc = 3 in all 4 branches; the Dirac loop gives
+  //   (2,3): 6*tr(1) = 24;  (7,5): 35*tr(q1slash qlslash) = 140*(q1.ql);  the two odd-gamma
+  //   branches vanish.  ->  3*(24 + 140*(q1.ql)) = 72 + 420*(q1.ql)
+  using Cpow = numtracer_kernels::Colpow_num_kernel<Reg>;
+  std::mt19937_64 rng8(13579);
+  double pwP = 0, maxAbsP = 0;
+  for (int i = 0; i < 200000; ++i) {
+    const double l1 = Ul(rng8), cos1 = Uc(rng8), cos2 = Uc(rng8), p = Ul(rng8);
+    const double s1 = std::sqrt(1.0 - cos1 * cos1);
+    const V4 q1 = {p, 0.0, 0.0, 0.0};
+    const V4 ql = {l1 * cos1, l1 * s1 * cos2, l1 * s1 * std::sqrt(1.0 - cos2 * cos2), 0.0};
+    const double a = 72.0 + 420.0 * dot(q1, ql);
+    const double n = Cpow::kernel(l1, cos1, cos2, p);
+    pwP = std::max(pwP, std::fabs(n - a) / (1e-300 + std::fabs(a)));
+    maxAbsP = std::max(maxAbsP, std::fabs(a));
+  }
+  std::printf("closed colour loop in entangled Plus vs analytic: pointwise=%.3e  maxAbs=%.3e\n", pwP, maxAbsP);
+  if (!(pwP < 1e-10 && maxAbsP > 1e-6)) {
+    std::printf("TESTS FAILED (colour power left in the Lorentz remainder, or a branch dropped)\n");
     return 1;
   }
 

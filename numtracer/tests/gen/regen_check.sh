@@ -59,6 +59,10 @@ DEFAULT_FLOWS=(
   # a ctest but NOT here, so the codegen suite — the only one that re-runs the generators — was blind
   # to it: a mathematica/ change could break this generator and every test would still pass.
   gen_fixedcomp_numeric
+  # Four-quark Fierz orthonormality on a REAL basis (FierzCompleteNf2Nc3NJL). ~30 s. The only flow
+  # here with TWO independent spinor lines, and the only one exercising the SU(N) Levi-Civita
+  # contraction (colour AND flavour) on physics input — including a pair straddling an eager Plus.
+  gen_fierz_ortho_numeric
   # The dense sub-term-dedup flow. Emits TWO kernels in one run (dedup ON, and a dedup-OFF control);
   # compare_zaaqbq1_small grades one against the other. The slowest flow here (~90 s), almost all of
   # it the dedup-OFF control — which is the speedup being tested.

@@ -65,9 +65,15 @@ If[! FreeQ[{TBGetProjector[b, 1, idxP], TBGetVertex[b, 1, idxA]}, _Unique],
         "(upstream TensorBases regression). On the diagonal i==j the projector and vertex then ",
         "share a byte-identical 'private' dummy and the contraction is silently wrong."]; Exit[1]];
 
+(* ONE FTerm per pair, NOT the "2 T1 T2 - 2 T1 T2" combination that TBInfo[] reports as this basis's
+   inner product. That combination is already baked into TBGetVertex: printing V_j(idxA) shows it
+   carries BOTH leg orderings, (2,1,4,3) and (2,3,4,1), with opposite signs and an overall 1/2 —
+   i.e. the vertex IS the antisymmetrised structure. Consequently V_j(idxB) = -V_j(idxA) identically,
+   and applying the inner product a second time here gave 2 F - 2 (-F) = 4 F: every diagonal entry
+   came out 4x, and the gate read 9804 = 4 * 2451. That was a bug in THIS script, not in the tracer.
+   (It presents as a uniform factor precisely because the distinct-prime weighting cannot hide one.) *)
 net = FromFunKit @ Sum[
-   w[i, j] (2 FTerm[TBGetProjector[b, i, idxP], TBGetVertex[b, j, idxA]] -
-            2 FTerm[TBGetProjector[b, i, idxP], TBGetVertex[b, j, idxB]]),
+   w[i, j] FTerm[TBGetProjector[b, i, idxP], TBGetVertex[b, j, idxA]],
    {i, n}, {j, n}];
 Print["[gen] weighted net LeafCount = ", LeafCount[net]];
 

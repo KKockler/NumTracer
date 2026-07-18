@@ -142,6 +142,15 @@ be one of the six group heads (ntSUNf/ntSUNDeltaAdj/ntSUNT/ntSUNDeltaFund/ntSUND
 A Plus here means a colour/flavour sum reached the flat compiler instead of compileColGSum; any \
 other head means the \"Constant\" head list in DSL.m analyseDiagram has drifted. Offending \
 factor:\n`1`";
+(* NB: no backquoted code fragments in this string — a backquoted word is a StringForm SLOT, so
+   quoting an identifier that way makes the message itself fail to format (StringForm::sfr). *)
+MakeNTKernel::colrest = "splitColourGroupsInv: after splitting a branch into its colour product and \
+its Lorentz/Dirac remainder, SU(N) head(s) are still present in the REMAINDER. The remainder goes to \
+the Lorentz-only builderInv/compileDirac, which has no rule for a group head, so it would be \
+CForm'd into the generated C++ as raw Mathematica (builderInv[ntSUNDeltaFund[...], <|...|>]). \
+The split is Cases/DeleteCases at LEVEL 1, so it only sees group heads that are BARE factors — one \
+buried inside a Power (a CLOSED colour loop: deltaFund[N,i,j]^2) or a surviving Plus slips through. \
+Offending head(s):\n`1`\nRemainder:\n`2`";
 MakeNTKernel::colpow = "compileColG: a colour/flavour SUM raised to the integer power `1`. \
 Expanding it by repetition would duplicate the summands' index labels, so the same label would \
 appear on 2k tensors and the et/SUNNet contraction would silently mis-pair them into a wrong \
@@ -200,7 +209,17 @@ compileTInvBody[e_, ids_, env_, mask_, nc_] := Which[
    emitted as several (sunNet, lorentzNet) entries that the per-diagram combination already sums. *)
 ctHeadsInv = {_ntSUNf, _ntSUNDeltaAdj, _ntSUNT, _ntSUNDeltaFund, _ntSUNDiagFund, _ntSUNDiagAdj};
 colourEntangledQ[e_] := ! FreeQ[e, Alternatives @@ ctHeadsInv];
-colourFactorProd[term_] := Times @@ Cases[If[Head[term] === Times, List @@ term, {term}], Alternatives @@ ctHeadsInv];
+(* A group head OR an integer power of one. Splitting a term into "colour" and "the Lorentz/Dirac
+   rest" is a LEVEL-1 Cases/DeleteCases over the factor list, so it matches only what is a BARE
+   factor — and a CLOSED colour/flavour loop collapses two identical deltas into deltaFund[N,i,j]^2
+   (= N), which is a Power, not a head. Matched by the head pattern alone, such a factor is silently
+   left in the remainder and handed to the Lorentz-only builderInv, which CForm's it into the
+   generated C++. compileColG already knows how to expand this power into repeated SUNNet factors;
+   it just has to be COLLECTED here first. (The four-quark Fierz gate reached exactly this: the
+   epsilon-pair expansion produces delta products, and a closed flavour loop squares one of them.) *)
+ctFacInv = Alternatives[Alternatives @@ ctHeadsInv,
+                        Power[Alternatives @@ ctHeadsInv, _Integer?Positive]];
+colourFactorProd[term_] := Times @@ Cases[If[Head[term] === Times, List @@ term, {term}], ctFacInv];
 mergeColNet["SUNNet{}", b_] := b;
 mergeColNet[a_, "SUNNet{}"] := a;
 mergeColNet[a_, b_] := "SUNNet{" <> StringDrop[StringDrop[a, 7], -1] <> "," <> StringDrop[StringDrop[b, 7], -1] <> "}";
@@ -499,8 +518,16 @@ splitColourGroupsInv[factors0_, ids_, env_, mask_, nc_] := Module[
   (* per branch -> {colourProduct, list-of-{bodyOrCore,scal,restStr}} *)
   branchNets = Function[term, Module[{termFactors, colProd, rest},
      termFactors = Join[If[Head[term] === Times, List @@ term, {term}], keepAll];
-     colProd = Times @@ Cases[termFactors, Alternatives @@ ctHeadsInv];
-     rest = DeleteCases[termFactors, Alternatives @@ ctHeadsInv];   (* gammas + Lorentz + numeric coeff (no colour) *)
+     colProd = Times @@ Cases[termFactors, ctFacInv];
+     rest = DeleteCases[termFactors, ctFacInv];   (* gammas + Lorentz + numeric coeff (no colour) *)
+     (* Level-1 DeleteCases only strips BARE group-head factors. Anything that buries one (a Power, or
+        a Plus that entangledQ did not expand) leaves colour in the remainder, which then reaches the
+        Lorentz-only builderInv and is CForm'd into the .cpp. Fail here, where the offender is still
+        identifiable, rather than at the emission chokepoint three layers away. *)
+     If[! FreeQ[rest, Alternatives @@ ctHeadsInv],
+       Message[MakeNTKernel::colrest,
+         Short[DeleteDuplicates@Cases[rest, Alternatives @@ ctHeadsInv, {0, Infinity}], 6],
+         Short[rest, 8]]; Abort[]];
      {colProd, If[! FreeQ[rest, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum],
         {compileDirac[rest, ids, env, mask, nc]},          (* gamma chain: {core, scal, projectorRest} *)
         ({#[[1]], #[[2]], ""} &) /@ chunkLorInv[Times @@ rest, ids, env, mask, nc]]}]] /@ terms;
@@ -1182,6 +1209,12 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
   distinctSubs = Keys[ReverseSort[refCount]];
   subIdxOf = AssociationThread[distinctSubs -> Range[0, Length[distinctSubs] - 1]];
   nSub = Length[distinctSubs];
+  (* Published for the COMPILE step (mainOpt), which runs later, in another function, and needs the
+     flow's distinct-trace count to pick the main-TU optimisation level — the generator RUN scales
+     with it. A global rather than a threaded argument because the two are already strictly
+     sequential within one generation; reset per generation right here, where it is computed, so a
+     stale value from a previous flow can never leak into the next one's decision. *)
+  $ntGenNSub = nSub;
   nReused = Count[Values[refCount], c_ /; c >= 2];   (* == the length of the sorted prefix worth caching *)
   netTerms = Map[Function[nt, {subIdxOf[nt[[1]]], nt[[2]]}] /@ # &, netTerms];
   ntLog["[cse] sub-terms: ", Total[Length /@ subKeys], " contractions -> ", nSub, " distinct traces (",
@@ -1269,12 +1302,40 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
       "  std::vector<std::vector<DSlot>> sdsl = sdsl0();\n", ""],
     (* per net: which traces it references, and with what scalar (sub-terms sharing a trace have
        already been merged, and zero sums dropped, at codegen time) *)
-    "  std::vector<std::vector<int>> sidx = {" <>
-      StringRiffle[Function[nt, "{" <> StringRiffle[bb /@ nt[[All, 1]], ","] <> "}"] /@ netTerms, ","] <> "};\n",
-    "  std::vector<std::vector<Cx>> dsc = {" <>
-      StringRiffle[Function[nt, "{" <> StringRiffle[
-        Function[s, "Cx{" <> cppNum[Re[s]] <> "," <> cppNum[Im[s]] <> "}"] /@ nt[[All, 2]], ","] <> "}"] /@ netTerms,
-        ","] <> "};\n",
+    (* sidx/dsc HASH-CONSED. Written out in full these two tables dominate the main TU: on the
+       four-quark Fierz gate they were 0.29 MB and 2.14 MB of literals for 3470 nets, and since the
+       non-dressed main TU compiles at -O2 (see mainOpt) a single multi-megabyte braced-init costs
+       MINUTES — measured >600 s at -O2 vs 6 s at -O0 on the same file, while every net-builder unit
+       took 0.65 s. $ntDefChunk already solved this for the net-builder units; these data tables were
+       never covered by it.
+       The redundancy is extreme because sub-terms sharing a trace share their scalars: 73144 Cx
+       literals over only 601 DISTINCT values, and 3470 index rows over 366 distinct. So dedupe rows
+       for sidx, and for dsc dedupe BOTH levels (values, then the rows of value-indices — row dedup
+       alone leaves ~1 MB, since the rows differ while their entries repeat). The runtime rebuild
+       below is O(nets) and reproduces sidx/dsc EXACTLY as before, so fold_nets is untouched. *)
+    With[{idxRows = Function[nt, nt[[All, 1]]] /@ netTerms,
+          scaRows = Function[nt, nt[[All, 2]]] /@ netTerms},
+     With[{uIdx = DeleteDuplicates[idxRows], uVal = DeleteDuplicates[Flatten[scaRows]]},
+      With[{idxPos = AssociationThread[uIdx -> Range[Length[uIdx]] - 1],
+            valPos = AssociationThread[uVal -> Range[Length[uVal]] - 1]},
+       With[{scaIdxRows = Map[valPos, scaRows, {2}]},
+        With[{uSca = DeleteDuplicates[scaIdxRows]},
+         With[{scaPos = AssociationThread[uSca -> Range[Length[uSca]] - 1]},
+          StringJoin[
+           "  const size_t NNET = " <> bb[Length[netTerms]] <> ";\n",
+           "  std::vector<std::vector<int>> sidxU = {" <>
+             StringRiffle[("{" <> StringRiffle[bb /@ #, ","] <> "}") & /@ uIdx, ","] <> "};\n",
+           "  std::vector<int> sidxR = {" <> StringRiffle[bb /@ (idxPos /@ idxRows), ","] <> "};\n",
+           "  std::vector<std::vector<int>> sidx(NNET);\n",
+           "  for(size_t i=0;i<NNET;++i) sidx[i]=sidxU[sidxR[i]];\n",
+           "  std::vector<Cx> dscV = {" <> StringRiffle[
+             Function[s, "Cx{" <> cppNum[Re[s]] <> "," <> cppNum[Im[s]] <> "}"] /@ uVal, ","] <> "};\n",
+           "  std::vector<std::vector<int>> dscU = {" <>
+             StringRiffle[("{" <> StringRiffle[bb /@ #, ","] <> "}") & /@ uSca, ","] <> "};\n",
+           "  std::vector<int> dscR = {" <> StringRiffle[bb /@ (scaPos /@ scaIdxRows), ","] <> "};\n",
+           "  std::vector<std::vector<Cx>> dsc(NNET);\n",
+           "  for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());\n",
+           "    for(int k: r) dsc[i].push_back(dscV[k]); }\n"]]]]]]],
     (* the projector atom denominators are keyed by ATOM ID (e.inv/e.invS), not by position, and each
        id is filled idempotently — and the distinct traces cover every lnet that occurs. So scanning
        the deduped table gives the same atomDen as scanning every occurrence did. *)
@@ -1317,8 +1378,19 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
        so the rank is written once. Scan the assembled net strings for the `sun<digits>.` tokens. *)
     StringJoin["  SUNEnv sun" <> # <> "(" <> # <> ");\n" & /@
       DeleteDuplicates@Flatten@StringCases[colourNets, "sun" ~~ r : DigitCharacter .. ~~ "." :> r]],
-    "  std::vector<SUNNet> colnets = {" <> StringRiffle[colourNets, ","] <> "};\n",
-    "  std::vector<numtracer::Cx> colv(" <> bb[nNet] <> "); for(int i=0;i<" <> bb[nNet] <> ";++i) colv[i]=sun_value_cx(colnets[i]);\n",
+    (* colnets HASH-CONSED for the same reason (0.57 MB -> 0.115 MB on the Fierz gate: 3470 rows,
+       719 distinct). Two nets that differ only in their Lorentz/Dirac part share a colour net, so
+       the duplication is structural. This also collapses the sun_value_cx calls to the distinct
+       nets — 4.8x fewer on that flow — which is a RUN saving on top of the compile one. *)
+    With[{uCol = DeleteDuplicates[colourNets]},
+     With[{colPos = AssociationThread[uCol -> Range[Length[uCol]] - 1]},
+      StringJoin[
+       "  std::vector<SUNNet> colnetsU = {" <> StringRiffle[uCol, ","] <> "};\n",
+       "  std::vector<int> colR = {" <> StringRiffle[bb /@ (colPos /@ colourNets), ","] <> "};\n",
+       "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n",
+       "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n",
+       "  std::vector<numtracer::Cx> colv(" <> bb[nNet] <> ");\n",
+       "  for(int i=0;i<" <> bb[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]]],
     "  std::vector<std::vector<int>> groups = {" <>
       StringRiffle[("{" <> StringRiffle[bb /@ #, ","] <> "}") & /@ groups, ","] <> "};\n",
     "  GlobalEnv g;\n",
@@ -2137,18 +2209,48 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
       ntLog["[time]   generator engine: ", If[useLib, "linking " <> libPath, "header-only (libNumTracer.a not found)"]];
       mainObj = bin <> "_main.o";
       unitObjs = Table[bin <> "_u" <> ToString[u - 1] <> ".o", {u, 1, Length[unitFiles]}];
-      (* Main-TU optimisation level. The generator runs ONCE (~1 s), so -O2 on it is wasteful — but its
-         contraction loop must stay inlined or the RUN slows ~10x. For the DRESSED (collected) path the
-         main TU is heavy to compile at -O2 (the DPoly templates + the inline dch/dsl chain/slot literals
-         instantiate slowly: measured 28.7 s at -O2 vs 17.5 s at -O1 with an IDENTICAL ~1 s run, vs -O0
-         which compiles in 6 s but slows the run to ~9 s). -O1 keeps the contraction optimised while
-         dropping -O2's costly extra passes, so it is the dressed default. Non-dressed stays -O2
-         (already fast to compile, and its reduce+rebase RUN on big flows benefits from -O2). Override
-         with NT_GEN_MAIN_OPT. *)
+      (* Main-TU optimisation level. Compile and RUN each happen exactly ONCE per generation, so the
+         only thing worth minimising is their SUM — an optimisation level is not "safer" for being
+         higher, it is just a different split of the same total.
+
+         -O2 IS DOMINATED and is no longer offered. Measured on the four-quark Fierz gate (non-dressed,
+         100 diagrams, 16223 distinct traces), main TU only:
+             -O0   compile  2.75 s   run 9.30 s   total 12.1 s
+             -O1   compile 20.43 s   run 0.60 s   total 21.0 s
+             -O2   compile 47.40 s   run 0.55 s   total 48.0 s
+         so -O2 buys 0.05 s of run for 27 s of compile. The dressed path was already measured the same
+         way (28.7 s vs 17.5 s compile, IDENTICAL run) — which is why the dressed default was -O1. The
+         non-dressed default was -O2 only because that TU was assumed cheap to compile; that stopped
+         being true once the per-net data tables dominated it, and it is what made the Fierz gate look
+         like it hung (>600 s at -O2 before those tables were hash-consed).
+
+         -O0 is NOT auto-selected. It wins on the Fierz gate (12.1 s vs 21.0 s), so an nSub-gated
+         "-O0 for small flows" rule looks obviously right — and it is WRONG twice over.
+
+         First, nSub does not predict the run. Tried with a cutoff of 20000 it made the codegen suite
+         regenerate ZA4_147 for >18 minutes (from seconds), and that flow has nSub = 294 — twenty
+         times FEWER distinct traces than Fierz's 3831, but each vastly bigger (dense four-gluon
+         vertex over the full tensor basis). The run scales with trace SIZE, not count.
+
+         Second, the real discriminator is DRESSED vs not: the DPoly contraction loop must stay
+         inlined, the MPoly one is far less sensitive. Measured on ZAqbq (all_tensors, dressed,
+         nSub = 306), main TU only, identical 2007 KB kernel from all three:
+             -O0   compile 2.37 s   run 34.26 s   total 36.63 s
+             -O1   compile 5.11 s   run  1.31 s   total  6.42 s
+             -O2   compile 8.94 s   run  1.27 s   total 10.21 s
+         (a third independent confirmation that -O2 is dominated).
+
+         But "-O0 when not dressed" is fragile too: Fierz is non-dressed and STILL loses 16x of run
+         at -O0 (0.60 s -> 9.92 s); it only wins because its compile saving happens to be larger, and
+         a denser non-dressed flow would flip that. The asymmetry decides it — -O1 costs at most a
+         bounded ~18 s of compile, while -O0 can cost 5.7x (ZAqbq) or minutes (ZA4_147), and a slow
+         run looks exactly like a hang. So: -O1 always, with NT_GEN_MAIN_OPT=-O0 available for flows
+         known to be small and non-dressed, where it is a genuine ~2x win. *)
       mainOpt = With[{e = Environment["NT_GEN_MAIN_OPT"]},
         Which[StringQ[e] && e =!= "", e,
-          ! FreeQ[invNets, _ntDressedCore], "-O1",
-          True, "-O2"]];
+          True, "-O1"]];
+      ntLog["[time]   generator main TU: ", mainOpt, " (nSub = ", $ntGenNSub,
+        "; NT_GEN_MAIN_OPT=-O0 is a large win on SMALL flows, but see the note above)"];
       (* RAM-bounded parallel compile: run at most $ntCompileJobs `cxx` at once (xargs -P), and cap
          each at ~17 GB virtual (ulimit -v). Peak RAM ~ jobs x per-unit; with the unit count scaled so
          each TU is small (~12 net-builders) this stays well under the machine limit for any flow size.
