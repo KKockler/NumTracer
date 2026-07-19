@@ -1096,8 +1096,60 @@ namespace numtracer::numeric
   ///        validate against the INTEGRATED numeric-vs-FORM error, not a pointwise round-off floor.
   inline constexpr double kNoisePruneRelTol = 1e-9;
 
+  /// @brief Significant decimal digits kept when snapping a lowered coefficient (@ref snap_coeff).
+  ///
+  /// The numeric backend contracts components in `double`, so one correctly-rounded frame literal
+  /// (`Sqrt[3]/2 -> 0.86602540378443865`, from the 120-degree symmetric point) is sprayed by ~1e4
+  /// double operations into thousands of near-duplicates of the SAME mathematical constant:
+  /// `16.000000000000007` and `16.000000000000004` both mean 16, reached by different association
+  /// orders. That matters because the SSA CSE keys constants on RAW BITS
+  /// (`codegen/real_cse.hpp` ihash/ieq), so each variant becomes its own RCONST, every downstream
+  /// RMUL that consumes it also differs, and one dirty ulp at a leaf duplicates an entire subtree.
+  /// The bit-exact folds (`k == 1.0`, `k == 0.0`) miss for the same reason, emitting free multiplies.
+  ///
+  /// MEASURED tradeoff on ZAqbq1_147 (Mq in), 200k points, vs the FormTracer oracle. Note the trace
+  /// sums cancel heavily, so a coefficient perturbation is amplified ~1e6 in the result — do NOT
+  /// pick this from the literal-collapse count alone:
+  ///
+  ///   digits | multiplies | distinct lits | ns/eval | NT/FORM | rel-err vs FORM
+  ///   -------|------------|---------------|---------|---------|----------------
+  ///   off    |     29,395 |          2931 |    3508 |  2.90x  | 4.26e-09
+  ///   15     |     27,049 |           740 |    3371 |  2.75x  | 2.98e-09
+  ///   14     |     26,096 |           378 |    3283 |  2.64x  | 6.43e-09   <- default
+  ///   12     |     25,988 |           338 |    3220 |  2.63x  | 4.55e-06   <- 1000x accuracy loss
+  ///
+  /// 14 captures essentially the whole speed win at no accuracy cost; 12 buys a further 2% for three
+  /// orders of magnitude of accuracy, which is a bad trade. Override with NT_GEN_SNAP_DIGITS
+  /// (0 = disable). Re-measure this table before changing the default.
+  inline constexpr int kCoeffSnapDigits = 14;
+
+  /// @brief Round @p v to @ref kCoeffSnapDigits significant decimal digits.
+  ///
+  /// Applied at the single point where a polynomial coefficient becomes a codegen `LMono::c` — i.e.
+  /// AFTER all polynomial arithmetic and after the noise-prune above — so it cannot perturb a
+  /// cancellation, only canonicalise what survived. Perturbation is ~1e-12 relative, three orders
+  /// below the numeric-vs-FORM correctness gate.
+  inline double snap_coeff(double v)
+  {
+    static const int digits = [] {
+      if (const char *e = std::getenv("NT_GEN_SNAP_DIGITS")) {
+        const int d = std::atoi(e);
+        if (d >= 0 && d <= 17) return d;
+      }
+      return kCoeffSnapDigits;
+    }();
+    if (digits == 0 || v == 0.0 || !std::isfinite(v)) return v;
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%.*e", digits - 1, v);
+    return std::strtod(buf, nullptr);
+  }
+
   NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly = false);
   NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
+  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<MPoly> &ps, network::GlobalEnv &g,
+                                                     const std::vector<int> &realOnly);
+  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<DPoly> &ps, network::GlobalEnv &g,
+                                                     const std::vector<int> &realOnly);
 
 #if NUMTRACER_DEFINE_BODIES
   /// @brief Lower a contracted diagram polynomial into the shared env via the existing CSE + Horner
@@ -1108,7 +1160,14 @@ namespace numtracer::numeric
   ///        — the caller has proven only `Re(this trace)` is consumed (its assembly coefficient is
   ///        real). `Re(Σ c·mono) = Σ Re(c)·mono` for real monomials, so the imaginary half is dead;
   ///        skipping it avoids computing+returning a `std::complex` whose `.imag()` nobody reads.
-  NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly)
+  /// @brief Lower ONE polynomial into an EXISTING CSE builder; returns `{reRoot, imRoot}` with
+  ///        `imRoot == network::kRealProgram` when the polynomial is real.
+  ///
+  /// Split out of @ref to_genprog so the same lowering can be replayed into a builder that already
+  /// holds other traces (@ref to_genprog_fused / `CrossTraceCSE`). `to_genprog` is now this function
+  /// plus a fresh builder, so single-trace output is byte-identical to before the split.
+  NUMTRACER_FUNC std::pair<int, int> lower_into(const MPoly &p, network::GlobalEnv &g,
+                                                network::rdetail::RBuilder &w, bool realOnly)
   {
     // Prune numerically-zero monomials. A NUMERIC frame fixes the external momenta to concrete
     // components, so exact (analytic) cancellations in the trace surface as tiny residual coefficients
@@ -1145,16 +1204,43 @@ namespace numtracer::numeric
         }
         std::sort(vp.begin(), vp.end());
         network::LMono lm;
-        lm.c = imag ? c.im : c.re;
+        lm.c = snap_coeff(imag ? c.im : c.re);
         lm.vp = std::move(vp);
         monos.push_back(std::move(lm));
       }
+      // NT_GEN_POLYSTATS=1: report the MONOMIAL count handed to the Horner lowering. Monomial count
+      // is canonical (independent of any factorisation strategy), so comparing it against the
+      // emitted multiply count says whether a large op count comes from the ALGEBRA (many monomials)
+      // or from weak LOWERING (few monomials, many ops).
+      if (const char *e = std::getenv("NT_GEN_POLYSTATS")) {
+        if (e[0] == '1')
+          std::fprintf(stderr, "[polystats] mpoly terms=%zu kept=%zu nsym=%d\n", p.t.size(),
+                       monos.size(), p.nsym);
+        // NT_GEN_POLYSTATS=2: additionally dump each monomial's KEY (variable powers + inv/dressing
+        // atoms). Piping through `sort -u` then answers: how many of the monomials summed over all
+        // traces are actually DISTINCT? FormTracer sums every diagram into ONE polynomial before
+        // expanding, so identical monomials from different diagrams collect; NumTracer keeps one
+        // polynomial per trace, so they cannot. That is term COLLECTION, not CSE -- the compiler
+        // can never do it (it would be a floating-point reassociation across function boundaries).
+        if (e[0] == '2')
+          for (const auto &lm : monos) {
+            std::string key;
+            for (const auto &[id, pw] : lm.vp)
+              key += std::to_string(id) + "^" + std::to_string(pw) + " ";
+            std::fprintf(stderr, "[mono] %s\n", key.c_str());
+          }
+      }
       return monos;
     };
-    network::rdetail::RBuilder w;
     const int reRoot = network::gdetail::best_into(build(false), w);
-    if (!cplx) return network::GenProg{std::move(w.ins), reRoot};
-    const int imRoot = network::gdetail::best_into(build(true), w);
+    if (!cplx) return {reRoot, network::kRealProgram};
+    return {reRoot, network::gdetail::best_into(build(true), w)};
+  }
+
+  NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly)
+  {
+    network::rdetail::RBuilder w;
+    const auto [reRoot, imRoot] = lower_into(p, g, w, realOnly);
     network::GenProg gp{std::move(w.ins), reRoot};
     gp.rootIm = imRoot;
     return gp;
@@ -1167,7 +1253,9 @@ namespace numtracer::numeric
   ///        list so the shared CSE/Horner (`gdetail::best_into`) collects the dressing factors across
   ///        monomials — FormTracer-parity collection in one trace function. A `DPoly` with a single
   ///        empty dressing monomial reduces to exactly the @ref MPoly path (no `dress` leaves).
-  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
+  /// @brief @ref DPoly counterpart of the @ref MPoly `lower_into` — lower into an existing builder.
+  NUMTRACER_FUNC std::pair<int, int> lower_into(const DPoly &p, network::GlobalEnv &g,
+                                                network::rdetail::RBuilder &w, bool realOnly)
   {
     // PER-DRESSING-CHANNEL noise prune (not one global tolerance). A DPoly is Σ_d (dressing_d)·(kinematic_d);
     // each channel `d` is reweighted at runtime by its dressing product, which can swing by many orders across
@@ -1222,20 +1310,91 @@ namespace numtracer::numeric
           }
           std::sort(vp.begin(), vp.end());
           network::LMono lm;
-          lm.c = imag ? c.im : c.re;
+          lm.c = snap_coeff(imag ? c.im : c.re);
           lm.vp = std::move(vp);
           monos.push_back(std::move(lm));
         }
       }
+      // see the MPoly overload: monomial count is the optimizer-independent baseline against which
+      // the emitted instruction count is judged.
+      if (const char *e = std::getenv("NT_GEN_POLYSTATS")) {
+        if (e[0] == '1') std::fprintf(stderr, "[polystats] dpoly monos=%zu\n", monos.size());
+        if (e[0] == '2')
+          for (const auto &lm : monos) {
+            std::string key;
+            for (const auto &[id, pw] : lm.vp)
+              key += std::to_string(id) + "^" + std::to_string(pw) + " ";
+            std::fprintf(stderr, "[mono] %s\n", key.c_str());
+          }
+      }
       return monos;
     };
-    network::rdetail::RBuilder w;
     const int reRoot = network::gdetail::best_into(build(false), w);
-    if (!cplx) return network::GenProg{std::move(w.ins), reRoot};
+    if (!cplx) {
+      if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
+        if (e[0] == '1') std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", w.ins.size());
+      return {reRoot, network::kRealProgram};
+    }
     const int imRoot = network::gdetail::best_into(build(true), w);
+    if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
+      if (e[0] == '1') std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", w.ins.size());
+    return {reRoot, imRoot};
+  }
+
+  NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly)
+  {
+    network::rdetail::RBuilder w;
+    const auto [reRoot, imRoot] = lower_into(p, g, w, realOnly);
     network::GenProg gp{std::move(w.ins), reRoot};
     gp.rootIm = imRoot;
     return gp;
+  }
+
+  /// @brief Lower EVERY trace group into one shared CSE builder (`CrossTraceCSE`), so a subexpression
+  ///        reached by several traces is emitted once. See @ref network::FusedProg.
+  ///
+  /// Measured on ZAqbq1_147 Mq-in (108 traces, 54 complex): the shared stream is **30,547** SSA
+  /// instructions against **47,558** for the same traces lowered independently — 0.64x, at unchanged
+  /// lowering cost (0.30 s either way). The saving is bounded by the fact that each of the 28,856
+  /// monomial OCCURRENCES still needs its own accumulate into its own trace; only the products are
+  /// shared. So the duplication factor (3.54x distinct-vs-total monomials) is an upper bound that is
+  /// nowhere near attainable — do not quote it as the expected speedup.
+  ///
+  /// NOTE `network::gdetail::best_into` costs its candidate Horner orderings on scratch builders that
+  /// start EMPTY, so it cannot see CSE hits against the already-populated `w`: trace k's ordering is
+  /// chosen as if traces 0..k-1 did not exist. That caps the achievable sharing (mostly moot — the
+  /// sweep collapses to a single ordering above 2000 monomials).
+  template <class Poly>
+  NUMTRACER_FUNC network::FusedProg to_genprog_fused_impl(const std::vector<Poly> &ps,
+                                                          network::GlobalEnv &g,
+                                                          const std::vector<int> &realOnly)
+  {
+    network::rdetail::RBuilder w;
+    network::FusedProg fp;
+    fp.root.reserve(ps.size());
+    fp.rootIm.reserve(ps.size());
+    for (std::size_t i = 0; i < ps.size(); ++i) {
+      const bool ro = i < realOnly.size() && realOnly[i] != 0;
+      const auto [re, im] = lower_into(ps[i], g, w, ro);
+      fp.root.push_back(re);
+      fp.rootIm.push_back(im);
+    }
+    if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
+      if (e[0] == '1')
+        std::fprintf(stderr, "[polystats] FUSED ssa instrs=%zu over %zu traces\n", w.ins.size(), ps.size());
+    fp.ins = std::move(w.ins);
+    return fp;
+  }
+
+  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<MPoly> &ps, network::GlobalEnv &g,
+                                                     const std::vector<int> &realOnly)
+  {
+    return to_genprog_fused_impl(ps, g, realOnly);
+  }
+  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<DPoly> &ps, network::GlobalEnv &g,
+                                                     const std::vector<int> &realOnly)
+  {
+    return to_genprog_fused_impl(ps, g, realOnly);
   }
 #endif // NUMTRACER_DEFINE_BODIES
 

@@ -1054,7 +1054,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_:{}] := Module[
         NetVal in C++, contracts them numerically (4×4 matrix products), folds colour per group, and
         PRINTS the committed straight-line kernel header. No reduce/rebase/ibp/sp-kinematics. *)
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_,
-    kns_:"numtracer_kernels", complexQ_:False, realOnlyG_:{}] := Module[
+    kns_:"numtracer_kernels", complexQ_:False, realOnlyG_:{}, crossCSE_:False] := Module[
   {nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"],
    varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"],
    bb, tmpl, pre, unitPre, nUnits, units, decl, ddl, dStr, lStr, dscv, ddch, ddsl, hasDressed,
@@ -1399,8 +1399,22 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
        double trace (no dead imaginary half). Defaults to all-0 (full complex) if not supplied. *)
     "  std::vector<int> realOnly = {" <> StringRiffle[
        If[Length[realOnlyG] === nGrp, (If[TrueQ[#], "1", "0"]) & /@ realOnlyG, Table["0", {nGrp}]], ","] <> "};\n",
-    If[hasDressed,
+    (* CrossTraceCSE: accumulate every group's polynomial first, then lower them all through ONE
+       shared CSE builder (to_genprog_fused) instead of one independent program per trace. Measured on
+       ZAqbq1_147 Mq-in: 30,547 shared SSA instrs vs 47,558 independent (0.64x), lowering cost
+       unchanged. See network::FusedProg. *)
+    Which[
+      crossCSE && hasDressed,
+      "  std::vector<DPoly> accs;\n" <>
+      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); accs.push_back(std::move(acc)); }\n" <>
+      "  FusedProg fused = to_genprog_fused(accs, g, realOnly);\n",
+      crossCSE,
+      "  std::vector<MPoly> accs;\n" <>
+      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc = env.zero(); for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]); accs.push_back(std::move(acc)); }\n" <>
+      "  FusedProg fused = to_genprog_fused(accs, g, realOnly);\n",
+      hasDressed,
       "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n",
+      True,
       "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc = env.zero(); for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n"],
     "  FillFormulas fm;\n",
     "  fm.var = [](int id)->std::string{\n",
@@ -1427,14 +1441,18 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
        identical traces — see ZA4 fusion notes), so this is a pure SOURCE-SIZE/compile win, runtime-neutral.
        Flows with no shared trace structure (ZAqbq1/4/7_147: 108/108 distinct) never hit `seen` ⇒ the
        emitted bytes are unchanged. *)
-    "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> bb[nGrp] <> ");\n" <>
-    "    for(int i=0;i<" <> bb[nGrp] <> ";++i){\n" <>
-    "      std::ostringstream os; emit_cpp(os, progs[i], \"tr\"+std::to_string(i), decor);\n" <>
-    "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <>
-    "      auto it = seen.find(body);\n" <>
-    "      if(it==seen.end()){ seen.emplace(std::move(body), \"tr\"+std::to_string(i)); std::cout << s; }\n" <>
-    "      else { const char* rt = (s.find(\"std::complex<double> tr\")!=std::string::npos) ? \" std::complex<double> \" : \" double \";\n" <>
-    "        std::cout << decor << rt << \"tr\" << i << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n",
+    (* fused: ONE trace_all(f, t[]) instead of nGrp trN(). The body-dedup below is meaningless then
+       (there is a single body), and the kernel reads tarr[i] rather than calling tr_i. *)
+    If[crossCSE,
+      "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
+      "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> bb[nGrp] <> ");\n" <>
+      "    for(int i=0;i<" <> bb[nGrp] <> ";++i){\n" <>
+      "      std::ostringstream os; emit_cpp(os, progs[i], \"tr\"+std::to_string(i), decor);\n" <>
+      "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <>
+      "      auto it = seen.find(body);\n" <>
+      "      if(it==seen.end()){ seen.emplace(std::move(body), \"tr\"+std::to_string(i)); std::cout << s; }\n" <>
+      "      else { const char* rt = (s.find(\"std::complex<double> tr\")!=std::string::npos) ? \" std::complex<double> \" : \" double \";\n" <>
+      "        std::cout << decor << rt << \"tr\" << i << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"],
     "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n  return 0;\n}\n"}]];
   {pre, units, decl, main}
 ];
@@ -1545,7 +1563,15 @@ Options[mkGenerateKernel] = {"Name" -> "nt_inv_kernel", "Namespace" -> Automatic
 (* "CrossTraceCSE" -> True: lower all diagram trace polynomials through ONE shared CSE program
    (emitted as trace_all(f, t[]); the kernel fills t[] once and reads t[d]) so subexpressions are
    shared ACROSS traces — a fused kernel. Pays off when many traces share intermediates; default
-   False keeps one independent trN() per trace. *)
+   False keeps one independent trN() per trace.
+   Works on COMPLEX flows: t[] is typed by the emitted `trace_all_t` (std::complex<double> iff some
+   trace lowered complex), so nothing is truncated.
+   Measured ZAqbq1_147 Mq-in (108 traces, 54 complex): 30,547 shared SSA instrs vs 47,558
+   independent = 0.64x, lowering cost unchanged. The cross-diagram monomial duplication is 3.54x but
+   that is NOT the attainable factor — each monomial occurrence still needs its own accumulate into
+   its own trace; only the products are shared. Watch IPC as well as instruction count: this collapses
+   N small functions into one very large basic block, which can spill (ZA "Route-B" shrank code 2.2x
+   and regressed runtime 31%). *)
 (* "AngleDefs" -> {sym -> expr, ...}: kinematic angle symbols the dressing keeps SYMBOLIC
    (e.g. cosl1p2 -> (-cos1 + Sqrt[3-3 cos1^2] cos2)/2). Emitted ONCE as `const double sym = ...;`
    in the kernel body so a shared sub-expression (the sqrt) is computed once rather than inlined
@@ -1554,10 +1580,8 @@ Options[mkGenerateKernel] = {"Name" -> "nt_inv_kernel", "Namespace" -> Automatic
    (faster codegen, higher peak RAM) instead of one-at-a-time. The emitted kernel is identical. *)
 
 mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
-mkGenerateKernel::crosscseComplex = "CrossTraceCSE is incompatible with a complex flow: trace_all \
-fills a real `double tarr[]`, which truncates any complex trace's imaginary part, so the RePart \
-re/im split would silently read ntIm(tarr[i])==0. Disabling CrossTraceCSE for this flow \
-(GlobalCollect subsumes it).";
+(* (mkGenerateKernel::crosscseComplex was removed 2026-07-19: CrossTraceCSE now types tarr[] from the
+   emitted `trace_all_t`, so a complex flow is no longer truncated and needs no guard.) *)
 mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, groups=`3`) — nothing \
 to emit. Aborting instead of writing a placeholder kernel. (A diagram-build guard such as \
 disconnectmix may have dropped everything, or NumTrace returned no usable diagrams.)";
@@ -1641,7 +1665,12 @@ resolveGenLib[incDir_] := Module[{env, base, cands, lib},
    the imaginary part vanishes (|Im| <= tol·|Re|) over all sampled points — in which case the caller
    re-emits a real (double) kernel losslessly. Conservative: any failure (compile/run/no-points) -> False
    (keep the complex kernel). *)
-Options[numericImagProbeRealQ] = {"NPoints" -> 4000, "Tol" -> 1.*^-9};
+(* "TraceArrayDecl": with CrossTraceCSE the integrand's trace tokens are `tarr[i]` reads, not
+   `ns::tr_i(fenv)` calls, so the probe TU must declare and fill that array exactly as the kernel's
+   coreBlock does — otherwise the probe fails to compile, the failure is (deliberately) swallowed as
+   "keep the complex kernel", and the flow silently loses the lossless RePart double-kernel emission.
+   Empty for the per-trace path. *)
+Options[numericImagProbeRealQ] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -> ""};
 numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_,
     drTable_:<||>, opts : OptionsPattern[]] := Module[
   {keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeParams, probePre, fnFull, fnProj,
@@ -1684,7 +1713,8 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
     angleDecls,
     {"double fenv[(" <> nsHome <> "::nenv) > 0 ? (" <> nsHome <> "::nenv) : 1];"},
     drDecls,
-    {nsHome <> "::fill(fenv, " <> StringRiffle[Join[SymbolName /@ fillArgs, drFillArgs], ", "] <> ");"}], "\n"];
+    {nsHome <> "::fill(fenv, " <> StringRiffle[Join[SymbolName /@ fillArgs, drFillArgs], ", "] <> ");"},
+    If[OptionValue["TraceArrayDecl"] === "", {}, {OptionValue["TraceArrayDecl"]}]], "\n"];
   fnFull = FunKit`MakeCppFunction[probeFull, "Name" -> "probe_full", "Prefix" -> "static inline",
     "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> probeParams, "Body" -> probePre];
   fnProj = FunKit`MakeCppFunction[probeProj, "Name" -> "probe_proj", "Prefix" -> "static inline",
@@ -1802,7 +1832,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   {name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g,
    colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn,
    classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run,
-   hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor,
+   hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl,
    kns, sns, runInc, extraInc, interpTy, nsHome, gc, symDefs = <||>, dmono = {}, atomStrs = {},
    groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {},
    factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
@@ -1868,10 +1898,23 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
      diagram coeff*colour is real (the i's combine), so we keep the colour constant COMPLEX and
      take Re of the assembled integrand. *)
   complexQ = ! FreeQ[k["Diagrams"], Complex];
-  (* CrossTraceCSE fills a `double tarr[]` via trace_all; a complex trace would be truncated to its
-     real part there, so the RePart re/im split's ntIm(tarr[i]) would read 0 and silently drop the
-     imaginary contribution. GlobalCollect subsumes crossCSE, so disable it when the flow is complex. *)
-  If[crossCSE && complexQ, Message[mkGenerateKernel::crosscseComplex]; crossCSE = False];
+  (* CrossTraceCSE (IMPLEMENTED 2026-07-19; it was a documented stub before — `trace_all` existed only
+     as the call site emitted below and in comments, so turning the option on produced a kernel that
+     failed to compile with "'trace_all' is not a member of ...", and the complexQ guard that used to
+     sit here was masking that).
+
+     What it targets: cross-trace sharing is the one mechanism that attacks the measured redundancy in
+     these flows — ZAqbq1_147 Mq-in carries 28,856 monomials across its traces of which only 8,144 are
+     DISTINCT (3.54x; some recur in 24 different traces), and FormTracer's advantage here is exactly
+     that it sums all diagrams into ONE polynomial before expanding, so those duplicates collect
+     (measured Mq-out: FORM 5,060 monomials vs NumTracer 8,482, BOTH lowering at an identical 2.14
+     ops/monomial). The compiler cannot do it for us: collecting one monomial out of N traces is a
+     floating-point reassociation across function boundaries (force-inlining all 108 traces recovered
+     only -3.5% instructions). See example/ZAqbq147-MqBench/FINDINGS.md.
+
+     The old complex restriction is GONE. `tarr` is emitted as std::complex<double> whenever any trace
+     is complex — the same type trN(fenv) returned — so the kernel's ntRe/ntIm reads are unchanged and
+     nothing is truncated. Do NOT reintroduce a real tarr with per-trace phase tracking. *)
   invNets = {}; invRest = {}; colourNets = {}; colDecls = {}; colToks = {}; preamble = {};
   factorNets = {}; lorFacOf = {}; factorCompOf = <||>;  (* factor net indices, per-net factor-id list, net->factor-id *)
   $ctCache = <||>;  (* clear the compileTInv memo cache for this generation *)
@@ -2080,6 +2123,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     realOnlyG = If[TrueQ[OptionValue["PruneRealTraces"]],
        (FreeQ[diagData[[#[[1]] + 1]], Complex]) & /@ g, {}];
   nGrp = Length[g];
+  (* The tarr declaration+fill, used by BOTH the kernel's coreBlock and the RealProbe TU (which
+     evaluates the same integrand, so it needs the same tokens in scope). `trace_all_t` is emitted by
+     emit_cpp_fused from the ACTUAL lowered roots (complex iff some trace is complex), so the array
+     type can never disagree with what trace_all stores — and ntIm(double)=0.0 is then correct rather
+     than lossy, because the type is double only when every trace really is real. *)
+  tarrDecl = nsHome <> "::trace_all_t tarr[" <> ToString[nGrp] <> "]; " <>
+               nsHome <> "::trace_all(fenv, tarr);";
   (* [B2 localize] surface the post-net-build shape so a silent no-output (e.g. empty nets / empty
      grouping) is visible rather than appearing as a clean DONE. *)
   ntLog["[prof] post-net-build: nets=", Length[invNets], " groups(nGrp)=", nGrp, " complexQ=", complexQ];
@@ -2104,8 +2154,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
               Join[SymbolName /@ fillArgs, ("dr_" <> ToString[#]) & /@ Sort[Keys[$drTable]]],
               SymbolName /@ fillArgs]},
          nsHome <> "::fill(fenv, " <> StringRiffle[fillCallArgs, ", "] <> ");"],
-       If[crossCSE,
-         "double tarr[" <> ToString[nGrp] <> "]; " <> nsHome <> "::trace_all(fenv, tarr);", Nothing]};
+       If[crossCSE, tarrDecl, Nothing]};
     (* DRESSED: the dr_<id> dressing expressions can reference the derived kinematic angles, so the
        angle (and colour) decls must precede the fenv block. NON-dressed: keep the original order
        (fenv before angle/colour decls) so those kernels regenerate byte-identical. *)
@@ -2169,7 +2218,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
   (* emit the generator source (the numeric matrix-product backend is the single generation path). *)
   ntLog["[prof] emitNumericGenerator: ", First@AbsoluteTiming[
   {genPre, genUnits, genDecl, genMain} =
-    emitNumericGenerator[invNets, invRest, colourNets, g, ncomp, ns, fillArgSig, kns, complexQ, realOnlyG];], " s"];
+    emitNumericGenerator[invNets, invRest, colourNets, g, ncomp, ns, fillArgSig, kns, complexQ, realOnlyG,
+      crossCSE];], " s"];
   (* Split generator: a main TU + N net-builder unit TUs + a decl header (all in the tests/gen/ dir), so the
      net-builder codegen compiles in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
   declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
@@ -2300,7 +2350,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
      REAL (double) kernel — losslessly, since Im≡0 — so the real DiFfRG integrators bind directly and
      no std::complex survives into device code. Only meaningful once the traces exist (RunGenerator). *)
   If[complexQ && TrueQ[OptionValue["RunGenerator"]] && TrueQ[OptionValue["RealProbe"]],
-    Module[{verdict = numericImagProbeRealQ[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, $drTable],
+    Module[{verdict = numericImagProbeRealQ[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, $drTable,
+              "TraceArrayDecl" -> If[crossCSE, tarrDecl, ""]],
             extraPriv = {}},
       Switch[verdict,
         "Pure",   (* real value: project to Re. Wrap trace tokens in ntRe FIRST so the kernel is

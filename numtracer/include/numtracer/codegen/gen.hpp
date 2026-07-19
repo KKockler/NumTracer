@@ -106,6 +106,26 @@ namespace numtracer::network
     int rootIm = kRealProgram;
   };
 
+  /// @brief Several diagram programs lowered into ONE shared instruction stream (`CrossTraceCSE`).
+  ///
+  /// Emitted as `void trace_all(const double* f, <T>* t)` rather than N independent `trN()`, so a
+  /// subexpression reached by more than one trace is computed once. This is the only way to exploit
+  /// CROSS-DIAGRAM monomial duplication: FormTracer sums every diagram into one polynomial before
+  /// expanding, so identical monomials collect; NumTracer keeps one polynomial per trace and cannot.
+  /// A compiler can never recover it either — collecting a monomial out of N traces is a
+  /// floating-point reassociation across function boundaries (measured: force-inlining all 108 traces
+  /// of ZAqbq1_147 recovered only -3.5% instructions).
+  ///
+  /// `root[i]` / `rootIm[i]` are the same pair as @ref GenProg, per trace; `rootIm[i] ==
+  /// kRealProgram` marks trace `i` real. The emitted array element type is `std::complex<double>` if
+  /// ANY trace is complex (uniform, so the kernel's `tarr[i]` reads keep the type `trN(fenv)`
+  /// returned), otherwise `double`.
+  struct FusedProg {
+    std::vector<RInstr> ins;
+    std::vector<int> root;
+    std::vector<int> rootIm;
+  };
+
   /// @brief Lower a polynomial's monomials into the shared env via CSE (`RBuilder`) + Horner.
   ///
   /// The input is first sorted into a **canonical order** so the emitted program (env-id layout, Horner
@@ -227,32 +247,17 @@ namespace numtracer::network
   // (library TU / header-only build). See core/export.hpp.
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor = "static inline");
+  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const FusedProg &p, const std::string &name,
+                                     const std::string &decor = "static inline");
   NUMTRACER_FUNC void emit_env_layout(std::ostream &out, const GlobalEnv &g);
 
 #if NUMTRACER_DEFINE_BODIES
-  /// @brief Print a lowered program as a straight-line C++ function `name(const double* f)`.
-  ///        `decor` is the function decorator/prefix (e.g. `"static __host__ __device__ inline"`
-  ///        for a CUDA-callable kernel); the default keeps the emitted bytes unchanged.
-  NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
-                               const std::string &decor)
+  namespace edetail
   {
-    // Compile-time escape hatch (NT_GEN_NOINLINE_TRACES): force the per-diagram trace functions OUT-OF-LINE.
-    // The default all-inlined emission is runtime-optimal — any register spill on a huge fused kernel is
-    // benign (the loop is fp64-pipe-bound, and inlining keeps cross-trace CSE), so out-of-lining is measurably
-    // slower. Its only purpose is compile cost: out-of-lining roughly halves the nvcc compile time and RAM of
-    // the largest (100k+-line) kernels. `__attribute__((noinline))` is honoured by both g++ (host) and nvcc
-    // (device); fill()/powr stay inline. See PERFORMANCE.md / tests/gpu/README.md for the measurements.
-    std::string effDecor = decor;
-    if (std::getenv("NT_GEN_NOINLINE_TRACES")) {
-      const std::string kw = " inline";
-      if (effDecor.size() >= kw.size() && effDecor.compare(effDecor.size() - kw.size(), kw.size(), kw) == 0)
-        effDecor.replace(effDecor.size() - kw.size(), kw.size(), " __attribute__((noinline))");
-      else
-        effDecor += " __attribute__((noinline))";
-    }
-    // Emit one instruction's right-hand side (`s<i> = <rhs>`). Shared by the complex and real bodies
-    // below so the opcode set lives in one place.
-    auto emitRhs = [&out](const RInstr &in) {
+    /// Emit one instruction's right-hand side (`s<i> = <rhs>`). The opcode set lives here so the
+    /// single-output (@ref emit_cpp) and fused multi-output (@ref emit_cpp_fused) writers cannot drift.
+    inline void emit_rhs(std::ostream &out, const RInstr &in)
+    {
       switch (in.op) {
       case RCONST:
         out << in.k;
@@ -273,7 +278,37 @@ namespace numtracer::network
         out << "-s" << in.a;
         break; // RNEG
       }
-    };
+    }
+
+    /// Apply the NT_GEN_NOINLINE_TRACES escape hatch to a decorator (see @ref emit_cpp).
+    inline std::string eff_decor(const std::string &decor)
+    {
+      std::string effDecor = decor;
+      if (std::getenv("NT_GEN_NOINLINE_TRACES")) {
+        const std::string kw = " inline";
+        if (effDecor.size() >= kw.size() && effDecor.compare(effDecor.size() - kw.size(), kw.size(), kw) == 0)
+          effDecor.replace(effDecor.size() - kw.size(), kw.size(), " __attribute__((noinline))");
+        else
+          effDecor += " __attribute__((noinline))";
+      }
+      return effDecor;
+    }
+  } // namespace edetail
+
+  /// @brief Print a lowered program as a straight-line C++ function `name(const double* f)`.
+  ///        `decor` is the function decorator/prefix (e.g. `"static __host__ __device__ inline"`
+  ///        for a CUDA-callable kernel); the default keeps the emitted bytes unchanged.
+  NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
+                               const std::string &decor)
+  {
+    // Compile-time escape hatch (NT_GEN_NOINLINE_TRACES): force the per-diagram trace functions OUT-OF-LINE.
+    // The default all-inlined emission is runtime-optimal — any register spill on a huge fused kernel is
+    // benign (the loop is fp64-pipe-bound, and inlining keeps cross-trace CSE), so out-of-lining is measurably
+    // slower. Its only purpose is compile cost: out-of-lining roughly halves the nvcc compile time and RAM of
+    // the largest (100k+-line) kernels. `__attribute__((noinline))` is honoured by both g++ (host) and nvcc
+    // (device); fill()/powr stay inline. See PERFORMANCE.md / tests/gpu/README.md for the measurements.
+    const std::string effDecor = edetail::eff_decor(decor);
+    auto emitRhs = [&out](const RInstr &in) { edetail::emit_rhs(out, in); };
     // Liveness of the SSA slots: a slot that feeds neither a result root nor another slot's operand is
     // dead (greedy Horner + CSE occasionally leaves one). Tag exactly those `const double sN` with
     // `[[maybe_unused]]` so the flat kernel is -Wunused-variable clean without decorating every line.
@@ -319,6 +354,80 @@ namespace numtracer::network
       out << ";\n";
     }
     out << "  return s" << p.root << ";\n}\n";
+  }
+
+  /// @brief Print a FUSED multi-output program as `void name(const double* f, <T>* t)`.
+  ///
+  /// One instruction stream, N stores. The element type is `std::complex<double>` if any trace is
+  /// complex and `double` otherwise — uniform across the array, because the kernel indexes it as
+  /// `tarr[i]` wherever it used to call `tr<i>(fenv)` and those calls had a single return type per
+  /// trace. A real trace in a complex array stores `{re, 0.0}`; the zero is a compile-time constant
+  /// the consumer's arithmetic folds away.
+  ///
+  /// Liveness is seeded from EVERY root (a slot feeding only trace 7's result is live even though it
+  /// feeds no other instruction) — the single-output writer's two `markUse` calls become a loop.
+  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const FusedProg &p, const std::string &name,
+                                     const std::string &decor)
+  {
+    const std::string effDecor = edetail::eff_decor(decor);
+    const std::size_t n = p.root.size();
+    bool anyComplex = false;
+    for (std::size_t i = 0; i < n; ++i)
+      if (p.rootIm[i] != kRealProgram) anyComplex = true;
+
+    std::vector<char> used(p.ins.size(), 0);
+    auto markUse = [&](int r) {
+      if (r >= 0 && r < static_cast<int>(p.ins.size())) used[r] = 1;
+    };
+    for (const RInstr &in : p.ins) {
+      if (in.op == RADD || in.op == RSUB || in.op == RMUL) {
+        markUse(in.a);
+        markUse(in.b);
+      } else if (in.op == RNEG)
+        markUse(in.a);
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      markUse(p.root[i]);
+      markUse(p.rootIm[i]); // kRealProgram (INT_MIN) and -1 are filtered by the r>=0 guard
+    }
+
+    // Publish the element type as `<name>_t` so the CALLER cannot disagree with what we store here.
+    // The kernel declares `ns::trace_all_t tarr[N]`, so whether the flow lowered to real or complex
+    // traces is decided in exactly one place — here, from the actual roots. (Emitting the caller-side
+    // type from Mathematica's syntactic `complexQ` instead would break both ways: complexQ true with
+    // all-real roots, or a complex root under complexQ false, are each a silent type mismatch.)
+    auto slot = [](int r) { return r < 0 ? std::string("0.0") : "s" + std::to_string(r); };
+    auto emitStore = [&](std::size_t i) {
+      out << "  t[" << i << "] = ";
+      if (!anyComplex)
+        out << slot(p.root[i]);
+      else if (p.rootIm[i] == kRealProgram)
+        out << "std::complex<double>{" << slot(p.root[i]) << ", 0.0}";
+      else
+        out << "std::complex<double>{" << slot(p.root[i]) << ", " << slot(p.rootIm[i]) << "}";
+      out << ";\n";
+    };
+
+    // All N stores go at the END, after the whole instruction stream.
+    //
+    // REFUTED ALTERNATIVE (measured 2026-07-19, do not retry): sinking each `t[i] = …` to just after
+    // its last input slot, so results don't stay live to the end. The register-pressure argument for it
+    // is intuitive and WRONG here — on ZAqbq1_147 Mq-in it cut instructions 40.70e9 -> 39.83e9 but RAISED
+    // cycles 17.90e9 -> 18.25e9, a consistent 2% runtime LOSS over repeated runs (3018 -> 3080 ns/eval).
+    // Interleaving stores into the arithmetic constrains the scheduler more than the shortened live
+    // ranges buy back.
+    const char *elemT = anyComplex ? "std::complex<double>" : "double";
+    out << "using " << name << "_t = " << elemT << ";\n";
+    out << effDecor << " void " << name << "([[maybe_unused]] const double *f, " << elemT << " *t) {\n";
+    out << std::setprecision(17);
+    for (std::size_t i = 0; i < p.ins.size(); ++i) {
+      out << (used[i] ? "  const double s" : "  [[maybe_unused]] const double s") << i << " = ";
+      edetail::emit_rhs(out, p.ins[i]);
+      out << ";\n";
+    }
+    for (std::size_t i = 0; i < n; ++i)
+      emitStore(i);
+    out << "}\n";
   }
 
   /// @brief Print the shared env layout as a comment (which `f[i]` is which symbol) so the codegen /
