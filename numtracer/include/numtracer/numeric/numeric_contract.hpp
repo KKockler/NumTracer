@@ -867,6 +867,17 @@ namespace numtracer::numeric
     return nmet(e.a, e.b); // unreachable; silences -Wreturn-type
   }
 
+  /// Multi-term denominator cancellation (@ref divThroughPolyAtoms) — on by default; `NT_GEN_NO_POLYDIV=1`
+  /// disables it, which is how it was A/B'd. See that function for the measurement.
+  inline bool polydiv_enabled()
+  {
+    static const bool on = [] {
+      const char *e = std::getenv("NT_GEN_NO_POLYDIV");
+      return !(e && e[0] == '1');
+    }();
+    return on;
+  }
+
   /// @brief Contract a diagram given the Lorentz part as an inv-backend @ref network::NetVal (so the
   ///        generator reuses the existing net-string emission: `proj`/`met`/`vec`/`epsilon` builders).
   ///        Equivalent to @ref numeric_value but reading `network::Elem` instead of @ref NElem.
@@ -908,7 +919,12 @@ namespace numtracer::numeric
     // sin^2 -> 1 - cos^2 BEFORE cancellation: collapses bare-loop k²=l1²(cos²+sin²) to the monomial l1²
     // (so its atom cancels) and shrinks the polynomial to the FORM angular basis.
     result = reduce_units(result, units);
-    return divThroughMonomialAtoms(result, atomDen);
+    result = divThroughMonomialAtoms(result, aden);
+    // Then cancel the MULTI-TERM (shifted-line) denominators by exact polynomial division — the case
+    // divThroughMonomialAtoms structurally cannot reach. Off via NT_GEN_NO_POLYDIV=1 for A/B.
+    // NOTE `aden`, not `atomDen`: the trial division must see the SAME unit-reduced denominators the
+    // intermediate reductions used, or a numerator reduced mod ΣU²=1 will not divide by an unreduced D.
+    return polydiv_enabled() ? divThroughPolyAtoms(result, aden) : result;
   }
 #endif // NUMTRACER_DEFINE_BODIES
 

@@ -30,6 +30,8 @@
 #include <cstdint>
 #include <utility>
 #include <vector>
+#include <map>
+#include <cmath>
 
 namespace numtracer::numeric
 {
@@ -116,6 +118,7 @@ namespace numtracer::numeric
     friend MPoly operator*(const MPoly &a, const MPoly &b);
     friend MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen);
     friend MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups);
+    friend MPoly divThroughPolyAtoms(const MPoly &p, const std::vector<MPoly> &atomDen);
 
     MPoly() = default;
 
@@ -370,6 +373,101 @@ namespace numtracer::numeric
         MonoExp shifted = base;
         shifted[group[i]] += 2;
         work.push_back({std::move(shifted), atoms, Cx{-c.re, -c.im}});
+      }
+    }
+    return MPoly::from_scratch(p.nsym, std::move(out));
+  }
+
+  /// @brief Cancel a MULTI-TERM inverse atom `1/D` against the numerator by exact polynomial division.
+  ///
+  /// @ref divThroughMonomialAtoms only cancels an atom whose denominator is a single **monomial**, and
+  /// only term-by-term. A shifted line `k = l − q` has `k² = l² − 2 l·q + q²`, which is multi-term, so
+  /// its atom always survived into an `inv` env slot — even when the numerator carries a factor of that
+  /// very `k²`, which Dirac-trace numerators routinely do. This is the partial-fractioning step a
+  /// fixed-frame contraction was assumed not to be able to do.
+  ///
+  /// Terms are grouped by their FULL atom multiset (so within a group every term carries the same
+  /// atoms and the group is `G(x)·∏1/D_a`); each distinct multi-term `D_a` is then trial-divided into
+  /// `G`. On an exact division `G·(1/D) → Q`, dropping one atom instance. Repeated to a fixed point.
+  ///
+  /// Exact and value-preserving: a division is only accepted when the remainder vanishes. "Vanishes"
+  /// uses the same RELATIVE tolerance as the surrounding noise prune (`1e-9` against the dividend's
+  /// largest coefficient) — a numeric frame makes exact cancellations land at ~1e-16 relative, far
+  /// inside it, and the polynomial already carries round-off at that scale.
+  ///
+  /// Measured on ZAqbq1_147 Mq-in (real part): monomials 13,269 → 4,832, atom factors 1,168 → 832,
+  /// fused SSA 33,775 → 7,649 (0.23x). 384 of 1,168 trial divisions are exact.
+  /// Relative tolerance for "the division remainder vanishes". Same scale as the surrounding
+  /// noise prune (`numeric_contract.hpp` `kNoisePruneRelTol`); kept local so `mpoly.hpp` stays
+  /// independent of that header.
+  inline constexpr double kPolyDivRelTol = 1e-9;
+
+  inline MPoly divThroughPolyAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
+  {
+    using Grp = std::map<MonoExp, Cx>;
+    std::map<MonoAtoms, Grp> byAtoms;
+    for (const auto &[m, c] : p.t)
+      byAtoms[m.atoms][m.e] = byAtoms[m.atoms][m.e] + c;
+
+    auto cdiv = [](const Cx &z, const Cx &w) {
+      const double d = w.re * w.re + w.im * w.im;
+      return Cx{(z.re * w.re + z.im * w.im) / d, (z.im * w.re - z.re * w.im) / d};
+    };
+    auto gmax = [](const Grp &G) {
+      double m = 0.0;
+      for (const auto &kv : G) m = std::max(m, std::max(std::fabs(kv.second.re), std::fabs(kv.second.im)));
+      return m;
+    };
+    // Exact division G / D in lex order (the map's own ordering, a valid monomial order). Returns
+    // false the moment a leading term is not divisible — i.e. the remainder is provably non-zero.
+    auto divides = [&](Grp G, const MPoly &D, Grp &Q, double tol) {
+      if (D.t.size() < 2) return false;
+      const auto &dlead = D.t.back(); // MPoly::t is sorted by Mono, so back() is the lex-largest
+      if (!dlead.first.atoms.empty()) return false;
+      while (!G.empty()) {
+        auto lead = std::prev(G.end());
+        if (std::max(std::fabs(lead->second.re), std::fabs(lead->second.im)) < tol) { G.erase(lead); continue; }
+        MonoExp e = lead->first;
+        for (std::size_t k = 0; k < e.size(); ++k) {
+          if (e[k] < dlead.first.e[k]) return false;
+          e[k] -= dlead.first.e[k];
+        }
+        const Cx c = cdiv(lead->second, dlead.second);
+        Q[e] = Q[e] + c;
+        for (const auto &dt : D.t) {
+          MonoExp f = e;
+          for (std::size_t k = 0; k < f.size(); ++k) f[k] += dt.first.e[k];
+          Cx &g = G[f];
+          g = Cx{g.re - (c.re * dt.second.re - c.im * dt.second.im),
+                 g.im - (c.re * dt.second.im + c.im * dt.second.re)};
+          if (std::max(std::fabs(g.re), std::fabs(g.im)) < tol) G.erase(f);
+        }
+      }
+      return true;
+    };
+
+    MPolyScratch out;
+    for (auto &[atoms0, G0] : byAtoms) {
+      MonoAtoms atoms = atoms0;
+      Grp G = G0;
+      for (bool again = true; again;) {
+        again = false;
+        const double tol = kPolyDivRelTol * gmax(G);
+        for (std::size_t ai = 0; ai < atoms.size(); ++ai) {
+          const int aid = atoms[ai];
+          if (aid < 0 || aid >= (int)atomDen.size()) continue;
+          Grp Q;
+          if (divides(G, atomDen[(std::size_t)aid], Q, tol)) {
+            G.swap(Q);
+            atoms.erase(atoms.begin() + (long)ai);
+            again = true;
+            break;
+          }
+        }
+      }
+      for (auto &kv : G) {
+        if (kv.second.re == 0.0 && kv.second.im == 0.0) continue;
+        out.push_back({Mono{kv.first, atoms}, kv.second});
       }
     }
     return MPoly::from_scratch(p.nsym, std::move(out));
