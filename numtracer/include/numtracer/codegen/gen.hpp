@@ -120,10 +120,15 @@ namespace numtracer::network
   /// kRealProgram` marks trace `i` real. The emitted array element type is `std::complex<double>` if
   /// ANY trace is complex (uniform, so the kernel's `tarr[i]` reads keep the type `trN(fenv)`
   /// returned), otherwise `double`.
+  /// `offset` is the global trace index of `root[0]`: a fused program may cover a CONTIGUOUS SLICE of
+  /// the traces rather than all of them (see `NT_GEN_CC_CHUNK`). Fusing everything into one function
+  /// maximises sharing but produces a single enormous basic block that spills; chunking trades a little
+  /// sharing for register pressure. `offset` lets each chunk store into the caller's `t[]` directly.
   struct FusedProg {
     std::vector<RInstr> ins;
     std::vector<int> root;
     std::vector<int> rootIm;
+    int offset = 0;
   };
 
   /// @brief Lower a polynomial's monomials into the shared env via CSE (`RBuilder`) + Horner.
@@ -247,7 +252,8 @@ namespace numtracer::network
   // (library TU / header-only build). See core/export.hpp.
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor = "static inline");
-  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const FusedProg &p, const std::string &name,
+  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const std::vector<FusedProg> &ps,
+                                     const std::string &name,
                                      const std::string &decor = "static inline");
   NUMTRACER_FUNC void emit_env_layout(std::ostream &out, const GlobalEnv &g);
 
@@ -366,14 +372,15 @@ namespace numtracer::network
   ///
   /// Liveness is seeded from EVERY root (a slot feeding only trace 7's result is live even though it
   /// feeds no other instruction) — the single-output writer's two `markUse` calls become a loop.
-  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const FusedProg &p, const std::string &name,
-                                     const std::string &decor)
+  namespace edetail
   {
+    /// One fused chunk, written as `void <name>(const double* f, <T>* t)`. @p anyComplex and @p elemT
+    /// are the WHOLE array's verdict, not this chunk's — chunks share the caller's `t[]`.
+    inline void emit_fused_one(std::ostream &out, const FusedProg &p, const std::string &name,
+                               const std::string &decor, bool anyComplex, const char *elemT)
+    {
     const std::string effDecor = edetail::eff_decor(decor);
     const std::size_t n = p.root.size();
-    bool anyComplex = false;
-    for (std::size_t i = 0; i < n; ++i)
-      if (p.rootIm[i] != kRealProgram) anyComplex = true;
 
     std::vector<char> used(p.ins.size(), 0);
     auto markUse = [&](int r) {
@@ -391,14 +398,9 @@ namespace numtracer::network
       markUse(p.rootIm[i]); // kRealProgram (INT_MIN) and -1 are filtered by the r>=0 guard
     }
 
-    // Publish the element type as `<name>_t` so the CALLER cannot disagree with what we store here.
-    // The kernel declares `ns::trace_all_t tarr[N]`, so whether the flow lowered to real or complex
-    // traces is decided in exactly one place — here, from the actual roots. (Emitting the caller-side
-    // type from Mathematica's syntactic `complexQ` instead would break both ways: complexQ true with
-    // all-real roots, or a complex root under complexQ false, are each a silent type mismatch.)
     auto slot = [](int r) { return r < 0 ? std::string("0.0") : "s" + std::to_string(r); };
     auto emitStore = [&](std::size_t i) {
-      out << "  t[" << i << "] = ";
+      out << "  t[" << (static_cast<std::size_t>(p.offset) + i) << "] = ";
       if (!anyComplex)
         out << slot(p.root[i]);
       else if (p.rootIm[i] == kRealProgram)
@@ -416,8 +418,6 @@ namespace numtracer::network
     // cycles 17.90e9 -> 18.25e9, a consistent 2% runtime LOSS over repeated runs (3018 -> 3080 ns/eval).
     // Interleaving stores into the arithmetic constrains the scheduler more than the shortened live
     // ranges buy back.
-    const char *elemT = anyComplex ? "std::complex<double>" : "double";
-    out << "using " << name << "_t = " << elemT << ";\n";
     out << effDecor << " void " << name << "([[maybe_unused]] const double *f, " << elemT << " *t) {\n";
     out << std::setprecision(17);
     for (std::size_t i = 0; i < p.ins.size(); ++i) {
@@ -427,6 +427,31 @@ namespace numtracer::network
     }
     for (std::size_t i = 0; i < n; ++i)
       emitStore(i);
+    out << "}\n";
+    }
+  } // namespace edetail
+
+  NUMTRACER_FUNC void emit_cpp_fused(std::ostream &out, const std::vector<FusedProg> &ps,
+                                     const std::string &name, const std::string &decor)
+  {
+    // The element type and its published typedef are decided ONCE over all chunks: they share the
+    // caller's `t[]`, so a per-chunk verdict could disagree and would redefine `<name>_t`.
+    bool anyComplex = false;
+    for (const FusedProg &q : ps)
+      for (std::size_t i = 0; i < q.root.size(); ++i)
+        if (q.rootIm[i] != kRealProgram) anyComplex = true;
+    const char *elemT = anyComplex ? "std::complex<double>" : "double";
+    out << "using " << name << "_t = " << elemT << ";\n";
+
+    for (std::size_t ci = 0; ci < ps.size(); ++ci)
+      edetail::emit_fused_one(out, ps[ci], ps.size() == 1 ? name : name + "_c" + std::to_string(ci),
+                              decor, anyComplex, elemT);
+    if (ps.size() == 1) return;
+    // Wrapper, so the kernel's call site is identical whether or not the traces were chunked.
+    out << edetail::eff_decor(decor) << " void " << name << "([[maybe_unused]] const double *f, "
+        << elemT << " *t) {\n";
+    for (std::size_t ci = 0; ci < ps.size(); ++ci)
+      out << "  " << name << "_c" << ci << "(f, t);\n";
     out << "}\n";
   }
 

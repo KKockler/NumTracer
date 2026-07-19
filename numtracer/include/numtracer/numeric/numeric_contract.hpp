@@ -1146,10 +1146,12 @@ namespace numtracer::numeric
 
   NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly = false);
   NUMTRACER_FUNC network::GenProg to_genprog(const DPoly &p, network::GlobalEnv &g, bool realOnly = false);
-  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<MPoly> &ps, network::GlobalEnv &g,
-                                                     const std::vector<int> &realOnly);
-  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<DPoly> &ps, network::GlobalEnv &g,
-                                                     const std::vector<int> &realOnly);
+  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<MPoly> &ps,
+                                                                  network::GlobalEnv &g,
+                                                                  const std::vector<int> &realOnly);
+  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<DPoly> &ps,
+                                                                  network::GlobalEnv &g,
+                                                                  const std::vector<int> &realOnly);
 
 #if NUMTRACER_DEFINE_BODIES
   /// @brief Lower a contracted diagram polynomial into the shared env via the existing CSE + Horner
@@ -1364,35 +1366,67 @@ namespace numtracer::numeric
   /// start EMPTY, so it cannot see CSE hits against the already-populated `w`: trace k's ordering is
   /// chosen as if traces 0..k-1 did not exist. That caps the achievable sharing (mostly moot — the
   /// sweep collapses to a single ordering above 2000 monomials).
-  template <class Poly>
-  NUMTRACER_FUNC network::FusedProg to_genprog_fused_impl(const std::vector<Poly> &ps,
-                                                          network::GlobalEnv &g,
-                                                          const std::vector<int> &realOnly)
+  /// Traces per fused program. 0 (the default) = fuse everything into one. `NT_GEN_CC_CHUNK` overrides.
+  ///
+  /// Fusing all traces maximises sharing but builds one enormous basic block that SPILLS: on
+  /// ZAqbq1_147 Mq-in the fully-fused kernel executes ~8,200 instructions/eval more than its own
+  /// arithmetic op count, against ~2,900 for the unfused baseline — i.e. fusion bought ~17k ops and
+  /// handed back ~5,400 instructions of spill traffic, which is the measured IPC drop (2.405 -> 2.278).
+  /// Chunking trades a little cross-trace sharing back for register pressure.
+  inline int cc_chunk_size()
   {
-    network::rdetail::RBuilder w;
-    network::FusedProg fp;
-    fp.root.reserve(ps.size());
-    fp.rootIm.reserve(ps.size());
-    for (std::size_t i = 0; i < ps.size(); ++i) {
-      const bool ro = i < realOnly.size() && realOnly[i] != 0;
-      const auto [re, im] = lower_into(ps[i], g, w, ro);
-      fp.root.push_back(re);
-      fp.rootIm.push_back(im);
+    static const int n = [] {
+      if (const char *e = std::getenv("NT_GEN_CC_CHUNK")) {
+        const int v = std::atoi(e);
+        if (v > 0) return v;
+      }
+      return 0;
+    }();
+    return n;
+  }
+
+  template <class Poly>
+  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused_impl(const std::vector<Poly> &ps,
+                                                                       network::GlobalEnv &g,
+                                                                       const std::vector<int> &realOnly)
+  {
+    const int chunk = cc_chunk_size();
+    const std::size_t step = (chunk > 0) ? static_cast<std::size_t>(chunk) : ps.size();
+    std::vector<network::FusedProg> out;
+    std::size_t total = 0;
+    for (std::size_t base = 0; base < ps.size(); base += step) {
+      const std::size_t hi = std::min(base + step, ps.size());
+      network::rdetail::RBuilder w;
+      network::FusedProg fp;
+      fp.offset = static_cast<int>(base);
+      fp.root.reserve(hi - base);
+      fp.rootIm.reserve(hi - base);
+      for (std::size_t i = base; i < hi; ++i) {
+        const bool ro = i < realOnly.size() && realOnly[i] != 0;
+        const auto [re, im] = lower_into(ps[i], g, w, ro);
+        fp.root.push_back(re);
+        fp.rootIm.push_back(im);
+      }
+      total += w.ins.size();
+      fp.ins = std::move(w.ins);
+      out.push_back(std::move(fp));
     }
     if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
       if (e[0] == '1')
-        std::fprintf(stderr, "[polystats] FUSED ssa instrs=%zu over %zu traces\n", w.ins.size(), ps.size());
-    fp.ins = std::move(w.ins);
-    return fp;
+        std::fprintf(stderr, "[polystats] FUSED ssa instrs=%zu over %zu traces in %zu chunk(s)\n", total,
+                     ps.size(), out.size());
+    return out;
   }
 
-  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<MPoly> &ps, network::GlobalEnv &g,
-                                                     const std::vector<int> &realOnly)
+  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<MPoly> &ps,
+                                                                  network::GlobalEnv &g,
+                                                                  const std::vector<int> &realOnly)
   {
     return to_genprog_fused_impl(ps, g, realOnly);
   }
-  NUMTRACER_FUNC network::FusedProg to_genprog_fused(const std::vector<DPoly> &ps, network::GlobalEnv &g,
-                                                     const std::vector<int> &realOnly)
+  NUMTRACER_FUNC std::vector<network::FusedProg> to_genprog_fused(const std::vector<DPoly> &ps,
+                                                                  network::GlobalEnv &g,
+                                                                  const std::vector<int> &realOnly)
   {
     return to_genprog_fused_impl(ps, g, realOnly);
   }

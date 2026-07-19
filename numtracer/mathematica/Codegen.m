@@ -1407,11 +1407,11 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
       crossCSE && hasDressed,
       "  std::vector<DPoly> accs;\n" <>
       "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); accs.push_back(std::move(acc)); }\n" <>
-      "  FusedProg fused = to_genprog_fused(accs, g, realOnly);\n",
+      "  std::vector<FusedProg> fused = to_genprog_fused(accs, g, realOnly);\n",
       crossCSE,
       "  std::vector<MPoly> accs;\n" <>
       "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc = env.zero(); for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]); accs.push_back(std::move(acc)); }\n" <>
-      "  FusedProg fused = to_genprog_fused(accs, g, realOnly);\n",
+      "  std::vector<FusedProg> fused = to_genprog_fused(accs, g, realOnly);\n",
       hasDressed,
       "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n",
       True,
