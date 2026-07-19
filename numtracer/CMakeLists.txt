@@ -246,6 +246,13 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_zaqbq1 PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_zaqbq1 PRIVATE NumTracer::NumTracer)
 
+  # Assembled quark-gluon vertex flow, structures {1,4,7}, vs the FormTracer oracles, graded
+  # ANGLE-INTEGRATED (a loop-routing difference is odd and cancels in the integral, so only the
+  # integrated value is physical). Supersedes the never-wired pointwise compare_aqbq147.cpp.
+  add_executable(compare_aqbq147_int tests/refshim/compare_aqbq147_int.cpp)
+  target_include_directories(compare_aqbq147_int PRIVATE tests/gen tests/refshim)
+  target_link_libraries(compare_aqbq147_int PRIVATE NumTracer::NumTracer)
+
   # Symbolic dressing collection: collected Zq (DressingCollection -> True) vs the distributed Zq.
   add_executable(compare_zq_collect tests/refshim/compare_zq_collect.cpp)
   target_include_directories(compare_zq_collect PRIVATE tests/gen tests/refshim)
@@ -442,6 +449,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME trace_fold COMMAND test_trace_fold)
   add_test(NAME flow_zaaqbq1_small COMMAND compare_zaaqbq1_small)
   add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)
+  add_test(NAME flow_aqbq147_int COMMAND compare_aqbq147_int)
   add_test(NAME flow_pion_quark COMMAND compare_pion_quark)
   add_test(NAME flow_glu_quark COMMAND compare_glu_quark)
   add_test(NAME flow_za_num COMMAND compare_za_num)

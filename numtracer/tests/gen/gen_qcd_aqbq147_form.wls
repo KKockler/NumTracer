@@ -23,7 +23,7 @@ expr = fRG["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[];
 projIdx = {1, 2, 3};
 labels  = {1, 4, 7};
 Do[
-  Module[{k = projIdx[[s]], lab = labels[[s]], cacheDir, proj, tr, Flow, tT, tK, out},
+  Module[{k = projIdx[[s]], lab = labels[[s]], cacheDir, proj, tr, Flow, tT, tK, out, src, txt},
     cacheDir = FileNameJoin[{$repo, "numtracer", "tests", "gen", "TraceCache_aqbq" <> ToString[lab] <> "_147form"}];
     If[DirectoryQ[cacheDir], DeleteDirectory[cacheDir, DeleteContents -> True]];
     FSetCacheDirectory[cacheDir];
@@ -42,10 +42,21 @@ Do[
         "IntegrationVariables" -> {"l1", "cos1", "cos2"},
         "Coordinates" -> {"LogarithmicCoordinates1D<double>"}, "CoordinateArguments" -> {"p"}]];
     Print["[time] FormTracer MakeKernel ZAqbq", lab, "_147: ", tK, " s"];
+    (* The oracle is flows/<Name>/kernel.hh -- the pointwise integrand class
+       `<Name>_kernel` with `static kernel(l1,cos1,cos2,p,k,...)`. NOT flows/<Name>/<Name>.hh,
+       which is only the thin DiFfRG *integrator wrapper* (~3.6 kB) and is useless as an oracle.
+       The sole edit needed for the refshim harness is swapping the DiFfRG includes for shim.hpp
+       (the FORM analogue of $ntShimOpts' "RuntimeInclude" on the numeric side). *)
+    src = FileNameJoin[{$repo, "flows", "ZAqbq" <> ToString[lab] <> "_147", "kernel.hh"}];
     out = FileNameJoin[{$repo, "numtracer", "tests", "refshim", "ZAqbq" <> ToString[lab] <> "_147_kernel.hh"}];
-    If[FileExistsQ["ZAqbq" <> ToString[lab] <> "_147.hh"],
-       CopyFile["ZAqbq" <> ToString[lab] <> "_147.hh", out, OverwriteTarget -> True];
+    If[FileExistsQ[src],
+       txt = Import[src, "Text"];
+       txt = StringReplace[txt,
+         RegularExpression["(?:#include \"DiFfRG/[^\"]*\"\n)+"] -> "#include \"shim.hpp\"\n"];
+       If[!StringContainsQ[txt, "#include \"shim.hpp\""],
+          Print["WARN: shim include swap did not apply for ZAqbq", lab, "_147"]];
+       Export[out, txt, "Text"];
        Print["wrote oracle: ", out],
-       Print["WARN: ZAqbq", lab, "_147.hh not found in ", Directory[]]]];
+       Print["WARN: ", src, " not found"]]];
   , {s, 1, 3}];
 Print["DONE: ZAqbq{1,4,7} 147 FORM oracles generated."];

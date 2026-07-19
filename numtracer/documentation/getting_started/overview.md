@@ -72,10 +72,19 @@ This is the one place we compare NumTracer to a symbolic tensor-algebra system s
 via FormTracer, only as a validation oracle for the test suite). Such a tool does the tensor
 algebra symbolically ahead of time and emits a flat polynomial in the scalar products; NumTracer
 produces the *same kind* of flat scalar kernel, but does the contraction numerically in C++ over a
-fixed frame. In practice it generates a kernel **~80–175× faster** and the generated kernel runs
-**~1.0–1.6×** the symbolic one (the residual is one integration-by-parts step a symbolic tracer can
-do that a fixed-frame contraction cannot — see [the numeric engine](../internals/numeric-engine.md)).
-Nothing downstream depends on that tool: the emitted kernel is self-contained C++.
+fixed frame. In practice it generates a kernel **~80–175× faster**, and the generated kernel is
+**competitive with or faster than** the symbolic one: on the quark–gluon vertex `ZAqbq{1,4,7}_147`
+it runs at **0.96× / 0.99× / 0.62×** the FORM kernel's time (`tests/refshim/bench_aqbq147.cpp`),
+and on the pure-gauge `ZA3_147` at 1.01×. See [PERFORMANCE.md](../../PERFORMANCE.md) for the
+per-flow table. Nothing downstream depends on that tool: the emitted kernel is self-contained C++.
+
+A fixed-frame contraction was long assumed to be structurally unable to do the partial-fractioning
+(integration-by-parts-like) step a symbolic tracer performs on scalar products before the frame is
+substituted, and that was believed to leave an irreducible residual. It does not: the cancellation
+can be done *in* the frame, by exact polynomial division of a shifted-line propagator denominator
+into the numerator that contains it (`divThroughPolyAtoms`, see
+[the numeric engine](../internals/numeric-engine.md)). That closed the residual, and improved
+accuracy at the same time — the division and the terms that cancel against it both disappear.
 ```
 
 Next, [Key concepts](concepts.md) builds the mental model the

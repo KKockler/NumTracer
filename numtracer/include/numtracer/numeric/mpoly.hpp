@@ -8,11 +8,16 @@
 ///
 /// A `MPoly` is a map from monomial → complex coefficient. A monomial is
 ///   (exponent vector over the `nsym` user symbols, a sorted multiset of inverse-atom ids).
-/// The atom ids ride along so a transverse projector's `INV(k) = 1/k²` factor is tracked exactly:
-/// when a numerator monomial is divisible by an atom whose **denominator is a single monomial**
-/// (e.g. a unit-direction loop `k²=l1²`), @ref divThroughMonomialAtoms cancels it; an atom whose
-/// denominator is a genuine polynomial (a shifted line `k=l−q`, `k²` non-monomial) survives and is
-/// later lowered to an `inv` env slot. This is the general bare-loop cancellation, not a special case.
+/// The atom ids ride along so a transverse projector's `INV(k) = 1/k²` factor is tracked exactly, and
+/// two passes cancel it against the numerator:
+///   - @ref divThroughMonomialAtoms — denominator is a single **monomial** (e.g. a unit-direction loop
+///     `k²=l1²`): cancels term-by-term wherever the numerator exponents dominate. The general
+///     bare-loop cancellation, not a special case.
+///   - @ref divThroughPolyAtoms — denominator is a genuine **polynomial** (a shifted line `k=l−q`,
+///     `k²` non-monomial): terms are grouped by their atom multiset and the denominator is
+///     trial-divided into the group, cancelling on a vanishing remainder. Dirac-trace numerators
+///     routinely carry a factor of the very `k²` beneath them, so this fires often.
+/// Only an atom that survives both is lowered to an `inv` env slot (a runtime division).
 ///
 /// Map-based (sizes are tens of monomials with frame inputs — the regime where this backend wins);
 /// the symbol *meaning* lives only in the kernel's `fill`, so the engine is frame-agnostic.
@@ -290,8 +295,9 @@ namespace numtracer::numeric
   /// `atomDen[aid]` is the atom's denominator polynomial `k²`. If it is a single monomial
   /// `c·∏ x^d`, then one power of the atom `1/D` cancels whenever the numerator exponents dominate
   /// `d` componentwise: subtract `d`, divide the coefficient by `c`, drop one atom instance. Repeat
-  /// per atom occurrence. Atoms with a non-monomial denominator (shifted lines) are left intact and
-  /// survive into the lowering as `inv` env slots. Value-preserving and frame-agnostic.
+  /// per atom occurrence. Atoms with a non-monomial denominator (shifted lines) are left intact here
+  /// and handed to @ref divThroughPolyAtoms, which trial-divides them into the numerator; only an atom
+  /// surviving both passes reaches the lowering as an `inv` env slot. Value-preserving, frame-agnostic.
   inline MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
     MPolyScratch out;

@@ -69,9 +69,11 @@ instead of a polynomial compare (this matters — sorting/combining runs over mi
 and if a bare loop's `k²` has collapsed to a single monomial (e.g. `l1²`, via the unit-vector
 identity in `reduce_units`) whose powers the numerator dominates, it absorbs the factor —
 subtract exponents, divide the coefficient, drop that id. A denominator that is a genuine
-polynomial (a shifted line `k=l−q`) never matches, so its id *survives* and is later lowered to a
-runtime `inv` env slot. The id is the link between the on-monomial factor and the denominator
-table that lets the cancellation pass decide whether the factor dies or lives.
+polynomial (a shifted line `k=l−q`) never matches that test, and is handled by the second pass,
+`divThroughPolyAtoms`, which trial-divides it into the numerator and drops the id on an exact
+division; only an atom surviving *both* passes is lowered to a runtime `inv` env slot. The id is
+the link between the on-monomial factor and the denominator table that lets the cancellation
+passes decide whether the factor dies or lives.
 
 ### Two dressing layers reuse the same trick
 
@@ -157,8 +159,32 @@ for the `fill` body.
 By contracting over a fixed frame the engine produces a polynomial in the frame's scalar symbols
 directly, with the projector and Wick combinatorics resolved numerically rather than expanded — the
 same invariant scalar-product basis a symbolic tracer arrives at, without ever forming the
-intermediate blow-ups. The one thing a fixed-frame contraction *cannot* do that a symbolic tracer
-can is integration-by-parts on the symbolic scalar products *before* the frame is substituted; on
-the heaviest vertices that leaves the generated kernel a little slower at runtime, in exchange for
-generating it far faster. The one place we quantify that trade-off is the
-[relationship note](../getting_started/overview.md#why-generate-rather-than-evaluate-symbolically).
+intermediate blow-ups.
+
+Three things then keep the emitted polynomial small. Two are cancellations, and they are where the
+compactness actually comes from:
+
+- **Unit-vector constraints** (`reduce_units`, `numeric/mpoly.hpp`). The loop momentum is written as
+  magnitude × unit direction, so `ΣUμ² = 1` holds exactly; rewriting `U_last² → 1 − Σ_{μ<last} Uμ²`
+  bounds the last component to power ≤ 1 and collapses the bare-loop denominator `Σ(l·Uμ)² = l²·ΣUμ²`
+  to the monomial `l²`, which then cancels.
+- **Propagator-denominator cancellation** (`divThroughMonomialAtoms` and `divThroughPolyAtoms`,
+  same header). A surviving `1/k²` rides in the monomial key as an *atom*. When its denominator is a
+  single monomial it cancels term-by-term. When it is a genuine polynomial — a shifted line
+  `k = l − q`, where `k² = l² − 2l·q + q²` — the terms are grouped by their atom multiset and the
+  denominator is **trial-divided into the numerator**; an exact division (vanishing remainder) drops
+  the atom entirely. Dirac-trace numerators routinely do contain a factor of the very `k²` that sits
+  underneath them, so this fires often and removes both a division and every term that cancelled
+  against it.
+- **Cross-trace CSE** (`"CrossTraceCSE"`, see [CSE and lowering](cse-and-lowering.md)), which shares
+  subexpressions across all of a flow's traces rather than lowering each independently.
+
+The second of these is the frame-space analogue of the partial-fractioning (integration-by-parts-like)
+step a symbolic tracer does on scalar products *before* substituting a frame. It was previously
+assumed a fixed-frame contraction could not do it at all, and that the difference left the generated
+kernel slower at runtime in exchange for generating far faster. That is no longer the case: the
+cancellation is available in the frame, and with it the numeric kernels are competitive with or faster
+than the symbolic ones — see the
+[relationship note](../getting_started/overview.md#why-generate-rather-than-evaluate-symbolically)
+and `PERFORMANCE.md`. The win is concentrated in quark and ghost loops, where shifted-line
+propagators meet matching numerators; pure-gauge flows have little to cancel and are unchanged.
