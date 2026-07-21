@@ -1112,6 +1112,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "#include \"numtracer/numeric/trace_fold.hpp\"\n",
     "#include <iostream>\n#include <string>\n#include <utility>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
     "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
+    "#include <unistd.h>\n#if defined(__GLIBC__)\n#include <malloc.h>\n#endif\n",
+    (* Resident set in MB, straight from /proc — so the generator can report its OWN peak rather than
+       the caller having to wrap it in `/usr/bin/time`. Returns 0 where /proc is absent. *)
+    "static double ntRssMB(){ long pages=0; if(FILE* f=std::fopen(\"/proc/self/statm\",\"r\")){ long tot=0; if(std::fscanf(f,\"%ld %ld\",&tot,&pages)!=2) pages=0; std::fclose(f); } return pages*(double)sysconf(_SC_PAGESIZE)/1048576.0; }\n",
     "#include <sstream>\n#include <unordered_map>\n",
     "using numtracer::Cx;\n",
     "namespace numtracer::network {\n", tmpl, "}\n",
@@ -1344,6 +1348,15 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "  const bool ntprof = (std::getenv(\"NT_GEN_PROFILE\")!=nullptr);\n",
     "  unsigned hw=std::thread::hardware_concurrency(); if(!hw)hw=4u;\n",
     "  if(const char* mw=std::getenv(\"NT_GEN_MAXW\")){int v=std::atoi(mw); if(v>0&&(unsigned)v<hw)hw=(unsigned)v;}\n",
+    (* SEPARATE worker count for phase B. The two phases have very different memory profiles per
+       worker, so one knob cannot tune both. Phase A's transient is `hw` concurrent contractions, but
+       it is trimmed away afterwards. Phase B's is `hw` concurrent RECOMPUTES of the uncached traces —
+       and those are the SINGLETONS, which are the heavy ones (Codegen.m orders by descending refcount,
+       and a trace that recurs is a simple structure while a unique one is complex: on ZAAqbq1 the 2550
+       reused traces are 20.1 MB total, ~8 KB each, while the 1164 singletons could not be cached at
+       all inside 10 GB). Those recomputes land on top of the live window, so phase B can need FEWER
+       workers than phase A even though it is the cheaper phase in CPU terms. Defaults to `hw`. *)
+    "  unsigned hwB=hw; if(const char* mb=std::getenv(\"NT_GEN_MAXW_B\")){int v=std::atoi(mb); if(v>0)hwB=(unsigned)v;}\n",
     With[{PT = If[hasDressed, "DPoly", "MPoly"]},
     StringJoin[{
     "  const long NSUB = " <> bb[nSub] <> ";\n",
@@ -1368,12 +1381,27 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     "  if(ntprof){ std::size_t tb=0; for(auto &p: T) tb+=poly_bytes(p);\n",
     "    std::fprintf(stderr,\"[num] phase A: %ld distinct traces, %ld cached, table %.1f MB, %.1f s (W=%u)\\n\",\n",
     "      NSUB, nCache, tb/1048576.0, std::chrono::duration<double>(std::chrono::steady_clock::now()-tA).count(), hw); }\n",
-    (* PHASE B — each net folds its traces with its scalars, as a balanced tree. Traces beyond nCache
-       are recomputed here; by construction those are referenced once, so nothing is computed twice. *)
-    "  auto tB=std::chrono::steady_clock::now();\n",
-    "  std::vector<" <> PT <> "> mp = env.fold_nets<" <> PT <> ">(sidx, dsc, T, nCache, hw, trace);\n",
-    "  if(ntprof) std::fprintf(stderr,\"[num] phase B: fold %d nets, %.1f s (W=%u)\\n\", " <> bb[nNet] <>
-      ", std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), hw);\n"}]],
+    (* RELEASE PHASE A'S ARENA. Phase A contracts `hw` traces CONCURRENTLY, and a single dense 4-point
+       contraction transiently allocates ~1 GB — so its working set is ~hw GB even though the table it
+       leaves behind is 20 MB. glibc frees that into the per-thread arenas but does not munmap it, so
+       RSS stays at the phase-A high-water mark and phase B starts from a multi-GB floor instead of
+       from the table. Measured on ZAAqbq1 at W=6: RSS ~7.4 GB after phase A against a 20.1 MB table,
+       which is what then pushed phase B over a 10 GB cap. malloc_trim gives it back to the OS.
+       Costs milliseconds, once. *)
+    "#if defined(__GLIBC__)\n",
+    "  { const double rssPre = ntRssMB(); malloc_trim(0);\n",
+    "    if(ntprof) std::fprintf(stderr,\"[num] arena trim after phase A: RSS %.0f -> %.0f MB\\n\", rssPre, ntRssMB()); }\n",
+    "#endif\n",
+    (* PHASE B is NOT emitted here — it is fused into the group/lowering loop below (search
+       fold_groups_streaming). It used to be `mp = env.fold_nets(...)`, one fully-expanded polynomial per
+       net, ALL of them returned and then held for the rest of main() while the group loop summed them
+       into a second full set of per-group accumulators. On the dense 4-point flows that is 20+ GB (488
+       nets x ~41 MB) against a 20 MB trace table — the generator was OOM-killed before it could emit.
+       Nothing is revisited (each net polynomial is written once, read once by its group, then dead), so
+       the fix is to consume it as a stream: fold each group's nets on demand, lower the group, free it.
+       Phase B therefore needs `groups`, `colv`, `g` and `realOnly`, which are only declared further
+       down — hence the move. `tB` still starts here so the reported phase-B time is comparable. *)
+    "  auto tB=std::chrono::steady_clock::now();\n"}]],
     (* one SUNEnv per distinct group rank appearing in the colour nets (colFacG emits `sun<n>.` factors),
        so the rank is written once. Scan the assembled net strings for the `sun<digits>.` tokens. *)
     StringJoin["  SUNEnv sun" <> # <> "(" <> # <> ");\n" & /@
@@ -1403,19 +1431,47 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
        shared CSE builder (to_genprog_fused) instead of one independent program per trace. Measured on
        ZAqbq1_147 Mq-in: 30,547 shared SSA instrs vs 47,558 independent (0.64x), lowering cost
        unchanged. See network::FusedProg. *)
+    (* PHASE B + group accumulation + lowering, FUSED into one streaming pass (numeric/trace_fold.hpp's
+       fold_groups_streaming). `groups` partitions the nets, so a net's folded polynomial is needed by
+       exactly one group and can die the moment that group has absorbed it. At most `gwin` group
+       accumulators plus `hw` in-flight net polynomials are ever live, against every net polynomial AND
+       every group accumulator before. NT_GEN_GROUP_WINDOW is the dial; gwin == nGrp reproduces the old
+       residency exactly, so the pre-streaming behaviour stays reachable for A/B.
+
+       Bit-identical to what it replaces: each group still left-folds its members in group order over the
+       same fold_net results, and the sink runs on the calling thread for gi = 0,1,2,... ascending — which
+       is what keeps GlobalEnv intern order and the shared CSE instruction stream unchanged. The scale is
+       passed per branch rather than shared so each keeps its exact expression (poly*constant here vs
+       scale_trace's constant*poly). *)
+    "  long gwin = numtracer::numeric::net_window((long)sidx.size(), hwB);\n",
+    "  if(ntprof) numtracer::numeric::check_group_partition(groups, " <> bb[nNet] <> ");\n",
     Which[
       crossCSE && hasDressed,
-      "  std::vector<DPoly> accs;\n" <>
-      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); accs.push_back(std::move(acc)); }\n" <>
-      "  std::vector<FusedProg> fused = to_genprog_fused(accs, g, realOnly);\n",
+      "  FusedStream fstream(g, realOnly);\n" <>
+      "  env.fold_groups_streaming<DPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <>
+      "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <>
+      "    [&](size_t, DPoly &&acc){ fstream.add(acc); });\n" <>
+      "  std::vector<FusedProg> fused = fstream.finish();\n",
       crossCSE,
-      "  std::vector<MPoly> accs;\n" <>
-      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc = env.zero(); for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]); accs.push_back(std::move(acc)); }\n" <>
-      "  std::vector<FusedProg> fused = to_genprog_fused(accs, g, realOnly);\n",
+      "  FusedStream fstream(g, realOnly);\n" <>
+      "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <>
+      "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <>
+      "    [&](size_t, MPoly &&acc){ fstream.add(acc); });\n" <>
+      "  std::vector<FusedProg> fused = fstream.finish();\n",
       hasDressed,
-      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; DPoly acc = env.dzero(); for(int d: grp) acc = acc + scaleCx(mp[d], colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n",
+      "  env.fold_groups_streaming<DPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <>
+      "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <>
+      "    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); });\n",
       True,
-      "  for(size_t gi=0; gi<groups.size(); ++gi){ auto &grp=groups[gi]; MPoly acc = env.zero(); for(int d: grp) acc = acc + mp[d]*env.constant(colv[d]); progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); }\n"],
+      "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <>
+      "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <>
+      "    [&](size_t gi, MPoly &&acc){ progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); });\n"],
+    "  if(ntprof) std::fprintf(stderr,\"[num] phase B+lower: %d nets in %d groups, window %ld, %.1f s (W=%u)\\n\", " <>
+      bb[nNet] <> ", " <> bb[nGrp] <> ", gwin, std::chrono::duration<double>(std::chrono::steady_clock::now()-tB).count(), hwB);\n",
+    (* the trace table is dead once every group has folded; emission below only needs the lowered
+       instruction streams, which are orders of magnitude smaller. *)
+    (* NB: the `PT` With-binding above closes with phase A; spell the backend out again here. *)
+    "  { std::vector<" <> If[hasDressed, "DPoly", "MPoly"] <> "> dead; T.swap(dead); }\n",
     "  FillFormulas fm;\n",
     "  fm.var = [](int id)->std::string{\n",
     Table["    if(id==" <> bb[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],

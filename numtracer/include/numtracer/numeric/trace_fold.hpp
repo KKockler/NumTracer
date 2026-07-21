@@ -30,6 +30,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <system_error>
 #include <thread>
 #include <type_traits>
@@ -185,6 +187,186 @@ namespace numtracer::numeric
       mp[u] = fold_net<P>(nsym, sidx[u], sc[u], T, nCache, trace);
     });
     return mp;
+  }
+
+  /// @brief How many NET polynomials may be in flight — and therefore held — at once.
+  ///        `NT_GEN_GROUP_WINDOW` overrides; 0/unset picks `max(64, 8*W)`.
+  ///
+  /// This is the RAM lever for phase B, and it is a monotone dial: a window >= the net count lifts the
+  /// bound entirely, reproducing the old all-resident schedule, so the pre-streaming behaviour stays
+  /// reachable for A/B.
+  ///
+  /// The budget is counted in NETS, not groups, for two reasons. Nets are the unit that actually costs
+  /// memory (a group accumulator is roughly one net's worth, while a group spans 1..30 nets depending
+  /// on the flow), so nets are the honest currency for a RAM bound. And nets are the unit of
+  /// PARALLELISM: @ref fold_groups_streaming dispatches a flat work list of nets, never of groups.
+  /// Making the group the work item looks tempting — it needs no per-net storage — but it serialises
+  /// every net inside a group onto one thread, which on a flow with few fat groups is catastrophic
+  /// (measured on ZA4: 54 nets in 6 groups, one of them 27 nets, took the generator run 0.78 s -> 3.8 s).
+  /// The flat net-level work list is the whole reason phase A scales — see this file's header note on
+  /// per-net skew — and phase B must not give it up.
+  inline long net_window(long nNet, unsigned W)
+  {
+    static const long ov = [] {
+      if (const char *e = std::getenv("NT_GEN_GROUP_WINDOW")) {
+        const long x = std::atol(e);
+        if (x > 0) return x;
+      }
+      return 0L;
+    }();
+    if (nNet <= 0) return 0;
+    if (ov > 0) return std::min(ov, nNet);
+    return std::min(nNet, std::max<long>(64, 8L * static_cast<long>(W)));
+  }
+
+  /// @brief Report any net that `groups` does not cover exactly once (profile builds only).
+  ///
+  /// @ref fold_groups_streaming folds each group's members on demand, so it is only equivalent to
+  /// `fold_nets` + an eager group loop if `groups` PARTITIONS the nets — which Codegen.m guarantees by
+  /// construction (`Complement`/`GatherBy` over all net indices). A duplicate would mean silently
+  /// folding a net twice; a gap would mean silently dropping one from the kernel. Both are cheap to
+  /// detect here and expensive to debug downstream.
+  inline void check_group_partition(const std::vector<std::vector<int>> &groups, long nNet)
+  {
+    std::vector<int> cov(static_cast<std::size_t>(std::max(0L, nNet)), 0);
+    long oob = 0;
+    for (const auto &grp : groups)
+      for (int d : grp) {
+        if (d < 0 || d >= nNet) ++oob;
+        else ++cov[static_cast<std::size_t>(d)];
+      }
+    long dup = 0, gap = 0;
+    for (int c : cov) {
+      if (c > 1) ++dup;
+      else if (c == 0) ++gap;
+    }
+    if (dup || gap || oob)
+      std::fprintf(stderr,
+                   "[num] WARNING groups is not a partition: %ld duplicated, %ld uncovered, %ld out-of-range (of %ld nets)\n",
+                   dup, gap, oob, nNet);
+  }
+
+  /// @brief PHASE B, streaming driver — fold nets in bounded waves and hand each group's accumulator
+  ///        straight to `sink`, so no net polynomial outlives the group that consumes it.
+  ///
+  /// `fold_nets` materialises one fully-expanded polynomial per net and returns them all; the caller
+  /// then sums them into per-group accumulators. Both sets are live at once and neither is ever
+  /// released, which on the dense 4-point flows is 20+ GB (488 nets x ~41 MB) against a 20 MB trace
+  /// table — a ~1000x ratio between what is *cached* and what is merely *retained*. Nothing is
+  /// revisited: each net polynomial is written once, read once by its group, then dead. So this is a
+  /// streaming workload, and running it as a batch is the entire bug.
+  ///
+  /// Here at most `window` net polynomials are ever live, regardless of the flow's shape.
+  ///
+  /// Equivalence with `fold_nets` + an eager left fold is exact, not approximate:
+  ///  - each group still sums its members left-to-right in group order over the same `fold_net`
+  ///    results, so the floating-point association is unchanged bit-for-bit;
+  ///  - `sink` is called on the CALLING thread for `gi = 0, 1, 2, ...` strictly ascending, exactly once
+  ///    per group, which is what keeps `GlobalEnv` symbol-intern order and the shared CSE builder's
+  ///    instruction stream identical to the non-streamed lowering.
+  ///
+  /// @param scale `scale(d, P&&) -> P` applies net `d`'s colour weight. Deliberately a caller-supplied
+  ///        callable rather than @ref scale_trace: the emitted MPoly branches write
+  ///        `mp[d] * env.constant(colv[d])` (poly x constant) while `scale_trace` computes
+  ///        constant x poly. `MPoly::operator*` sort-collects so the two almost certainly agree — but a
+  ///        refactor that must not move a single ulp should not rest on "almost certainly", and a
+  ///        lambda preserves each branch's exact expression while keeping `colv` out of this signature.
+  /// @param trace as in @ref fold_net: pure and safe to call concurrently.
+  template <class P, class TraceFn, class ScaleFn, class Sink>
+  void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &sidx,
+                             const std::vector<std::vector<Cx>> &sc,
+                             const std::vector<std::vector<int>> &groups, const std::vector<P> &T,
+                             long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                             Sink &&sink)
+  {
+    const long nG = static_cast<long>(groups.size());
+    if (nG <= 0) return;
+
+    // Per-wave RSS trace (NT_GEN_PROFILE=2). Phase B's peak has three possible shapes and they call for
+    // opposite fixes, so measure rather than guess: a MONOTONE climb means something accumulates across
+    // waves (the lowered programs, the shared CSE env, or allocator churn) and the window is irrelevant;
+    // a SAWTOOTH with a flat ceiling means the peak is the transient of the heaviest trace contraction
+    // in a wave, which only a lower worker count can reduce; a climb that tracks wave size means the
+    // window itself is the cost.
+    const bool wprof = [] {
+      const char *e = std::getenv("NT_GEN_PROFILE");
+      return e && e[0] == '2';
+    }();
+    auto rssMB = [] {
+      long tot = 0, res = 0;
+      if (FILE *f = std::fopen("/proc/self/statm", "r")) {
+        if (std::fscanf(f, "%ld %ld", &tot, &res) != 2) res = 0;
+        std::fclose(f);
+      }
+      return res * 4096.0 / 1048576.0; // page size is 4 KiB where this runs
+    };
+    long waveNo = 0;
+
+    // Work in WAVES of consecutive groups, each sized by a budget of NETS rather than of groups, so a
+    // flow with a few fat groups and one with many thin ones both get a bounded live set and the same
+    // flat work list. A wave always takes at least one group, so an oversized group still makes
+    // progress — its nets are simply all in flight at once, which is the irreducible floor.
+    std::vector<P> part;   // per-net folded+scaled results for this wave, in wave-local order
+    std::vector<long> off; // off[k] = index into `part` where wave-local group k starts
+    std::vector<int> flat; // this wave's nets, flattened — the parallel work list
+
+    for (long g0 = 0; g0 < nG;) {
+      long g1 = g0, nets = 0;
+      while (g1 < nG) {
+        const long sz = static_cast<long>(groups[static_cast<std::size_t>(g1)].size());
+        if (g1 > g0 && window > 0 && nets + sz > window) break;
+        nets += sz;
+        ++g1;
+      }
+
+      flat.clear();
+      off.clear();
+      off.push_back(0);
+      for (long gi = g0; gi < g1; ++gi) {
+        for (int d : groups[static_cast<std::size_t>(gi)])
+          flat.push_back(d);
+        off.push_back(static_cast<long>(flat.size()));
+      }
+
+      // FLAT NET-LEVEL PARALLELISM — the same granularity `fold_nets` used, and the reason this
+      // scales: sub-terms per net are wildly skewed, so scheduling per group (or anything coarser than
+      // a net) lets one fat work item pin utilisation.
+      part.clear();
+      part.reserve(flat.size());
+      for (std::size_t i = 0; i < flat.size(); ++i)
+        part.push_back(zero_like<P>(nsym));
+      const double rssPre = wprof ? rssMB() : 0.0;
+      parallel_flat(static_cast<long>(flat.size()), W, [&](long i) {
+        const auto j = static_cast<std::size_t>(i);
+        const auto u = static_cast<std::size_t>(flat[j]);
+        part[j] = scale(flat[j], fold_net<P>(nsym, sidx[u], sc[u], T, nCache, trace));
+      });
+      const double rssFold = wprof ? rssMB() : 0.0;
+
+      // Drain the wave in ascending group order, on THIS thread.
+      for (long gi = g0; gi < g1; ++gi) {
+        const long k = gi - g0;
+        P acc = zero_like<P>(nsym);
+        for (long i = off[static_cast<std::size_t>(k)]; i < off[static_cast<std::size_t>(k + 1)]; ++i) {
+          const auto j = static_cast<std::size_t>(i);
+          acc = acc + part[j];
+          part[j] = zero_like<P>(nsym); // release as absorbed
+        }
+        sink(static_cast<std::size_t>(gi), std::move(acc));
+      }
+
+      if (wprof) {
+        // pre -> after-fold -> after-sink. The pre->fold delta is what the wave's nets plus the
+        // concurrent trace contractions cost; the fold->sink delta is what lowering retained; and the
+        // drift of `pre` across waves is what never comes back.
+        std::fprintf(stderr, "[num]   wave %ld: groups %ld..%ld, %zu nets, RSS %.0f -> %.0f -> %.0f MB\n",
+                     waveNo, g0, g1 - 1, flat.size(), rssPre, rssFold, rssMB());
+        std::fflush(stderr);
+      }
+      ++waveNo;
+
+      g0 = g1;
+    }
   }
 
 } // namespace numtracer::numeric

@@ -206,6 +206,97 @@ int main()
     check(tree * 4 < left, msg);
   }
 
+  // STREAMING PHASE B (fold_groups_streaming) must be bit-identical to what it replaces: fold_nets
+  // over every net, then an eager left fold of each group's members. It exists purely to bound RAM —
+  // holding `window` group accumulators instead of every net polynomial — so any change to the VALUE
+  // would be a bug, not a tradeoff. Three things are checked, because the first two can pass while the
+  // third silently rots:
+  //   - the accumulated polynomial per group is exactly equal (not within a tolerance)
+  //   - the sink sees gi = 0,1,2,... strictly ascending, exactly once each. This is what keeps
+  //     GlobalEnv intern order and the shared CSE instruction stream identical downstream, and it is
+  //     NOT implied by the values being right — a batch drained out of order still sums correctly.
+  //   - it holds across window = 1 (the RAM floor), an interior window that does not divide the group
+  //     count evenly, and window = ngroups (which reproduces the old schedule exactly).
+  {
+    constexpr std::size_t nNet = 37;
+    constexpr int NPT = 11; // distinct traces
+    std::vector<std::vector<int>> sidx(nNet);
+    std::vector<std::vector<Cx>> sc(nNet);
+    for (std::size_t d = 0; d < nNet; ++d) {
+      const std::size_t nsub = 1 + (d % 5); // skewed nets, like the real flows
+      for (std::size_t j = 0; j < nsub; ++j) {
+        sidx[d].push_back(static_cast<int>((d * 7 + j * 3) % NPT));
+        sc[d].push_back(Cx{1.0 + 0.5 * static_cast<double>(d), -0.25 * static_cast<double>(j)});
+      }
+    }
+
+    // A partition of [0, nNet) into ragged groups — the shape Codegen.m's GatherBy produces.
+    std::vector<std::vector<int>> groups;
+    for (std::size_t d = 0; d < nNet;) {
+      const std::size_t k = 1 + (groups.size() % 4);
+      std::vector<int> grp;
+      for (std::size_t j = 0; j < k && d < nNet; ++j, ++d)
+        grp.push_back(static_cast<int>(d));
+      groups.push_back(std::move(grp));
+    }
+
+    // Per-net colour weights, and the scale the emitted DPoly branch uses.
+    std::vector<Cx> colv(nNet);
+    for (std::size_t d = 0; d < nNet; ++d)
+      colv[d] = Cx{0.75 - 0.03 * static_cast<double>(d), 0.4 * static_cast<double>(d % 3)};
+
+    for (long nCache : {0L, 5L, static_cast<long>(NPT)}) {
+      const std::vector<MPoly> T = contract_traces<MPoly>(NSYM, nCache, /*W=*/4, trace_of);
+
+      // Reference: exactly the code path being replaced.
+      const std::vector<MPoly> mp = fold_nets<MPoly>(NSYM, sidx, sc, T, nCache, /*W=*/4, trace_of);
+      std::vector<MPoly> want;
+      for (const auto &grp : groups) {
+        LorentzEnv env(NSYM);
+        MPoly acc = env.zero();
+        for (int d : grp)
+          acc = acc + mp[static_cast<std::size_t>(d)] * env.constant(colv[static_cast<std::size_t>(d)]);
+        want.push_back(std::move(acc));
+      }
+
+      for (long window : {1L, 5L, static_cast<long>(groups.size())}) {
+        std::vector<MPoly> got;
+        std::vector<std::size_t> order;
+        LorentzEnv env(NSYM);
+        env.fold_groups_streaming<MPoly>(
+            sidx, sc, groups, T, nCache, /*W=*/4, window, trace_of,
+            [&](int d, MPoly &&m) { return m * env.constant(colv[static_cast<std::size_t>(d)]); },
+            [&](std::size_t gi, MPoly &&a) {
+              order.push_back(gi);
+              got.push_back(std::move(a));
+            });
+
+        char msg[192];
+        std::snprintf(msg, sizeof msg, "streaming nCache=%ld window=%ld: one sink call per group",
+                      nCache, window);
+        check(got.size() == groups.size() && order.size() == groups.size(), msg);
+
+        bool ascending = true;
+        for (std::size_t i = 0; i < order.size(); ++i)
+          if (order[i] != i) ascending = false;
+        std::snprintf(msg, sizeof msg, "streaming nCache=%ld window=%ld: sink order strictly ascending",
+                      nCache, window);
+        check(ascending, msg);
+
+        bool eq = got.size() == want.size();
+        for (std::size_t i = 0; eq && i < got.size(); ++i)
+          if (!same(got[i], want[i])) eq = false;
+        std::snprintf(msg, sizeof msg, "streaming nCache=%ld window=%ld: == fold_nets + eager group fold",
+                      nCache, window);
+        check(eq, msg);
+      }
+    }
+
+    // The partition checker must actually fire — it is the guard against a future Codegen.m grouping
+    // change silently dropping or double-folding a net, and a checker that never reports is no guard.
+    check_group_partition(groups, static_cast<long>(nNet)); // clean: prints nothing
+  }
+
   // poly_bytes must actually track size — it is what the generator reports as the trace table's RAM
   // cost, and a constant would silently hide the one way this design can regress (peak RSS).
   LorentzEnv env(NSYM);

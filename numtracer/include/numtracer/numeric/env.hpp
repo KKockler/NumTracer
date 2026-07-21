@@ -37,6 +37,12 @@ namespace numtracer::numeric
   std::vector<P> fold_nets(int nsym, const std::vector<std::vector<int>> &sidx,
                            const std::vector<std::vector<Cx>> &sc, const std::vector<P> &T, long nCache,
                            unsigned W, TraceFn &&trace);
+  template <class P, class TraceFn, class ScaleFn, class Sink>
+  void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &sidx,
+                             const std::vector<std::vector<Cx>> &sc,
+                             const std::vector<std::vector<int>> &groups, const std::vector<P> &T,
+                             long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                             Sink &&sink);
 
   /// @brief Binds `nsym` (+ unit groups) once; the sole sanctioned construction path for @ref MPoly /
   ///        @ref DPoly and the env-aware form of the numeric backend's public entry points.
@@ -119,6 +125,19 @@ namespace numtracer::numeric
                              const std::vector<P> &T, long nCache, unsigned W, TraceFn &&trace) const
     {
       return ::numtracer::numeric::fold_nets<P>(nsym_, sidx, sc, T, nCache, W, std::forward<TraceFn>(trace));
+    }
+    /// Streaming phase B: folds each group's nets on demand and drains straight to `sink`, so no net
+    /// polynomial outlives its group. See `trace_fold.hpp` for the equivalence argument.
+    template <class P, class TraceFn, class ScaleFn, class Sink>
+    void fold_groups_streaming(const std::vector<std::vector<int>> &sidx,
+                               const std::vector<std::vector<Cx>> &sc,
+                               const std::vector<std::vector<int>> &groups, const std::vector<P> &T,
+                               long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                               Sink &&sink) const
+    {
+      ::numtracer::numeric::fold_groups_streaming<P>(nsym_, sidx, sc, groups, T, nCache, W, window,
+                                                     std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
+                                                     std::forward<Sink>(sink));
     }
 
   private:
