@@ -1396,9 +1396,10 @@ dressedSlotStr[gf : ntDressedNum[_, _, _], env_] :=
       Lookup[$dsCache, h, $dsCache[h] = dressedSlotStrBody[gf, env]]
    ];
 
+(* Returns the LIST of per-option "DSlotOpt{…}" strings (NOT the wrapped "DSlot{…}"). The generator
+   (emitNumericGenerator) expands the Cartesian product of the chain's slots' options into one
+   single-option sub-term per combination, so each slot is delivered here as its bare option list. *)
 dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] :=
-   "DSlot{" <>
-      StringRiffle[
          Function[opt,
                Module[{num, dr, vlcStr},
                   {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
@@ -1425,10 +1426,7 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] :=
                   "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <> StringRiffle[ToString /@ dr, ", "] <> "}, {" <>
                      If[opt[[2, 1]] === "slash", "dslash({" <> vlcStr <> "})", ""] <> "}, {}}"
                ]
-            ] /@ opts
-         ,
-         ", "
-      ] <> "}";
+            ] /@ opts;
 
 (* ---- general collected Dirac slot → C++ DSlot literal (Stage 4, any open-leg count) ------------
    An ntDiracSlot option keeps its WHOLE structure (Dirac chain × Lorentz-net factors); here we split
@@ -1463,9 +1461,9 @@ diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, mask_, nc_] :=
    With[{h = Hash[{gf, ids, env}]},
       Lookup[$dslCache, h, $dslCache[h] = diracSlotStrBody[gf, ids, env, mask, nc]]];
 
+(* Returns the LIST of per-option "DSlotOpt{…}" strings (see dressedSlotStrBody): the generator
+   expands the Cartesian product of a chain's slots into single-option sub-terms. *)
 diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, mask_, nc_] :=
-   "DSlot{" <>
-      StringRiffle[
          Function[opt,
             Module[{num, dr, facs, vecOf, gammaLegs, diracFacs, lorFacs, ordered, toks, netFacs, legStr, sigStr},
                {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
@@ -1499,8 +1497,7 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, mask_, nc_]
                "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <>
                   StringRiffle[ToString /@ dr, ", "] <> "}, {" <> StringRiffle[toks, ", "] <> "}, {" <>
                   StringRiffle[netFacs, ", "] <> "}}"
-            ]] /@ opts,
-         ", "] <> "}";
+            ]] /@ opts;
 
 (* Turn a component's factor list into the C++ Dirac-chain token(s) + its Lorentz "rest".
    Algorithm:
@@ -1685,8 +1682,13 @@ compileDirac[factors_, ids_, env_, mask_, nc_] :=
    independently and contracts their shared gluon legs; a single-loop component has no separator and
    emits the identical net as before. *)
       If[dressed,
-         Module[{chain = "std::vector<DChainTok>{" <> StringRiffle[loopStrs, ", dtfix(dloopsep()), "] <> "}", slotV = "std::vector<DSlot>{" <> StringRiffle[slots, ", "] <> "}"},
-            {ntDressedCore[chain, slotV], restCompiled[[2]], restCompiled[[1]]}
+(* Carry the slots STRUCTURED (a list over chain slots of that slot's option-string list) rather than
+   pre-joined into one multi-option "std::vector<DSlot>{…}" string. emitNumericGenerator expands the
+   Cartesian product of the options into one single-option dressed sub-term per combination, so each
+   combination becomes an ordinary trace that dedups across nets and contracts over phase A's flat
+   parallel work list — instead of C++ dress_collect enumerating the 3ⁿ combinations serially per net. *)
+         Module[{chain = "std::vector<DChainTok>{" <> StringRiffle[loopStrs, ", dtfix(dloopsep()), "] <> "}"},
+            {ntDressedCore[chain, slots], restCompiled[[2]], restCompiled[[1]]}
          ]
          ,
          Module[{core = "DiracNet{" <> StringRiffle[loopStrsBare, ", dloopsep(), "] <> "}"},
@@ -1885,7 +1887,8 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] :=
         PRINTS the committed straight-line kernel header. No reduce/rebase/ibp/sp-kinematics. *)
 
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False] :=
-   Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], bb, tmpl, pre, unitPre, nUnits, units, decl, ddl, dStr, lStr, dscv, ddch, ddsl, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl},
+   Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], bb, tmpl, pre, unitPre, nUnits, units, decl, ddl, dStr, lStr, dscv, ddch, ddsl, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl,
+      chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl},
       bb[x_] := ToString[x];
 (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
    (a numerator structure-sum kept eager). hasDressed routes the generator to the DPoly branch:
@@ -1901,6 +1904,14 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    parallel. Build per net the parallel lists of {DiracNet builder, NetVal builder} (a gamma-free
    branch → empty DiracNet + the whole net as the rest) plus the sub-term scalars; the generator
    sums mp[i] = Σ_b scal_b · numeric_value_netval(dn[i][b], ln[i][b]). *)
+(* Each branch yields a LIST of {ds, ls, scal, dc, dl} sub-terms (usually length 1). A DRESSED branch
+   expands the Cartesian product of its chain's slot options (Tuples) into ONE single-option sub-term
+   per combination: same DiracNet{}/rest/scalar/chain, but its DSlot list has exactly one DSlotOpt per
+   slot (the chosen combination). Each combination is then an ordinary dressed trace that dedups across
+   nets and contracts over phase A's flat parallel list, so C++ dress_collect no longer enumerates the
+   3ⁿ combinations serially per net (numeric-identical, not byte-identical — dedup renumbers). A slot's
+   option list is nv[[2]][[k]]; Tuples over them gives every combination. The non-dressed branches are
+   unchanged (one sub-term each), so non-dressed flows stay byte-identical. *)
       {dStr, lStr, dscv, ddch, ddsl} =
          Transpose @
             MapThread[
@@ -1908,47 +1919,33 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   If[cores === {},
                      {{}, {}, {}, {}, {}}
                      ,
-                     Module[{ds, ls, dc, dl},
-                        {ds, ls, dc, dl} =
-                           Transpose @
-                              MapThread[
-                                 Function[{nv, rv},
+                     Transpose[
+                        Join @@
+                           MapThread[
+                              Function[{nv, rv, scal},
+                                 Module[{lsStr = If[rv === "", "NetVal{}", rv]},
                                     Which[
-                                       MatchQ[nv, _ntDressedCore],(* dressed numerator: chain+slots, no DiracNet *){
-                                             "DiracNet{}"
-                                             ,
-                                             If[rv === "",
-                                                "NetVal{}"
-                                                ,
-                                                rv
-                                             ]
-                                             ,
-                                             nv[[1]]
-                                             ,
-                                             nv[[2]]
-                                          }
+                                       MatchQ[nv, _ntDressedCore],(* dressed numerator: expand slot options → single-option sub-terms *)
+                                          With[{chain = nv[[1]], slotOpts = nv[[2]]},
+                                             (* 5th slot = this combination's option-string LIST (one option per chain slot),
+                                                kept STRUCTURED (not the joined DSlot literal) so the table emitter can pool the
+                                                distinct options — the columns are ~99.9% redundant across combinations. *)
+                                             Function[combo,
+                                                {"DiracNet{}", lsStr, scal, chain, combo}
+                                             ] /@ If[slotOpts === {}, {{}}, Tuples[slotOpts]]
+                                          ]
                                        ,
-                                       StringMatchQ[nv, "DiracNet" ~~ ___],(* gamma branch: DiracNet + projector rest *){
-                                             nv
-                                             ,
-                                             If[rv === "",
-                                                "NetVal{}"
-                                                ,
-                                                rv
-                                             ]
-                                             ,
-                                             "std::vector<DChainTok>{}"
-                                             ,
-                                             "std::vector<DSlot>{}"
-                                          }
+                                       StringMatchQ[nv, "DiracNet" ~~ ___],(* gamma branch: DiracNet + projector rest *)
+                                          {{nv, lsStr, scal, "std::vector<DChainTok>{}", {}}}
                                        ,
-                                       True,(* gamma-free branch: whole net is the rest *){"DiracNet{}", nv, "std::vector<DChainTok>{}", "std::vector<DSlot>{}"}
+                                       True,(* gamma-free branch: whole net is the rest *)
+                                          {{"DiracNet{}", nv, scal, "std::vector<DChainTok>{}", {}}}
                                     ]
                                  ]
-                                 ,
-                                 {cores, rss[[All, 1]]}
-                              ];
-                        {ds, ls, rss[[All, 2]], dc, dl}
+                              ]
+                              ,
+                              {cores, rss[[All, 1]], rss[[All, 2]]}
+                           ]
                      ]
                   ]
                ]
@@ -2299,40 +2296,39 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                {distinctSubs[[All, 2]]}
             ]
          ];
-      {sdchDefs, sdchCDecl} =
+(* DRESSED slot tables — INTERNED (chain pool + option pool + per-sub-term index arrays).
+   Expanding each structure×dressing COMBINATION into its own single-option sub-term (so phase A
+   contracts them in parallel, killing the serial dress_collect) makes the chain and slot columns
+   MASSIVELY redundant: a net's thousands of combinations share ONE chain (za3_147: 5 distinct over
+   12101 sub-terms) and draw their DSlotOpts from a tiny per-slot option pool (35 distinct over 84672
+   emissions — 99.9% redundant). Emitting the full literals per sub-term blew the generator SOURCE to
+   ~9.5 MB (compile 2.7 s -> 13.5 s). Instead emit the distinct chains (`chp`) and options (`optp`)
+   ONCE, and each sub-term as compact INDICES (`sdchR`: its chain index; `sdslR`: one option index per
+   slot); main rebuilds sdch[k]/sdsl[k] from them in an O(nSub) loop — the exact hash-consing the
+   sidx/dsc tables already use. Source ~9.5 MB -> ~0.4 MB, so the phase-A run-time win no longer costs
+   a compile-time regression. Non-dressed sub-terms carry an empty chain / empty option list (the
+   sdch[k].empty() numeric_value_netval fast path is preserved). *)
+      {chpDefs, chpCDecl, sdchrDefs, sdchrCDecl, optpDefs, optpCDecl, sdslrDefs, sdslrCDecl} =
          If[hasDressed,
-            ntChunkDefs[
-               "sdch"
-               ,
-               "std::vector<std::vector<DChainTok>>"
-               ,
-               If[nSub === 0,
-                  {{}}
-                  ,
-                  {distinctSubs[[All, 3]]}
-               ]
+            Module[{chainStrs, combos, uChains, chainPos, uOpts, optPos, chd, chcd, srd, srcd, opd, opcd, sld, slcd},
+               chainStrs = If[nSub === 0, {}, distinctSubs[[All, 3]]];
+               combos    = If[nSub === 0, {}, distinctSubs[[All, 4]]];(* per sub-term: its option-string LIST ({} for a non-slot sub-term) *)
+               uChains = DeleteDuplicates[chainStrs];
+               chainPos = AssociationThread[uChains -> Range[Length[uChains]] - 1];
+               uOpts = DeleteDuplicates[Flatten[combos]];
+               optPos = AssociationThread[uOpts -> Range[Length[uOpts]] - 1];
+               {chd, chcd} = ntChunkDefs["chp", "std::vector<std::vector<DChainTok>>", {uChains}];
+               {srd, srcd} = ntChunkDefs["sdchR", "std::vector<int>", {ToString /@ (chainPos /@ chainStrs)}];
+               {opd, opcd} = ntChunkDefs["optp", "std::vector<DSlotOpt>", {uOpts}];
+               {sld, slcd} = ntChunkDefs["sdslR", "std::vector<std::vector<int>>",
+                  {("{" <> StringRiffle[ToString /@ (optPos /@ #), ","] <> "}")& /@ combos}];
+               {chd, chcd, srd, srcd, opd, opcd, sld, slcd}
             ]
             ,
-            {{}, ""}
+            {{}, "", {}, "", {}, "", {}, ""}
          ];
-      {sdslDefs, sdslCDecl} =
-         If[hasDressed,
-            ntChunkDefs[
-               "sdsl"
-               ,
-               "std::vector<std::vector<DSlot>>"
-               ,
-               If[nSub === 0,
-                  {{}}
-                  ,
-                  {distinctSubs[[All, 4]]}
-               ]
-            ]
-            ,
-            {{}, ""}
-         ];
-      chunkDecls = sdnCDecl <> slnCDecl <> sdchCDecl <> sdslCDecl;
-      allDefs = Join[cseDefs, sdnDefs, slnDefs, sdchDefs, sdslDefs];
+      chunkDecls = sdnCDecl <> slnCDecl <> chpCDecl <> sdchrCDecl <> optpCDecl <> sdslrCDecl;
+      allDefs = Join[cseDefs, sdnDefs, slnDefs, chpDefs, sdchrDefs, optpDefs, sdslrDefs];
 (* Size-aware unit count (~$ntUnitChars per unit, 8..$ntUnitCap): the CSE accessors are many but
    small, so the old 12-defs/unit rule would emit hundreds of tiny TUs each re-parsing the shared
    decl header. Defs are packed into the units by GREEDY BIN-PACKING (largest def first, into the
@@ -2378,7 +2374,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    the nets index into — not one builder per net, as before the dedup. *)
             "std::vector<DiracNet> sdn0();\n" <> "std::vector<NetVal> sln0();\n" <>
             If[hasDressed,
-               "std::vector<std::vector<DChainTok>> sdch0();\n" <> "std::vector<std::vector<DSlot>> sdsl0();\n"
+               "std::vector<std::vector<DChainTok>> chp0();\n" <> "std::vector<int> sdchR0();\n" <>
+               "std::vector<DSlotOpt> optp0();\n" <> "std::vector<std::vector<int>> sdslR0();\n"
                ,
                ""
             ] <>
@@ -2438,7 +2435,14 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   "  std::vector<NetVal> sln = sln0();\n"
                   ,
                   If[hasDressed,
-                     "  std::vector<std::vector<DChainTok>> sdch = sdch0();\n" <> "  std::vector<std::vector<DSlot>> sdsl = sdsl0();\n"
+(* rebuild the per-sub-term chain/slot tables from the interned pools (chp/optp) + index arrays
+   (sdchR/sdslR) — O(nSub), reproduces the full sdch/sdsl exactly, so the trace lambda is untouched. *)
+                     "  std::vector<std::vector<DChainTok>> chp = chp0(); std::vector<int> sdchR = sdchR0();\n" <>
+                     "  std::vector<DSlotOpt> optp = optp0(); std::vector<std::vector<int>> sdslR = sdslR0();\n" <>
+                     "  const size_t NSD = sdchR.size();\n" <>
+                     "  std::vector<std::vector<DChainTok>> sdch(NSD); std::vector<std::vector<DSlot>> sdsl(NSD);\n" <>
+                     "  for(size_t k=0;k<NSD;++k){ sdch[k]=chp[sdchR[k]]; sdsl[k].reserve(sdslR[k].size());\n" <>
+                     "    for(int oi: sdslR[k]) sdsl[k].push_back(DSlot{optp[oi]}); }\n"
                      ,
                      ""
                   ]
@@ -2549,8 +2553,16 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    pure RAM for no saving. NT_GEN_MEMO_MAX overrides either way (clamped to [0, NSUB]): lower it
    when memory is tight (the RAM lever — the dense flows are memory-bound before they are
    compute-bound), raise it to NSUB to put the singletons in phase A too, which costs their RAM
-   but gives phase A the whole work list to balance. *)
-                           "  long nCache = " <> bb[nReused] <> ";\n"
+   but gives phase A the whole work list to balance.
+   DRESSED (collected-slot) flows default to NSUB: expanding each structure×dressing COMBINATION into
+   its own single-option sub-term (Codegen.m) makes every combination a DISTINCT singleton (no
+   cross-net reuse), so nReused is ~0 and the reused-only default would leave ALL of them to phase B's
+   fold — which is parallel over NETS, not traces, so the one dominant net serialises thousands of
+   contractions (measured on za3_147: phase B 27 s). Each collected combination is individually SMALL
+   (za3_147: 12101 traces = 8 MB table), so caching them all is RAM-cheap and lets phase A contract
+   them over its flat W-parallel work list instead (phase B 27 s -> 0 s, run 27 s -> 2 s). Memory-bound
+   dressed flows (ZAAqbq) dial it back with NT_GEN_MEMO_MAX. *)
+                           "  long nCache = " <> bb[If[hasDressed, nSub, nReused]] <> ";\n"
                            ,
                            "  if(const char* mm=std::getenv(\"NT_GEN_MEMO_MAX\")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }\n"
                            ,

@@ -341,6 +341,87 @@ So (b) reduces to a **codegen-only** change: where `compileDirac` emits `ntDress
 sub-terms**. The C++ `dress_collect` stays (it now runs with one option per call — the deduped,
 parallel, on-demand path handles the 3ⁿ). This is the tractable implementation; validate as in step 5.
 
+#### LANDED 2026-07-22 — codegen-only expansion (the run regression is FIXED; compile is the new bottleneck)
+
+Implemented (Wolfram-only, `Codegen.m`), no C++ change:
+- `dressedSlotStrBody` / `diracSlotStrBody` now return the **bare option-string list** (not the wrapped
+  `DSlot{…}`); `compileDirac`'s dressed return carries the slots **structured** (`ntDressedCore[chain,
+  slots]`, `slots` = list-over-slots of option-lists).
+- `emitNumericGenerator` expands each dressed branch's Cartesian product (`Tuples[slots]`) into **one
+  single-option sub-term per combination** — same `DiracNet{}`/rest/scalar/chain, a `DSlot` list with
+  ONE `DSlotOpt` per slot. Non-dressed branches unchanged (byte-identical).
+- **The missing half the plan didn't call out:** the singletons only reach phase A if they are *cached*.
+  Phase A contracts `[0, nCache)` and Codegen.m defaulted `nCache = nReused` — but every expanded
+  combination is a **distinct singleton** (`nReused ≈ 0`), so the reused-only default left ALL of them
+  to phase B's fold, which is parallel over NETS not traces ⇒ the one dominant net serialised thousands
+  of contractions (unchanged 27 s). Fix: **default `nCache = NSUB` for dressed flows** (each collected
+  combination is individually tiny — see table). `NT_GEN_MEMO_MAX` still dials it back for RAM.
+
+Built in THREE codegen-only pieces (miss any one and it regresses), measured on `za3_147` (full
+`AqbqDirect147` vertex), collection ON:
+
+| phase | OLD collected | expand + `nCache=NSUB` | **+ pool-interning (final)** | distributed (OFF) |
+|---|---|---|---|---|
+| NumTrace | 0.08 s | 0.08 s | 0.09 s | 3.21 s |
+| generator source | — | 9.5 MB | **1.06 MB** | — |
+| generator **compile** | 2.7 s | 13.5 s (39 units) | **3.7 s (8 units)** | 3.1 s |
+| generator **run** | **26.9 s** | 2.1 s | **2.5 s** | 0.34 s |
+| — phase A | 6 traces, 0 cached | 12101 cached (8.1 MB), 1.9 s | 12101 cached (8.1 MB), 2.3 s | — |
+| — phase B+lower | 26.9 s | 0.0 s | **0.0 s** | — |
+| TOTAL generation | ~31.6 s | ~19.3 s | **~8.9 s** | 13.3 s |
+| emitted kernel | 178 KB | 178 KB | **178 KB** | 239 KB |
+
+The three pieces:
+1. **Expand** each combination into a single-option sub-term (above). Moves the 3ⁿ enumeration off C++
+   `dress_collect` onto the trace table — but only if the singletons reach phase A (piece 2).
+2. **`nCache=NSUB` default for `hasDressed`** — the combinations are all distinct singletons
+   (`nReused≈0`), so the reused-only default left them to phase B's net-skewed serial fold (run stayed
+   27 s). NSUB puts them on phase A's flat W=32 list ⇒ run 26.9 → 2.1 s; phase B+lower 0.0 s.
+3. **Pool the chain + option columns.** Expansion makes both columns ~99.9% redundant — measured on
+   `za3_147`: **84672 `DSlotOpt` emissions but only 35 DISTINCT**, and 12101 chains but 5 distinct. So
+   emit the pools (`chp`, `optp`) ONCE + per-sub-term INDEX arrays (`sdchR`, `sdslR`), and rebuild
+   sdch/sdsl in main O(nSub) — the exact hash-consing the `sidx`/`dsc` tables already use. Source 9.5 MB
+   → 1.06 MB ⇒ compile 13.5 → 3.7 s. (Without piece 3 the expansion trades the run regression for a
+   COMPILE regression; with it, neither.)
+
+**Correctness:** value-exact — each single-option sub-term is exactly one term of the old `dress_collect`
+odometer sum (same coeff × dressing monomial, same `nCollapsed` tr(1)=4). `flow_za3_147_num` reduces to
+struct-1 at round-off and differs with real 4/7 (PASS). Kernel renumbered (value-identical). The **k=0
+propagator flow `za3_num` regenerates BYTE-IDENTICAL** (`flow_za3_num` PASS) both with and without the
+pooling — the strongest signal the common path is untouched. Pooling is a pure source-level change (the
+emitted kernel is identical to the pre-pooling expanded kernel).
+
+**Result: collection is now the FASTEST path on `za3_147` — ~8.9 s total gen vs distributed 13.3 s vs
+old-collected 31.6 s — while keeping the 178 KB kernel.** The generator-RUN regression is gone
+(26.9 → 2.5 s) AND the compile stayed flat (2.7 → 3.7 s). Stage 4's payoff is no longer *just* diagram
+count / kernel size / RAM — on this flow it now wins wall-time too.
+
+**ZAAqbq measured (dense proxy, `gen_zaaqbq1_small_numeric.wls` — the only suite flow with real sub-term
+dedup).** Regenerated with the full change: **byte-identical kernel, `flow_zaaqbq1_small` PASS.**
+- generator source **1.01 MB**, compile 3.3 s, run 1.5 s, total gen **8.65 s**;
+- phase A: **1180 distinct traces, all cached, table 11.9 MB**, peak RSS **~125 MB** (trimmed to 42 MB);
+- redundancy **8.3× PRESERVED** (dedup-OFF ref = 9792 traces → 1180 deduped), so the expansion did NOT
+  dissolve the cross-net reuse here (unlike za3_147, where every combination was unique per net).
+
+So the feared **phase-A RAM blow-up from `nCache=NSUB` is a non-issue** on this flow — the collected
+combinations are individually tiny (11.9 MB for 1180) and, where redundancy is high, `nReused ≈ NSUB`
+anyway so NSUB caches only marginally more. The pool-interning keeps the source ~1 MB. `NT_GEN_MEMO_MAX`
+remains the dial if a bigger flow's phase-A table ever grows.
+
+**Caveat — the ULTIMATE target is still untested:** the small proxy uses `ZAqbq1` (struct-1 internal
+vertex), so its vertex slots have few options. The genuine payoff — the FULL-basis `AqbqDirect147`
+collected ZAAqbq (retire the `AqbqDirect1` classical-only restriction) — would generate FAR more
+combinations per net (za3_147-scale × a 4-point vertex), and it is NOT yet wired. That switch is where
+phase-A RAM under `nCache=NSUB` must be re-measured. But the mechanism (expand + NSUB + pool) is now
+proven correct and cheap on both a high-combination flow (za3_147, 12101, no reuse) and a
+high-redundancy dense flow (ZAAqbq1 small, 8.3× reuse).
+
+**Remaining:** wire `AqbqDirect1 → AqbqDirect147` for ZAAqbq/ZA and grade the full-basis k=2 flow (+
+re-measure phase-A RAM there); regen the other committed dressed fixtures for repo consistency (all
+become renumbered but value-exact — mechanism validated on k=0 + k=1 + the dense proxy, not yet swept);
+update `tools/redundancy.py`, which parses inline `dch`/`dsl` per sub-term and no longer sees the pooled
+index arrays (the generator's own phase-A / dedup-OFF lines report the redundancy directly meanwhile).
+
 ### Fix options (superseded by the correction above — kept for the design record)
 1. **Parallelise the sink into thread-local `GlobalEnv`s, then merge** — lower the 4 groups' DPolys
    concurrently, remap+dedup their programs at the end. Up to ~min(nGroups, cores)× on this phase; keeps a
