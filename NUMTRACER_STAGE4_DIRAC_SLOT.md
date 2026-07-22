@@ -209,11 +209,36 @@ real 4/7 dressings — i.e. the collected full-basis vertex is physics-exact. Th
 BOTH the new `ntDiracSlot` vertex path AND the reformatted `ntDressedNum` propagator emitter (the quark
 propagators are k=0 slots). All 35 non-codegen tests stay green.
 
-**The measured win** (`tests/gen/probe_za3_147_count.wls`, analysis only): `za3_147` with the full 147
-vertex is **6 diagrams collected vs 221 distributed — 36.8× fewer** (net top terms 6 vs 437). That is
-the `3ⁿ` root cause removed exactly: the collected kernel is byte-different but physics-identical to the
-distributed one, at a 37× smaller diagram set. This is the same lever the ranked-lever table calls W1
-(estimated 488→~24 nets on ZAAqbq1), now demonstrated on a real graded flow.
+**The measured diagram win** (`tests/gen/probe_za3_147_count.wls`, analysis only): `za3_147` with the full
+147 vertex is **6 diagrams collected vs 221 distributed — 36.8× fewer** (net top terms 6 vs 437). The
+collected kernel is byte-different but physics-identical, at a 37× smaller diagram set.
+
+**BUT generation TIME gets WORSE, not better** (`tests/gen/probe_za3_147_timing.wls`) — an important,
+counterintuitive finding:
+
+| phase | collection ON (6 diag) | collection OFF (221 diag) |
+|---|---|---|
+| NumTrace (analysis) | 0.08 s | 3.21 s |
+| generator compile (clang++) | 2.7 s | 3.1 s |
+| generator **run** (reduce+rebase+lower) | **26.9 s** | **0.34 s** |
+| TOTAL generation | **31.6 s** | 13.3 s |
+| emitted kernel size | 178 KB | 239 KB |
+
+The 36.8× fewer diagrams makes the Mathematica *analysis* 39× faster and the kernel ~25% smaller, but the
+**generator RUN is 79× SLOWER (26.9 s vs 0.34 s)**, so total generation is **2.4× slower with collection**.
+Cause: a collected diagram is ONE big `DPoly` (all structure×dressing combinations as polynomial
+coefficients); reducing + CSE/Horner-lowering that monolith is costly, whereas the distributed path emits
+~221 small independent traces that the shipped **cross-trace CSE + sub-term dedup** collapse to a compact
+shared program in 0.34 s. Collection front-loads the 3ⁿ enumeration into one `DPoly` the deduper cannot
+factor across — it trades the two runtime-lowering optimisations for the diagram-count/RAM/kernel-size win.
+
+**Implication.** Stage 4's payoff is diagram count, Mathematica-analysis time, emitted **kernel size**, and
+(expected) contraction **RAM** — NOT generator wall-time. On a small compile-light flow like `za3_147` the
+DPoly-lowering cost dominates and collection is a net time LOSS. The north-star bet is that on the dense
+`ZAAqbq` monsters — where distribution's RAM forces `nB=1..2` — the RAM/size win still pays off; that
+must be measured on `ZAAqbq` directly, and the DPoly reduce/lower path is now the thing to profile and
+optimise (or gate collection to only the flows where RAM forces it). This reframes W1: it is a
+**RAM/size** lever, and its generator-run cost is a real regression to weigh, not a speedup.
 
 **Remaining.** A k=2 flow-grade (a flow with an INTERNAL two-gluon `AAqbq` vertex — the mechanism is
 already validated by engine test J + the synthetic k=2 decompose/gate, only an end-to-end flow is
