@@ -951,8 +951,9 @@ namespace numtracer::numeric
   ///    open Lorentz axis `openMu` — a net-known id shared by EVERY option of the slot (the gluon leg),
   ///    so the surrounding net contracts that one μ for all structure choices. `GammaMu` is `γ^μ` (T1);
   ///    `SigmaMu` is `σ^{μν}p̸_ν` with the slashed leg momentum in `openVlc` (T7). These reuse the
-  ///    existing `dgamma` / `dcomm_fs` Dirac tokens; the `VecMu` structure `p^μ·(δ|slash)` (T4), which
-  ///    puts the open index on a Lorentz VECTOR rather than a Dirac token, is Checkpoint 2.
+  ///    existing `dgamma` / `dcomm_fs` Dirac tokens. `VecMu` is the vector structure `p^μ·(δ|slash)`
+  ///    (T4): the open index rides a Lorentz VECTOR `p^μ` (momentum in `openVlc`) routed into the net,
+  ///    while the spinor side δ/slash reuses the `slash`/`vlc` fields — the internally-contracted case.
   enum class Open { None, GammaMu, SigmaMu, VecMu };
   struct DSlotOpt {
     Cx coeff{1, 0};
@@ -991,10 +992,17 @@ namespace numtracer::numeric
 #if NUMTRACER_DEFINE_BODIES
   namespace ndetail
   {
+    /// One open-gluon-leg Lorentz vector `p^μ` produced by a `VecMu` structure (Stage 4, T4): the open
+    /// axis `first` = μ (a net-known id) rides the momentum `second` = `Σ coeff·comp(vid)`. The caller
+    /// routes each such vector into the Lorentz net so the surrounding net contracts μ against it.
+    using OpenVec = std::pair<int, std::vector<std::pair<double, int>>>;
+
     /// Enumerate the Cartesian product of slot-structure choices, contract each concrete Dirac chain
     /// via @p contract (an `MPoly`-returning closure that runs the full Dirac+Lorentz contraction), and
     /// collect the results into one @ref DPoly keyed by the dressing monomial. Each slot is referenced
-    /// at most once in @p chain (a numerator occupies one chain position).
+    /// at most once in @p chain (a numerator occupies one chain position). @p contract receives the
+    /// concrete Dirac chain AND this combination's `VecMu` open-leg vectors (empty for every non-`VecMu`
+    /// combination ⇒ the caller takes a byte-identical fast path).
     template <class ContractFn>
     inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                ContractFn &&contract)
@@ -1018,6 +1026,7 @@ namespace numtracer::numeric
         DMono dressMono;
         network::DiracNet concrete;
         concrete.reserve(chain.size());
+        std::vector<OpenVec> extraVecs; // this combination's VecMu open-leg vectors (usually empty)
         for (const DChainTok &tok : chain) {
           if (!tok.isSlot) {
             concrete.push_back(tok.fac);
@@ -1032,16 +1041,22 @@ namespace numtracer::numeric
             concrete.push_back(network::dgamma(opt.openMu)); // T1: γ^μ
           else if (opt.open == Open::SigmaMu)
             concrete.push_back(network::dcomm_fs(opt.openMu, opt.openVlc)); // T7: σ^{μν}p̸_ν
-          else if (opt.slash)
+          else if (opt.open == Open::VecMu) {
+            // T4: p^μ·(δ|slash). The open axis μ rides a Lorentz VECTOR p^μ (openVlc), routed into the
+            // net by the contract closure; the spinor side is the internally-contracted δ/slash, so it
+            // reuses the slash/vlc fields exactly like the Open::None case below.
+            if (opt.slash) concrete.push_back(network::dslash(opt.vlc)); // slash spinor part
+            // else δ spinor part: no Dirac token (identity), tr(1)=4 restored by nCollapsed below.
+            extraVecs.emplace_back(opt.openMu, opt.openVlc);
+          } else if (opt.slash)
             concrete.push_back(network::dslash(opt.vlc)); // internally-contracted γ·p̸
           // else (open==None && !slash): identity δ — no Dirac token between the surrounding γ's.
-          // NOTE: Open::VecMu (T4, p^μ·δ) needs a Lorentz-factor into the net — Checkpoint 2.
         }
         if (!(combCoeff.re == 0 && combCoeff.im == 0)) {
           // restore tr(1)=4 for every spinor loop that collapsed to the identity in this combination
           const int nCollapsed = nloops - static_cast<int>(split_loops(concrete).size());
           for (int c = 0; c < nCollapsed; ++c) combCoeff = combCoeff * Cx{4, 0};
-          MPoly mp = contract(concrete);
+          MPoly mp = contract(concrete, extraVecs);
           if (!mp.empty()) {
             mp = mp * MPolyFactory::constant(nsym, combCoeff);
             out.add(dmono_sorted(std::move(dressMono)), mp);
@@ -1070,9 +1085,18 @@ namespace numtracer::numeric
                                                     const std::vector<MPoly> &atomDen,
                                                     const std::vector<std::vector<int>> &units)
   {
-    return ndetail::dress_collect(nsym, chain, slots, [&](const network::DiracNet &d) {
-      return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
-    });
+    return ndetail::dress_collect(nsym, chain, slots,
+                                  [&](const network::DiracNet &d, const std::vector<ndetail::OpenVec> &ev) {
+                                    if (ev.empty()) // non-VecMu combination: byte-identical to CP1 / the δ-slash collection
+                                      return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
+                                    // VecMu (T4): append each open-leg vector p^μ to every net term so the surrounding
+                                    // net contracts μ against it — the exact Lorentz structure the distributed diagram emits.
+                                    network::NetVal lor2 = lor;
+                                    for (network::PTerm &pt : lor2)
+                                      for (const ndetail::OpenVec &v : ev)
+                                        pt.e.push_back(network::Elem{network::Elem::Vector, v.first, -1, -1, -1, v.second});
+                                    return numeric_value_netval(nsym, d, lor2, comp, atomDen, units);
+                                  });
   }
 
   /// @brief Dressed analogue of @ref numeric_value (reading the numeric @ref NNet Lorentz network).
@@ -1082,7 +1106,16 @@ namespace numtracer::numeric
                                              const std::vector<MPoly> &atomDen)
   {
     return ndetail::dress_collect(nsym, chain, slots,
-                                  [&](const network::DiracNet &d) { return numeric_value(nsym, d, lorentz, comp, atomDen); });
+                                  [&](const network::DiracNet &d, const std::vector<ndetail::OpenVec> &ev) {
+                                    if (ev.empty()) return numeric_value(nsym, d, lorentz, comp, atomDen);
+                                    // VecMu (T4): route each open-leg vector p^μ into the numeric Lorentz net (see the
+                                    // netval variant above for the rationale).
+                                    NNet lor2 = lorentz;
+                                    for (NTerm &t : lor2)
+                                      for (const ndetail::OpenVec &v : ev)
+                                        t.e.push_back(nvec(v.first, v.second));
+                                    return numeric_value(nsym, d, lor2, comp, atomDen);
+                                  });
   }
 
   /// @brief Build the projector inverse-atom denominators by scanning the Lorentz nets for every

@@ -349,6 +349,90 @@ int main()
     if (worst != 0) ++fails;
   }
 
+  // ---- H) VecMu open-leg vector p^μ (T4) collected vs distributed (Stage 4, CP2) ----
+  // The full quark-gluon vertex sum Σ c_a T_a shares ONE open gluon axis μ: T1 = γ^μ, T4 = p^μ·(δ|slash)
+  // — the open index rides a Lorentz VECTOR routed into the net — and T7 = σ^{μν}p̸_ν. Collect all four
+  // families in ONE slot and check it equals the explicit distributed sum. Two surrounding chains of
+  // OPPOSITE Dirac parity are used so every family is nonzero in at least one (the wrong-parity ones
+  // trace to zero on BOTH sides — the collection must reproduce that too).
+  std::printf("\n== H: VecMu open-leg vector p^mu (T4) collected vs distributed ==\n");
+  {
+    const int nsym = 20; // 5 momenta (p:0..3, q:4..7, r:8..11, a:12..15, b:16..19)
+    nm::LorentzEnv env(nsym);
+    std::vector<std::array<nm::MPoly, 4>> comp(5);
+    for (int v = 0; v < 5; ++v)
+      for (int mu = 0; mu < 4; ++mu)
+        comp[v][mu] = env.var(4 * v + mu);
+    const std::vector<std::pair<double, int>> pMom = {{1.0, 0}}; // T4 vector p^μ (comp 0)
+    const std::vector<std::pair<double, int>> qMom = {{1.0, 1}}; // slash / σ momentum   (comp 1)
+    const std::vector<std::pair<double, int>> rMom = {{1.0, 2}}; // external gluon-leg partner (comp 2)
+    const std::vector<std::pair<double, int>> aMom = {{1.0, 3}}; // external partner of γ^101 (comp 3)
+    const std::vector<std::pair<double, int>> bMom = {{1.0, 4}}; // external partner of γ^102 (comp 4)
+
+    // one slot carrying all four vertex structures, sharing the open gluon axis μ = 200.
+    nm::DSlotOpt oT1;  oT1.coeff = Cx{1, 0};  oT1.dress = {0}; oT1.open = nm::Open::GammaMu; oT1.openMu = 200;
+    nm::DSlotOpt oT4d; oT4d.coeff = Cx{1, 0}; oT4d.dress = {1}; oT4d.open = nm::Open::VecMu; oT4d.openMu = 200;
+    oT4d.openVlc = pMom; oT4d.slash = false;                                    // T4, δ spinor part
+    nm::DSlotOpt oT4s; oT4s.coeff = Cx{1, 0}; oT4s.dress = {2}; oT4s.open = nm::Open::VecMu; oT4s.openMu = 200;
+    oT4s.openVlc = pMom; oT4s.slash = true; oT4s.vlc = qMom;                    // T4, slash spinor part (γ·q̸)
+    nm::DSlotOpt oT7;  oT7.coeff = Cx{1, 0};  oT7.dress = {3}; oT7.open = nm::Open::SigmaMu; oT7.openMu = 200;
+    oT7.openVlc = qMom;
+    nm::DSlot sV = {oT1, oT4d, oT4s, oT7};
+
+    // build the concrete chain + net for ONE structure choice (distributed reference). `base` carries the
+    // external gluon-leg partner r^200; T4 appends its own p^200 vector so μ closes as (r·p).
+    auto optChainNet = [&](int cp, const network::DiracNet &pre, const network::DiracNet &post,
+                           const nm::NNet &base) {
+      network::DiracNet c = pre;
+      nm::NNet net = base;
+      if (cp == 0) c.push_back(network::dgamma(200));                     // T1: γ^μ (Dirac free leg 200)
+      else if (cp == 1) for (auto &t : net) t.e.push_back(nm::nvec(200, pMom)); // T4-δ: p^200 into the net
+      else if (cp == 2) { c.push_back(network::dslash(qMom)); for (auto &t : net) t.e.push_back(nm::nvec(200, pMom)); } // T4-slash
+      else c.push_back(network::dcomm_fs(200, qMom));                     // T7: σ^{μν}p̸_ν (Dirac free leg 200)
+      for (const network::DFac &d : post) c.push_back(d);
+      return std::make_pair(c, net);
+    };
+
+    struct Cfg { const char *name; network::DiracNet pre, post; nm::NNet base; };
+    std::vector<Cfg> cfgs = {
+        // EVEN surrounding chain [γ101, ·, γ102] ⇒ T4-δ, T7 nonzero (T1, T4-slash trace to 0). The outer
+        // γ's close against DISTINCT external vectors a^101, b^102 (not a shared metric) so σ does not
+        // collapse via γ^αγ_α = 4 · tr(σ) = 0 — this keeps T7 genuinely nonzero.
+        {"even [g101,slot,g102]", {network::dgamma(101)}, {network::dgamma(102)},
+         {nm::NTerm{Cx{1, 0}, {nm::nvec(101, aMom), nm::nvec(102, bMom), nm::nvec(200, rMom)}}}},
+        // ODD surrounding chain [γ101, ·] ⇒ T1, T4-slash nonzero (T4-δ, T7 trace to 0)
+        {"odd  [g101,slot]", {network::dgamma(101)}, {},
+         {nm::NTerm{Cx{1, 0}, {nm::nvec(101, qMom), nm::nvec(200, rMom)}}}},
+    };
+
+    for (const Cfg &cfg : cfgs) {
+      std::vector<nm::DChainTok> dchain = {nm::dtfix(cfg.pre[0]), nm::dtslot(0)};
+      for (const network::DFac &d : cfg.post) dchain.push_back(nm::dtfix(d));
+      nm::DPoly dp = env.numeric_value_dressed(dchain, {sV}, cfg.base, comp, {});
+      int worst = 0;
+      double maxerr = 0.0;
+      for (int it = 0; it < 5000; ++it) {
+        std::vector<double> x(nsym);
+        for (double &v : x)
+          v = U(rng);
+        std::vector<double> drVal = {U(rng), U(rng), U(rng), U(rng)};
+        Cx collected = nm::eval(dp, x, {}, drVal);
+        Cx dist{0, 0};
+        for (int cp = 0; cp < 4; ++cp) {
+          auto cn = optChainNet(cp, cfg.pre, cfg.post, cfg.base);
+          Cx tr = nm::eval(env.numeric_value(cn.first, cn.second, comp, {}), x, {});
+          dist = dist + Cx{tr.re * drVal[cp], tr.im * drVal[cp]};
+        }
+        double e = cdiff(collected, dist);
+        maxerr = std::max(maxerr, e);
+        if (e >= 1e-10) ++worst;
+      }
+      std::printf("  %-22s dp terms=%d worst |collected-distributed|=%.2e (%d/5000 fail)  %s\n", cfg.name,
+                  dp.size(), maxerr, worst, worst == 0 ? "ok" : "FAIL");
+      if (worst != 0) ++fails;
+    }
+  }
+
   std::printf("\n%s\n", fails == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
   return fails == 0 ? 0 : 1;
 }

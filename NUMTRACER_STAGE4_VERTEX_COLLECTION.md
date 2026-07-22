@@ -84,3 +84,36 @@ kind, μ id, vlc) — parallel to how `ntDressedNum` becomes the current slot to
 CP1 (C++ open-γ/σ slot + unit test) → CP2 (C++ VecMu Lorentz routing + unit test) → CP3 (Wolfram
 `diracVertexSumQ`/`vertexNumDecompose`/`ntVertexSlot` + `expandVertexSlot`) → CP4 (Codegen token) →
 CP5 (flow regen + grade + retire dropAqbq47). Each CP is independently testable; CP1–2 need no Wolfram.
+
+## Progress
+
+### CP1 — open-γ / open-σ slot (GammaMu, SigmaMu) — LANDED 2026-07-22 (commit 1e7b1ba)
+`DSlotOpt` gained the `Open {None, GammaMu, SigmaMu, VecMu}` family; `dress_collect` splices
+`GammaMu → dgamma(μ)` (T1) and `SigmaMu → dcomm_fs(μ,vlc)` (T7) into the concrete chain, reusing
+`numeric_value_netval`'s existing open-Lorentz-leg contraction. `Open::None` defaults keep every
+existing flow byte-identical. `test_dpoly` case G.
+
+### CP2 — VecMu open-leg vector `p^μ` (T4) — LANDED 2026-07-22
+`dress_collect` now handles `Open::VecMu`: the spinor side (δ or `γ·q̸`) reuses the `slash`/`vlc` fields
+exactly like the `Open::None` case, and the open axis μ rides a Lorentz **vector** `p^μ` (momentum in
+`openVlc`) that is **routed into the net**. Design decision: of the two options in the design note,
+**(i) is infeasible** — `p^μ·δ` has no spinor content to "fold into the concrete chain as a slashed
+unit", so the open μ can only be carried by a genuine Lorentz-net vector. Took **(ii)**: `dress_collect`
+now hands the `contract` closure a per-combination `std::vector<OpenVec>` (`{μ, momentum}` pairs), and
+each closure (`numeric_value_dressed` / `_dressed_netval`) appends an `nvec(μ, momentum)` /
+`Elem::Vector` to **every net term** before contracting — exactly the Lorentz structure a distributed T4
+diagram emits, so all validated Dirac/Lorentz machinery is reused verbatim. The `ev.empty()` fast path
+(every non-VecMu combination) skips the net copy ⇒ byte-identical to CP1 there.
+- **Test** (`test_dpoly` case H): one slot carrying all four families {T1 γ^μ, T4-δ p^μ·δ, T4-slash
+  p^μ·γ·q̸, T7 σ^{μν}p̸_ν} sharing μ, collected via `numeric_value_dressed` vs the explicit distributed
+  sum over 5000 random points, **0.00e+00** error. Two surrounding chains of **opposite Dirac parity**
+  make every family nonzero in at least one: EVEN `[γ101,·,γ102]` (outer γ's closed against *distinct*
+  external vectors so σ does not collapse via γ^αγ_α=4·tr(σ)=0) ⇒ **T4-δ, T7** nonzero; ODD `[γ101,·]`
+  ⇒ **T1, T4-slash** nonzero. Wrong-parity families trace to 0 on both sides — collection reproduces that.
+  (This is also the first test to exercise CP1's `SigmaMu` with a **nonzero** trace: case G's σ term was
+  tr(σγ)=0 by parity, so silently trivial.)
+- **Gate:** all 35 non-codegen tests pass (`ctest -LE codegen`); no existing flow perturbed (the fast
+  path is byte-identical, verified by the green `compare_*`/`flow_*` value-grading suites).
+
+Next: CP3 (Wolfram front-end — `diracVertexSumQ`/`vertexNumDecompose`/`ntVertexSlot`/`expandVertexSlot`)
+is the first checkpoint needing Wolfram; the C++ engine now accepts all three vertex structure families.
