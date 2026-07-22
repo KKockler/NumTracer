@@ -18,6 +18,9 @@ DefineFormExecutable["/usr/bin/tform -w16"];
 Get[FileNameJoin[{$repo, "numtracer", "tests", "qcd147_setup.m"}]];
 Get[FileNameJoin[{$repo, "numtracer", "mathematica", "NumTracer.m"}]];
 SetOptions[MakeNTKernel, Sequence @@ $ntShimOpts];
+(* opt IN to vertex collection (default OFF since it OOMs high-P flows): za3_147 is the small-P flow
+   where collecting the full 1/4/7 vertex wins (8.9 s vs 13.3 s) and it exercises the ntDiracSlot path *)
+NumTracer`Private`$ntVertexCollect = True;
 (* the full 1/4/7 vertex basis emits many more (per-branch) numeric entries than struct-1; the
    codegen expression tree exceeds Mathematica's conservative default recursion depth (1024). *)
 $RecursionLimit = 1000000;

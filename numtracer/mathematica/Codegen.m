@@ -53,6 +53,17 @@ ntLog[args___] :=
       Print[args]
    ];
 
+(* WolframKernel resident set (MB) from /proc — the RSS the OOM killer sees, not MemoryInUse[]
+   (allocated). Returns 0 where /proc is absent. *)
+ntWolframRssMB[] :=
+   Quiet @ Check[
+      Module[{s = ReadString["/proc/self/statm"]},
+         If[StringQ[s], ToExpression[StringSplit[s][[2]]] * 4096. / 1048576., 0.]
+      ]
+      ,
+      0.
+   ];
+
 (* a C++ double literal at full precision (exact rationals -> doubles). *)
 
 cppNum[x_] :=
@@ -4126,6 +4137,16 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
                ]
             ]
          ];
+(* Free the per-generation codegen memo caches BEFORE launching the generator subprocess (hygiene:
+   they're needed only to EMIT the source, already on disk, and re-cleared next generation anyway).
+   NOTE (measured 2026-07-22): this is MINOR — the four caches together are only ~50 MB. The real
+   WolframKernel resident tax that co-resides with the generator (~2 GB at 655 diagrams, ~3.7 GB at
+   3350) is the `ntk` ITSELF (the front-end Diagrams/Components analysis, a function argument), which
+   is not freeable here. The effective RAM lever is instead FEWER diagrams — propagator collection
+   folds 3350 -> 655 and the Wolfram tax with it. *)
+         If[$NumTracerVerbose, ntLog["[prof] pre-run  MemoryInUse=", Round[MemoryInUse[]/1048576.], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
+         $ctCache = <||>; $odCache = <||>; $dsCache = <||>; $dslCache = <||>;
+         If[$NumTracerVerbose, ntLog["[prof] post-free MemoryInUse=", Round[MemoryInUse[]/1048576.], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
 (* run into a TEMP file, validate (rc==0 AND non-empty), then move into place — so a crashed
    generator (e.g. thread-limited Run[]) never silently truncates the committed header. *)
          Module[{tmp = headerFile <> ".tmp", rc, sz, trun},

@@ -241,9 +241,16 @@ diracNumeratorSumQ[p_Plus] := Module[{terms = List @@ p, opens},
    Dirac vertex sum (k>=1 open legs → ntDiracSlot). Both require a NON-adjoint (quark-line) colour
    sector so colour factors out (sectorBridgeQ False) and the eager sum stays in one Lorentz/Dirac
    sector. The `=!= $Failed` decompose is the exact test in each case. *)
+(* VERTEX collection (k>=1 open-leg ntDiracSlot) is OPT-IN — OFF by default. On a high-combination
+   flow (full-basis ZAAqbq: ~10^6 structure x dressing combinations per net) the codegen expansion
+   materialises the Cartesian product and OOMs the WolframKernel, so such flows MUST distribute (the
+   pre-plan behaviour). The pre-existing PROPAGATOR collection (k=0) is bounded (2 options/propagator)
+   and stays ON unconditionally. Enable the vertex path with NT_VERTEX_COLLECT=1 (or set
+   $ntVertexCollect=True) on the small-P flows where it wins (e.g. za3_147: 8.9 s vs 13.3 s). *)
+$ntVertexCollect = (Environment["NT_VERTEX_COLLECT"] =!= $Failed);
 collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] && dressedStructureSumQ[p] &&
   ((diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
-   (diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed));
+   (TrueQ[$ntVertexCollect] && diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed));
 collectibleDiracSumQ[_] := False;
 distributeQ[p_] := sectorBridgeQ[p] ||
   (dressedStructureSumQ[p] && ! (TrueQ[$ntDressCollect] && collectibleDiracSumQ[p]));
@@ -677,6 +684,31 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
 
 (* ---- NumTrace --------------------------------------------------------------- *)
 
+(* ---- front-end parallelism (subkernels) -------------------------------------------------------
+   analyseDiagram and the checkLabels label-census are PURE per-diagram maps over INDEPENDENT
+   diagrams; on a dense distributed flow (e.g. full-basis ZAAqbq: 3350 diagrams) they are the
+   dominant SERIAL cost (~35 s + ~8 s single-threaded). Run them over subkernels loaded with the
+   package. Order-preserving, so the output is identical to the serial `/@` (validated: Diagrams+Env
+   IDENTICAL). Missing/unlaunchable kernels fall back to serial.
+   OFF BY DEFAULT — opt in with NT_PARALLEL=1. MEASURED marshalling-bound: Wolfram subkernels
+   serialise every diagram AND its analyseDiagram result across processes, costing ~as much as the
+   compute (full-basis ZAAqbq: NumTrace 55 s serial vs 55 s parallel; checkLabels got SLOWER, its
+   census is too cheap to beat the transfer). The real front-end lever is NT_NO_LABEL_CHECK (skip the
+   census, ~14%). Kept opt-in for the case where per-diagram work is heavy enough to beat marshalling. *)
+$ntParallel = (Environment["NT_PARALLEL"] =!= $Failed);
+$ntKernelsReady = False;
+ntEnsureKernels[] := (
+  If[TrueQ[$ntParallel] && ! TrueQ[$ntKernelsReady],
+    Quiet@If[Length[Kernels[]] == 0, LaunchKernels[]];
+    If[Length[Kernels[]] > 0,
+      ParallelEvaluate[Quiet@Needs["NumTracer`"]]; $ntKernelsReady = True,
+      $ntParallel = False]];   (* no kernels -> permanently serial this session *)
+  TrueQ[$ntKernelsReady]);
+(* serial fallback + a size floor (subkernel marshalling is not worth it for few diagrams).
+   CoarsestGrained hands each kernel one contiguous batch, amortising the per-item marshalling. *)
+ntParMap[f_, list_] := If[TrueQ[$ntParallel] && TrueQ[$ntKernelsReady] && Length[list] >= 128,
+  ParallelMap[f, list, Method -> "CoarsestGrained"], f /@ list];
+
 (* Each SU(N) group head carries its own rank N as the first argument (baked in when the
    network is built — Global`Nc for colour, the FromFunKit "FlavourGroup" option for the
    isospin group), so NumTrace itself takes no group option. *)
@@ -751,8 +783,16 @@ NumTrace[net_, OptionsPattern[]] := Module[
      the et engine mis-pairs them into a silently wrong number. Checked per diagram (not on the
      raw net): only after expandBridges is each diagram a flat Times in which "1 = free,
      2 = contracted" is the actual invariant. *)
+  (* parallel front-end: launch/reuse subkernels once and push the one global the maps read
+     ($ntDressCollect; labelCensus reads no globals). No-op when serial. *)
+  If[ntEnsureKernels[],
+    With[{dc = $ntDressCollect}, ParallelEvaluate[NumTracer`Private`$ntDressCollect = dc]]];
   ntLog["[prof] NumTrace checkLabels: ", First@AbsoluteTiming[
-  With[{frees = MapIndexed[checkLabels[#1, First[#2]] &, diagrams]},
+  With[{frees = If[TrueQ[$ntCheckLabels],
+      (* the census (labelCensus) is pure & parallel; the abort/Message validation stays on main *)
+      With[{census = ntParMap[labelCensus, diagrams]},
+        MapThread[checkLabelsC[#2, #1, #3] &, {diagrams, census, Range[Length[diagrams]]}]],
+      ConstantArray[{}, Length[diagrams]]]},
     ntLog["[labels] ", Length[diagrams], " diagram(s) validated; free-index set(s) = ",
       DeleteDuplicates[Sort /@ frees]]];], " s"];
 
@@ -765,7 +805,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
   {env, nenv} = buildEnv[allMom, invMom, invSMom];
 
   ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ",
-    First@AbsoluteTiming[diags = analyseDiagram /@ diagrams], " s"];
+    First@AbsoluteTiming[diags = ntParMap[analyseDiagram, diagrams]], " s"];
 
   NTKernel[<|
     "Diagrams"  -> diags,
@@ -907,3 +947,17 @@ checkLabels[diagram_, idx_] := If[! TrueQ[$ntCheckLabels], {},
          {b, bad}];
       Abort[]];
     c[[1]]]];
+
+(* Validate a PRECOMPUTED census (so the expensive labelCensus can run over subkernels while the
+   abort/Message — which must run on the MAIN kernel to surface — stays here). Same diagnostics as
+   checkLabels; `diagram` is passed only for the Short[...] in the message. *)
+checkLabelsC[c_, diagram_, idx_] := (
+  With[{bad = c[[3]]},
+    If[bad =!= {},
+      Do[Switch[b[[2]],
+           "plus-free-mismatch", Message[NumTrace::plusfree, idx, b[[1]], Short[diagram, 8]],
+           "private-clash",      Message[NumTrace::privclash, idx, b[[1]], Short[diagram, 8]],
+           _,                    Message[NumTrace::badlabel, idx, b[[1]], b[[2]], Short[diagram, 8]]],
+         {b, bad}];
+      Abort[]]];
+  c[[1]]);
