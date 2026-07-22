@@ -441,35 +441,64 @@ namespace numtracer::numeric
       nb.t.push_back({kv.first, Cx{-kv.second.re, -kv.second.im}});
     return a + nb;
   }
+  /// Above this many product terms (`|a|·|b|`), `operator*` materialises its scratch in CHUNKS of the
+  /// outer operand and folds the chunks, so peak scratch is bounded by ~`kMulMaxScratch` instead of the
+  /// full `|a|·|b|`. This is the single-contraction RAM lever: `operator*` builds every `n·m` product
+  /// monomial before `from_scratch` collapses like terms, so on a "collapsing" multiply (result ≪
+  /// scratch) the transient peak — not the result — is what spikes RAM. Below the threshold the exact
+  /// byte-for-byte path runs, so the mean-few-term hot path and every small/test flow are untouched.
+  /// Blocking only REASSOCIATES the like-term sums across chunk boundaries (≤ 1 ulp, exactly as the
+  /// already-shipped phase-B tree fold does); the monomial SET is identical.
+  inline constexpr std::size_t kMulMaxScratch = std::size_t(1) << 20;
+
   inline MPoly operator*(const MPoly &a, const MPoly &b)
   {
     const int ns = a.nsym ? a.nsym : b.nsym;
     if (a.t.empty() || b.t.empty()) return MPoly(ns);
     assert(a.nsym == b.nsym); // both carry terms ⇒ symbol spaces must match; see operator+ (debug-only)
-    MPolyScratch s;
-    s.reserve(a.t.size() * b.t.size());
-    // Build each product monomial IN PLACE. The old code kept a scratch `e` and copied it into the
-    // Mono, which (with a heap-backed exponent vector) was an allocation per product term.
-    for (const auto &[ma, ca] : a.t)
-      for (const auto &[mb, cb] : b.t) {
-        auto &slot = s.emplace_back(Mono{}, ca * cb);
-        Mono &m = slot.first;
-        // Packed exponents are fixed-width (no resize); set each symbol's summed exponent directly.
-        for (int k = 0; k < ns; ++k)
-          m.e[k] = ma.e[k] + mb.e[k];
-        // Only ask for capacity when the merge would actually overflow the inline buffer. Most
-        // monomials carry NO atoms at all, and an unconditional reserve() here cost ~7% of the run.
-        const std::size_t nat = ma.atoms.size() + mb.atoms.size();
-        if (nat > kMonoAtomInline) m.atoms.reserve(nat);
-        std::size_t i = 0, j = 0; // merge the two sorted atom multisets
-        while (i < ma.atoms.size() && j < mb.atoms.size())
-          m.atoms.push_back(ma.atoms[i] <= mb.atoms[j] ? ma.atoms[i++] : mb.atoms[j++]);
-        while (i < ma.atoms.size())
-          m.atoms.push_back(ma.atoms[i++]);
-        while (j < mb.atoms.size())
-          m.atoms.push_back(mb.atoms[j++]);
+    const std::size_t na = a.t.size(), nb = b.t.size();
+
+    // Emit the product monomial ma·mb (coefficient ca·cb) into scratch `s`. Build IN PLACE (the old
+    // code kept a scratch `e` and copied it in, an allocation per product term).
+    auto emit = [ns](MPolyScratch &s, const Mono &ma, Cx ca, const Mono &mb, Cx cb) {
+      auto &slot = s.emplace_back(Mono{}, ca * cb);
+      Mono &m = slot.first;
+      for (int k = 0; k < ns; ++k) m.e[k] = ma.e[k] + mb.e[k]; // packed exponents: set each directly
+      // Only ask for capacity when the merge would overflow the inline buffer — most monomials carry
+      // NO atoms, and an unconditional reserve() here cost ~7% of the run.
+      const std::size_t nat = ma.atoms.size() + mb.atoms.size();
+      if (nat > kMonoAtomInline) m.atoms.reserve(nat);
+      std::size_t i = 0, j = 0; // merge the two sorted atom multisets
+      while (i < ma.atoms.size() && j < mb.atoms.size())
+        m.atoms.push_back(ma.atoms[i] <= mb.atoms[j] ? ma.atoms[i++] : mb.atoms[j++]);
+      while (i < ma.atoms.size()) m.atoms.push_back(ma.atoms[i++]);
+      while (j < mb.atoms.size()) m.atoms.push_back(mb.atoms[j++]);
+    };
+
+    if (na * nb <= kMulMaxScratch) { // exact byte-for-byte path — the common case
+      MPolyScratch s;
+      s.reserve(na * nb);
+      for (const auto &[ma, ca] : a.t)
+        for (const auto &[mb, cb] : b.t) emit(s, ma, ca, mb, cb);
+      return MPoly::from_scratch(ns, std::move(s));
+    }
+
+    // Blocked: chunk the outer operand `a` so peak scratch is ~chunk·nb ≤ kMulMaxScratch, and fold the
+    // per-chunk collapsed polynomials with operator+ (a linear merge that combines like terms again).
+    const std::size_t chunk = std::max<std::size_t>(1, kMulMaxScratch / nb);
+    MPoly acc(ns);
+    for (std::size_t i0 = 0; i0 < na; i0 += chunk) {
+      const std::size_t i1 = std::min(na, i0 + chunk);
+      MPolyScratch s;
+      s.reserve((i1 - i0) * nb);
+      for (std::size_t i = i0; i < i1; ++i) {
+        const auto &[ma, ca] = a.t[i];
+        for (const auto &[mb, cb] : b.t) emit(s, ma, ca, mb, cb);
       }
-    return MPoly::from_scratch(ns, std::move(s));
+      MPoly part = MPoly::from_scratch(ns, std::move(s));
+      acc = acc.t.empty() ? std::move(part) : acc + part;
+    }
+    return acc;
   }
 
   /// @brief Cancel each numerator monomial against any atom whose denominator is a single monomial.

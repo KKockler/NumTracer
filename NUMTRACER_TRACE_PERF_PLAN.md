@@ -197,6 +197,27 @@ flow the user provides), exactly like the old heap-expanding small_vector — NO
 Optional follow-on: `kMonoAtomInline` 8→4 with the narrowed allocator takes `MonoAtoms` 32→24 and the
 term 72→64 (the last of D1's −56%), for atom-light flows.
 
+## Stage 3 — MEASURED RESULTS (blocked operator*, landed 2026-07-22)
+
+`MPoly::operator*` now gates on the product size `|a|·|b|`: at or below `kMulMaxScratch` (2²⁰ terms) the
+exact byte-for-byte path runs (the mean-few-term hot path and every small/test flow are untouched);
+above it, the outer operand is chunked so peak scratch is bounded at ~`kMulMaxScratch·sizeof(term)`
+(~75 MB) regardless of `|a|·|b|`, with the per-chunk collapsed polynomials folded by `operator+`.
+
+- **RAM cap (measured, `scratchpad/l0_blocked.cpp`, `/usr/bin/time -v`):** peak RSS stays **flat ~80 MB**
+  as `|a|·|b|` grows 2.25 M → 6.25 M → 12.25 M (unblocked, the scratch alone at 12.25 M is ~880 MB).
+  For the real >8 GB single contraction (~63 M products → ~4.5 GB scratch at the Stage-2 term size),
+  the transient drops to the ~75 MB chunk cap — the "irreducible" spike, capped.
+- **Correctness:** the blocked product equals `eval(a)·eval(b)` at random points to **≤ 1.3e-14** (the
+  monomial set is identical; only like-term sums reassociate across chunk boundaries, ≤ 1 ulp, exactly
+  as the phase-B tree fold). All 35 non-codegen tests pass.
+- **Byte-identity:** the threshold protects the common case, so no small/test flow crosses it and the
+  codegen fixtures stay byte-identical (verified by regen vs committed HEAD). Blocking affects only the
+  genuinely huge production multiplies (the dense 4-point quark flows), which are not in the fixtures.
+
+Combined with Stage 2's smaller term, Stage 1+2+3 take the single-contraction transient from >8 GB to
+sub-GB, which — with the north star — is what lets ZAAqbq run at a high `nB` instead of `nB=1..2`.
+
 ## Expected cumulative outcome
 Stage 1 alone: phase B ~−20–30%, term −12.5%, likely under the 10 GB cap. + Stage 2: term −44%, the
 single contraction ~4.5 GB, phase A ~−7–9%. + Stage 3: pathological multiply peak sub-GB. + Stage 4:
