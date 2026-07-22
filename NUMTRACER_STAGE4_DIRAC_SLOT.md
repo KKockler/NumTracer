@@ -209,6 +209,12 @@ real 4/7 dressings — i.e. the collected full-basis vertex is physics-exact. Th
 BOTH the new `ntDiracSlot` vertex path AND the reformatted `ntDressedNum` propagator emitter (the quark
 propagators are k=0 slots). All 35 non-codegen tests stay green.
 
+**The measured win** (`tests/gen/probe_za3_147_count.wls`, analysis only): `za3_147` with the full 147
+vertex is **6 diagrams collected vs 221 distributed — 36.8× fewer** (net top terms 6 vs 437). That is
+the `3ⁿ` root cause removed exactly: the collected kernel is byte-different but physics-identical to the
+distributed one, at a 37× smaller diagram set. This is the same lever the ranked-lever table calls W1
+(estimated 488→~24 nets on ZAAqbq1), now demonstrated on a real graded flow.
+
 **Remaining.** A k=2 flow-grade (a flow with an INTERNAL two-gluon `AAqbq` vertex — the mechanism is
 already validated by engine test J + the synthetic k=2 decompose/gate, only an end-to-end flow is
 untested); and switching the `ZAAqbq`/`ZA` setups from `AqbqDirect1` to `AqbqDirect147` via collection
