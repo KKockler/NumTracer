@@ -192,6 +192,26 @@ builderInv[ntElectricProj[q_, mu_, nu_], ids_, env_, mask_, nc_] :=
 builderInv[ntEpsilon[a_, b_, c_, d_], ids_, env_, mask_, nc_] :=
    "leps<" <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ", " <> ToString[ids[c]] <> ", " <> ToString[ids[d]] <> ">()";
 
+(* A Lorentz factor as a single `network::Elem{...}` literal (for a collected Dirac slot's per-option
+   `netFacs`, Stage 4). Mirrors builderInv's id/momentum/atom resolution but emits the Elem aggregate the
+   numeric backend appends to the net, rather than a NetVal builder. Field order (network.hpp):
+   {kind, a, b, vid, inv, vlc, c, d, invS}. A projector's momentum rides `vid = env Base` (elem_to_nelem
+   reconstructs it as {{1.0, vid}}); a vector's rides `vlc`. *)
+builderInvElem[ntMetric[mu_, nu_], ids_, env_] :=
+   "Elem{Elem::Metric, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", -1, -1, {}}";
+builderInvElem[ntVec[q_, mu_], ids_, env_] :=
+   "Elem{Elem::Vector, " <> ToString[ids[mu]] <> ", -1, -1, -1, {{1.0, " <> ToString[env[q]["Base"]] <> "}}}";
+builderInvElem[ntTransProj[q_, mu_, nu_], ids_, env_] :=
+   "Elem{Elem::ProjT, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[env[q]["Inv"]] <> ", {}}";
+builderInvElem[ntLongProj[q_, mu_, nu_], ids_, env_] :=
+   "Elem{Elem::ProjL, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[env[q]["Inv"]] <> ", {}}";
+builderInvElem[ntMagneticProj[q_, mu_, nu_], ids_, env_] :=
+   "Elem{Elem::ProjM, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", -1, {}, 0, 0, " <> ToString[env[q]["InvS"]] <> "}";
+builderInvElem[ntElectricProj[q_, mu_, nu_], ids_, env_] :=
+   "Elem{Elem::ProjE, " <> ToString[ids[mu]] <> ", " <> ToString[ids[nu]] <> ", " <> ToString[env[q]["Base"]] <> ", " <> ToString[env[q]["Inv"]] <> ", {}, 0, 0, " <> ToString[env[q]["InvS"]] <> "}";
+builderInvElem[ntEpsilon[a_, b_, c_, d_], ids_, env_] :=
+   "Elem{Elem::Epsilon, " <> ToString[ids[a]] <> ", " <> ToString[ids[b]] <> ", -1, -1, {}, " <> ToString[ids[c]] <> ", " <> ToString[ids[d]] <> "}";
+
 scaleStrInv[str_, 1] :=
    str;
 
@@ -877,7 +897,7 @@ splitColourGroupsInv[factors0_, ids_, env_, mask_, nc_] :=
                   {
                      colProd
                      ,
-                     If[!FreeQ[rest, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum],
+                     If[!FreeQ[rest, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
                         {compileDirac[rest, ids, env, mask, nc]}
                         ,(* gamma chain: {core, scal, projectorRest} *)
                         ({#[[1]], #[[2]], ""}&) /@ chunkLorInv[Times @@ rest, ids, env, mask, nc]
@@ -1134,6 +1154,10 @@ diracIn[ntDressedNum[_, a_, _]] :=
    a; diracOut[ntDressedNum[_, _, b_]] :=
    b;
 
+diracIn[ntDiracSlot[_, a_, _, _]] :=
+   a; diracOut[ntDiracSlot[_, _, b_, _]] :=
+   b;
+
 (* walk the closed spinor loop, returning trace-ordered tokens: a γ's Lorentz label, or the marker
    $g5 for a γ5 (a spinor-δ just connects indices and contributes no token). *)
 
@@ -1269,7 +1293,7 @@ orderDiracFacs[facs_] :=
          !MemberQ[seen, cur]
          ,
          AppendTo[seen, cur];
-         If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntSigma | _ntDressedNum],
+         If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntSigma | _ntDressedNum | _ntDiracSlot],
             AppendTo[out, facs[[cur]]]
          ];
          labels = spinorLabelsHead[facs[[cur]]];
@@ -1288,7 +1312,7 @@ orderDiracFacs[facs_] :=
    (a fragmented / improperly-closed loop), the emitted trace would silently drop γ structure (the
    historical hSigL meson-sector collapse: a single surviving γ5 → tr(γ5)=0). Abort rather than emit a
    wrong kernel. The δ-only "connector" factors carry no token, so they are excluded from the count. *)
-      nTok = Count[facs, _ntGamma | _ntGamma5 | _ntSigma | _ntDressedNum];
+      nTok = Count[facs, _ntGamma | _ntGamma5 | _ntSigma | _ntDressedNum | _ntDiracSlot];
       If[Length[out] =!= nTok,
          Print["[NumTracer] ERROR: orderDiracFacs walk consumed ", Length[out], " of ", nTok, " token-bearing Dirac factors — a spinor loop did not close (would silently drop γ ", "structure → collapsed trace). Loop factors:\n  ", facs];
          Abort[]
@@ -1396,17 +1420,87 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] :=
                         ,
                         ""
                      ];
-                  "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <> StringRiffle[ToString /@ dr, ", "] <> "}, " <>
-                     If[opt[[2, 1]] === "slash",
-                        "true"
-                        ,
-                        "false"
-                     ] <> ", {" <> vlcStr <> "}}"
+                  (* new DSlotOpt form {coeff, {dress}, {toks}, {netFacs}}: k=0 propagator numerator has NO
+                     open leg (netFacs empty); ident → empty toks, slash → one dslash token. *)
+                  "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <> StringRiffle[ToString /@ dr, ", "] <> "}, {" <>
+                     If[opt[[2, 1]] === "slash", "dslash({" <> vlcStr <> "})", ""] <> "}, {}}"
                ]
             ] /@ opts
          ,
          ", "
       ] <> "}";
+
+(* ---- general collected Dirac slot → C++ DSlot literal (Stage 4, any open-leg count) ------------
+   An ntDiracSlot option keeps its WHOLE structure (Dirac chain × Lorentz-net factors); here we split
+   each option into DSlotOpt{coeff, {dress}, {toks}, {netFacs}} — the Dirac chain as a token list
+   (dgamma/dslash/dcomm/dg5, open legs = ids of the free Lorentz tokens) and the Lorentz factors as
+   network::Elem literals (the gluon propagator/metric that closes the open leg). Every label already
+   has an id and every momentum an env slot (allLabels/momentumOf recurse into the slot via
+   Cases[Infinity]); internal legs (the γ↔projector bridge) keep their own distinct ids, closed within
+   the option, so no fresh-id allocation is needed. *)
+
+(* Order one OPEN spinor chain din→dout, returning the token-bearing factors (γ/γ5/σ) in chain order;
+   δ connectors are followed but carry no token. Walk from the din endpoint (degree 1) along spinor
+   adjacency — like orderDiracFacs but seeded at a KNOWN endpoint (the chain is open, not a cycle). *)
+orderOpenChain[facs_, din_] :=
+   Module[{nodeFacs = <||>, cur, prevLabel = din, out = {}, seen = {}, exitLabel, nexts, start},
+      Do[(nodeFacs[#] = Append[Lookup[nodeFacs, #, {}], i]) & /@ spinorLabelsHead[facs[[i]]], {i, Length[facs]}];
+      start = Lookup[nodeFacs, din, {}];
+      If[start === {}, Return[Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma] &]]]; (* fallback: no din endpoint *)
+      cur = First[start];
+      While[! MemberQ[seen, cur],
+         AppendTo[seen, cur];
+         If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntSigma], AppendTo[out, facs[[cur]]]];
+         exitLabel = First[DeleteCases[spinorLabelsHead[facs[[cur]]], prevLabel], Missing[]];
+         If[MissingQ[exitLabel], Break[]];
+         nexts = Select[DeleteCases[Lookup[nodeFacs, exitLabel, {}], cur], ! MemberQ[seen, #] &];
+         If[nexts === {}, Break[]];
+         prevLabel = exitLabel; cur = First[nexts]];
+      out];
+
+$dslCache = <||>;
+diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, mask_, nc_] :=
+   With[{h = Hash[{gf, ids, env}]},
+      Lookup[$dslCache, h, $dslCache[h] = diracSlotStrBody[gf, ids, env, mask, nc]]];
+
+diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, mask_, nc_] :=
+   "DSlot{" <>
+      StringRiffle[
+         Function[opt,
+            Module[{num, dr, facs, vecOf, gammaLegs, diracFacs, lorFacs, ordered, toks, netFacs, legStr, sigStr},
+               {num, dr} = drDecompose[$ntDressResolve[opt[[1]]]];
+               facs = If[Head[opt[[2]]] === Times, List @@ opt[[2]], {opt[[2]]}];
+               (* μ -> slash momentum q (an ntVec sharing a γ's Lorentz leg) *)
+               vecOf = Association[Reverse[Cases[facs, ntVec[q_, m_] :> (m -> q)]]];
+               gammaLegs = Cases[facs, ntGamma[gm_, _, _] :> gm];
+               diracFacs = Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &];
+               (* Lorentz-net factors = non-Dirac tensors that are NOT a slash-vec (a slash-vec's μ is a γ leg) *)
+               lorFacs = Select[facs, (tensorQ[#] && ! MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &&
+                                       ! MatchQ[#, ntVec[_, m_ /; MemberQ[gammaLegs, m]]]) &];
+               (* an ntSigma leg → C++ arg (free open leg id, or a slashed-leg vlc) *)
+               legStr[{"slash", pairs_List}] :=
+                  "{" <> StringRiffle[("{" <> cppNum[#[[1]]] <> "," <> ToString[env[#[[2]]]["Base"]] <> "}") & /@ pairs, ", "] <> "}";
+               legStr[{"free", mu_}] := ToString[ids[mu]];
+               sigStr[legA_, legB_] := Module[{ta = legA[[1]], tb = legB[[1]], sa = legStr[legA], sb = legStr[legB]},
+                  Which[ta === "free" && tb === "free", "dcomm(" <> sa <> ", " <> sb <> ")",
+                        ta === "slash" && tb === "slash", "dcomm_ss(" <> sa <> ", " <> sb <> ")",
+                        ta === "free" && tb === "slash", "dcomm_fs(" <> sa <> ", " <> sb <> ")",
+                        True, "dcomm_sf(" <> sa <> ", " <> sb <> ")"]];
+               ordered = orderOpenChain[diracFacs, din];
+               toks = Function[gf2,
+                  Which[
+                     MatchQ[gf2, _ntGamma5], "dg5()",
+                     MatchQ[gf2, _ntSigma], sigStr[gf2[[1]], gf2[[2]]],
+                     True, With[{mu = First[gf2]},   (* ntGamma: slash if its leg is an ntVec momentum, else a free open leg *)
+                        If[KeyExistsQ[vecOf, mu],
+                           "dslash({{1.0," <> ToString[env[vecOf[mu]]["Base"]] <> "}})",
+                           "dgamma(" <> ToString[ids[mu]] <> ")"]]]] /@ ordered;
+               netFacs = builderInvElem[#, ids, env] & /@ lorFacs;
+               "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <>
+                  StringRiffle[ToString /@ dr, ", "] <> "}, {" <> StringRiffle[toks, ", "] <> "}, {" <>
+                  StringRiffle[netFacs, ", "] <> "}}"
+            ]] /@ opts,
+         ", "] <> "}";
 
 (* Turn a component's factor list into the C++ Dirac-chain token(s) + its Lorentz "rest".
    Algorithm:
@@ -1428,12 +1522,12 @@ compileDirac[factors_, ids_, env_, mask_, nc_] :=
    whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
    building the Association so a duplicate μ keeps the FIRST match, matching the old `First[...]`. *)
       vecOf = Association[Reverse[Cases[factors, ntVec[q_, m_] :> (m -> q)]]];
-      diracFacs = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum]&];
+      diracFacs = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&];
       If[diracFacs === {},
          Return[Append[compileTInv[Times @@ factors, ids, env, mask, nc], ""]]
       ];
       loops = orderDiracLoops[diracFacs];(* one ordered token list per independent spinor loop *)
-      dressed = !FreeQ[diracFacs, _ntDressedNum];
+      dressed = !FreeQ[diracFacs, _ntDressedNum | _ntDiracSlot];
 (* an ntSigma leg → its C++ arg string. A slashed leg is a list of {coeff, q} pairs (q a literal
    ntVec momentum, hence an env key) ⇒ a vlc `{{c1,b1},{c2,b2},…}` of (coeff, env Base) pairs (a
    single atomic momentum reduces to `{{1.,Base}}`); a free leg is its open Lorentz id. Guard loudly
@@ -1480,6 +1574,15 @@ compileDirac[factors_, ids_, env_, mask_, nc_] :=
                MatchQ[gf, _ntDressedNum],
                   (
                      AppendTo[slots, dressedSlotStr[gf, env]];
+                     With[{k = slotN},
+                        slotN++;
+                        "dtslot(" <> ToString[k] <> ")"
+                     ]
+                  )
+               ,
+               MatchQ[gf, _ntDiracSlot],
+                  (
+                     AppendTo[slots, diracSlotStr[gf, ids, env, mask, nc]];
                      With[{k = slotN},
                         slotN++;
                         "dtslot(" <> ToString[k] <> ")"
@@ -1563,7 +1666,7 @@ compileDirac[factors_, ids_, env_, mask_, nc_] :=
    sector, ~1% of FORM). Detect it and abort with the offending factor rather than emit a wrong kernel.
    A correctly-handled diagram has all Dirac structure in `diracFacs` (bare heads or ntDressedNum), so
    `restFacs` is Dirac-free; this never trips on the validated flows. *)
-      With[{leak = Select[restFacs, !FreeQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum]&]},
+      With[{leak = Select[restFacs, !FreeQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&]},
          If[leak =!= {},
             Print["[NumTracer] ERROR: un-handled Dirac structure in a non-Dirac factor — a dressed ", "propagator-numerator sum was NEITHER distributed NOR collected into ntDressedNum, so the ", "numeric backend would silently drop/leak its gamma structure (collapsed trace or ", "untranslated C++). This is a front-end collection gap (collectibleDiracSumQ rejected a sum ", "that distributeQ also skipped). Offending factor(s):\n  ", leak];
             Abort[]
@@ -3419,7 +3522,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
        fold into ONE product net (disjoint ids make the C++ contract_factors multiply them). *)
                                        (
                                           nNonConst++;
-                                          If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntDeltaDirac | _ntDressedNum],
+                                          If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
                                              (
                                                 nNCDirCol++;
                                                 AppendTo[diracComps, splitColourGroupsInv[comp["Factors"], diag["Ids"], env, mask, nc]]

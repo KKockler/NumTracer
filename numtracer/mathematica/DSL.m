@@ -237,8 +237,13 @@ diracNumeratorSumQ[p_Plus] := Module[{terms = List @@ p, opens},
    open spinor indices, Dirac structure); dressedNumDecompose =!= $Failed is the exact test — a sum
    with an open Lorentz leg (a multi-structure quark-gluon / σ vertex) fails it and stays on the
    distribution path (so it never survives un-distributed AND un-rewritten → no eagernn abort). *)
-collectibleDiracSumQ[p_Plus] := dressedStructureSumQ[p] && ! sectorBridgeQ[p] &&
-  diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed;
+(* Collectible if it is EITHER a propagator numerator (k=0, no open leg → ntDressedNum) OR a general
+   Dirac vertex sum (k>=1 open legs → ntDiracSlot). Both require a NON-adjoint (quark-line) colour
+   sector so colour factors out (sectorBridgeQ False) and the eager sum stays in one Lorentz/Dirac
+   sector. The `=!= $Failed` decompose is the exact test in each case. *)
+collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] && dressedStructureSumQ[p] &&
+  ((diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
+   (diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed));
 collectibleDiracSumQ[_] := False;
 distributeQ[p_] := sectorBridgeQ[p] ||
   (dressedStructureSumQ[p] && ! (TrueQ[$ntDressCollect] && collectibleDiracSumQ[p]));
@@ -332,7 +337,8 @@ dressedNumDecompose[p_Plus] := Module[
    factor that decomposes to $Failed is left as-is. Only active under $ntDressCollect. *)
 rewriteDressedNums[factors_List] := If[! TrueQ[$ntDressCollect], factors,
   Flatten[Function[f, If[Head[f] === Plus && collectibleDiracSumQ[f],
-     With[{r = dressedNumDecompose[f]},
+     (* k=0 propagator numerator → ntDressedNum; else k>=1 vertex → ntDiracSlot *)
+     With[{r = With[{r0 = dressedNumDecompose[f]}, If[r0 =!= $Failed, r0, diracSlotDecompose[f]]]},
        If[r === $Failed, {f}, If[Head[r] === Times, List @@ r, {r}]]], {f}]] /@ factors]];
 
 (* Inverse of the ntDressedNum rewrite: expand a collected numerator back into its distributed Dirac
@@ -377,10 +383,19 @@ diracSlotSumQ[_] := False;
    term's Dirac + Lorentz-net factors (colour and the common scalar factored out). $Failed if the colour
    factor is not common across terms (then the sum is left to distribute). *)
 diracSlotDecompose[p_Plus] := Module[
-  {terms = List @@ Expand[p], legs, dinout, rows, cols, common, scals, commonScal, opts},
+  {terms = List @@ Expand[p], legs, opens, din, dout, io, ins, outs, rows, cols, common, scals, commonScal, opts},
   If[! diracSlotSumQ[p], Return[$Failed]];
   legs   = Sort @ openLorentzOf[First[terms]];
-  dinout = Sort @ openSpinorOf[First[terms]];   (* order arbitrary — the structure carries the real din/dout *)
+  opens  = openSpinorOf[First[terms]];
+  (* ORIENTED din/dout: the chain runs din→dout. Each Dirac head is an (in,out) spinor edge; the open
+     in-leg is the open spinor label that is some head's `in` but no head's `out` (dout is the reverse).
+     Orientation matters — the option's tokens are spliced in chain order, so a reversed din/dout would
+     emit the trace backwards. *)
+  io = Cases[If[Head[First[terms]] === Times, List @@ First[terms], {First[terms]}],
+        ntGamma[_, a_, b_] | ntGamma5[a_, b_] | ntDeltaDirac[a_, b_] | ntSigma[_, _, a_, b_] :> {a, b}];
+  ins = io[[All, 1]]; outs = io[[All, 2]];
+  din  = SelectFirst[opens, MemberQ[ins, #] && ! MemberQ[outs, #] &, First[opens]];
+  dout = First[DeleteCases[opens, din], Last[opens]];
   (* per term -> {scalar, sorted colour factors, sorted structure (Dirac + Lorentz-net, no colour/scalar)} *)
   rows = Function[t, Module[{facs = If[Head[t] === Times, List @@ t, {t}], scal, col, struct},
      scal   = Times @@ Select[facs, scalarQ];
@@ -396,7 +411,7 @@ diracSlotDecompose[p_Plus] := Module[
   commonScal = commonFactorMultiset[scals];
   opts = MapThread[Function[{r, sf},
      {Times @@ Fold[DeleteCases[#1, #2, {1}, 1] &, sf, commonScal], Times @@ r[[3]]}], {rows, scals}];
-  (Times @@ common) * (Times @@ commonScal) * ntDiracSlot[opts, dinout[[1]], dinout[[2]], legs]];
+  (Times @@ common) * (Times @@ commonScal) * ntDiracSlot[opts, din, dout, legs]];
 diracSlotDecompose[_] := $Failed;
 
 (* Inverse: expand a collected slot back into its distributed Dirac structure sum (for redistDiagram's
@@ -410,6 +425,7 @@ expandDiracSlot[ntDiracSlot[opts_, _, _, _]] := Plus @@ ((#[[1]] * #[[2]]) & /@ 
 redistDiagram[diag_] := Block[{$ntDressCollect = False},
   Module[{net = diag["Coeff"] * Times @@ Flatten[(#["Factors"] &) /@ diag["Components"]]},
     net = net /. nd_ntDressedNum :> expandDressedNum[nd];
+    net = net /. ds_ntDiracSlot :> expandDiracSlot[ds];
     With[{ex = expandBridges[net]},
       analyseDiagram /@ Select[If[Head[ex] === Plus, List @@ ex, {ex}],
         ! vanishingOddTraceQ[#] &]]]];
@@ -803,7 +819,7 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
        belongs in this list — it is not merely a momentum test. *)
     "Components" -> (<|"Factors" -> orderFactors[#],
                        "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
-                                              _ntElectricProj | _ntMagneticProj | _ntDressedNum |
+                                              _ntElectricProj | _ntMagneticProj | _ntDressedNum | _ntDiracSlot |
                                               _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac |
                                               _ntMetric | _ntEpsilon]|> &
                      /@ connectedComponents[tensorF])

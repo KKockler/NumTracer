@@ -51,4 +51,18 @@ v2 = W1 * common * ng[mu, d1, d2] * ng[nu, d2, d3] +
      W3 * common * ng[mu, d1, d2] * ng[rho, d2, d3] * nv[q, rho] * nv[qq, nu];
 check["k=2 two-gluon vertex (Dirac / metric / mixed legs)", v2];
 
+(* ---- R3: the collection gate keeps the vertex eager and rewrites it to ntDiracSlot ---- *)
+collQ = NumTracer`Private`collectibleDiracSumQ;
+rew   = NumTracer`Private`rewriteDressedNums;
+gate[name_, sum_] := Module[{c, r},
+  c = TrueQ[collQ[sum]];
+  Block[{NumTracer`Private`$ntDressCollect = True}, r = rew[{sum}]];
+  Module[{hasSlot = ! FreeQ[r, nDS]},
+    Print["  ", name, ": collectibleDiracSumQ=", c, "  rewrite→ntDiracSlot=", hasSlot,
+          "  ", If[c && hasSlot, "ok", "FAIL"]];
+    If[! (c && hasSlot), fails++]]];
+Print["\n== R3: collection gate (collectible + rewrite to ntDiracSlot) =="];
+gate["k=1 vertex", v1];
+gate["k=2 vertex", v2];
+
 Print["\n", If[fails == 0, "ALL ROUND-TRIP TESTS PASSED", ToString[fails] <> " FAILED"]];

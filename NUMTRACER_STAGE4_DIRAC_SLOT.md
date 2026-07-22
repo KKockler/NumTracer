@@ -183,10 +183,37 @@ common projector factors out cleanly. Validated by round-trip (`expand@decompose
   `{v_i}`, 6/14/9 options each (`Expand` distributes the T7 commutator into monomial options; each slot
   is ONE collected trace vs 3ⁿ diagrams). `tests/gen/probe_vertex_sum.wls`.
 
-Existing flows are untouched (the new head appears in no current expression; the collection gate is not
-yet wired — that is R3). **Next: R3** (route `collectibleDiracSumQ`/`distributeQ`/`rewriteDressedNums`
-through `ntDiracSlot`, regen + grade), then **R4** (codegen token: split each option into `toks`/`netFacs`
-and emit `DSlotOpt`), then **R5** (full-basis flow grade + retire the `AqbqDirect1` restriction).
+**R3 — collection gate — LANDED 2026-07-22.** `collectibleDiracSumQ` now also accepts a vertex sum
+(`diracSlotSumQ && diracSlotDecompose =!= $Failed`), so `expandBridges`/`distributeQ` keep it eager and
+`rewriteDressedNums` rewrites it to `ntDiracSlot` (k=0 propagator numerators still take the `ntDressedNum`
+path); `redistDiagram` expands `ntDiracSlot` too. Verified: `collectibleDiracSumQ=True` and
+`rewrite→ntDiracSlot` for the synthetic k=1 and k=2 sums.
+
+**R4 — codegen token, general k — LANDED 2026-07-22.** `compileDirac` treats `ntDiracSlot` like a
+`dtslot`; `diracSlotStrBody` splits each option's whole structure into `DSlotOpt{coeff, {dress}, {toks},
+{netFacs}}` — the Dirac chain ordered via a new `orderOpenChain` (an OPEN din→dout walk) and emitted as
+`dgamma`/`dslash`/`dcomm`/`dg5` tokens, the Lorentz factors emitted as `network::Elem` literals via a new
+`builderInvElem` (projectors carry their env `Base`/`Inv` atom, so the open leg closes exactly as the
+distributed diagram's). Internal legs (the γ↔projector bridge) keep their own ids and momenta because
+`allLabels`/`momentumOf` recurse into the slot via `Cases[Infinity]` — no fresh-id allocation. The
+`ntDressedNum` propagator emitter was migrated to the same `{toks, netFacs}` form (its `netFacs` always
+empty). Two bugs found & fixed en route: emit bare `Elem` (the gen TU has `using namespace
+numtracer::network`, no `network::` alias); and `din/dout` must follow the chain ORIENTATION (a `Sort`
+reversed the token order → wrong trace).
+
+**R5 — full-basis flow grade — LANDED 2026-07-22 (k=1).** Regenerated `za3_147` (the FULL `AqbqDirect147`
+1/4/7 quark-gluon vertex) with collection ON: the vertex now folds to ONE `ntDiracSlot` per leg instead
+of 3ⁿ diagrams. `compare_za3_147_num` grades the collected kernel: **with ZAqbq4=ZAqbq7=0 it reduces to
+the FORM-validated struct-1 kernel at 6.3e-11 rel (pure round-off, threshold 1e-9)**, and differs with the
+real 4/7 dressings — i.e. the collected full-basis vertex is physics-exact. This single regen exercised
+BOTH the new `ntDiracSlot` vertex path AND the reformatted `ntDressedNum` propagator emitter (the quark
+propagators are k=0 slots). All 35 non-codegen tests stay green.
+
+**Remaining.** A k=2 flow-grade (a flow with an INTERNAL two-gluon `AAqbq` vertex — the mechanism is
+already validated by engine test J + the synthetic k=2 decompose/gate, only an end-to-end flow is
+untested); and switching the `ZAAqbq`/`ZA` setups from `AqbqDirect1` to `AqbqDirect147` via collection
+(the north-star RAM/speed payoff), with a performance check that collection keeps the net count near the
+collected scale.
 
 ## Ground-truth evidence (probe `tests/gen/probe_vertex_sum.wls`, captured pre-`expandBridges`)
 
