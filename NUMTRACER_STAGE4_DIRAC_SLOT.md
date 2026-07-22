@@ -280,6 +280,67 @@ DPoly" contraction, plan 4b) so the existing phase-A parallelism covers them. `n
 can't include `trace_fold.hpp` (circular; the net-builder TUs forbid its threads), so this needs a small
 shared parallel primitive or the fold restructured. This is the correct next optimisation.
 
+### (b) — execution-ready implementation plan (the real fix: restore cross-net dedup)
+
+Root cause recap (measured): the collected net's `dress_collect` contracts EVERY structure×dressing
+combination separately, serially per net (za3_147: 26.9 s, one dominant net), whereas the distributed
+path contracts only the DISTINCT traces (5–7× cross-net dedup) over phase A's flat parallel list
+(0.34 s). (b) routes the combinations through that same table so both the dedup and the parallelism
+re-apply. `dress_collect` (the C++ enumerate-and-contract) leaves the hot path entirely.
+
+The single structural change: **a sub-term's scalar must carry a dressing monomial**, so a collected
+combination becomes an ordinary trace (its concrete Dirac chain, deduped) times a `(Cx × ∏dress atoms)`
+scalar, and the net's DPoly is assembled by the fold. Steps, with the exact touch points:
+
+1. **Codegen — enumerate at emit time (`compileDirac` / `splitColourGroupsInv`, `Codegen.m`).** For an
+   `ntDiracSlot` net, expand the Cartesian product of slot options into one **plain** sub-term per
+   combination: `{concreteDiracNet, ln, dressMonoAtoms, Cx}` — the concrete chain is the fixed tokens +
+   the chosen options' `toks`, the net gets the options' `netFacs` appended, and the scalar is the
+   product of the options' `coeff` × dressing-atom ids. Emit `ntDressedCore` no more; these are ordinary
+   `{sdn, sln}` sub-terms that dedup in the trace table exactly like the distributed ones.
+2. **Sub-term scalar carries the dressing monomial (`Codegen.m` sub-term build ~L2148 + the emitted
+   `dsc`).** Today `dscv : vector<vector<Cx>>`. Add a parallel `vector<vector<vector<int>>>` of dress-atom
+   id lists (one per sub-term), or fold the atom ids into the scalar literal. Emitted alongside `dsc`.
+3. **Fold path — MPoly trace → DPoly by a dressing scale (`trace_fold.hpp` / the `scale` lambda in the
+   phase-B emission).** The dressed backend's `T` becomes **`MPoly`** (plain deduped traces), and the
+   `scale(d, MPoly&&)` lambda returns a **DPoly** = `fromMPoly(trace)` scaled by `Cx` and keyed by the
+   sub-term's dress monomial (`out.add(dmono, trace*Cx)`). The accumulator stays `DPoly`; only the trace
+   type and the scale signature change. `fold_net`/`fold_groups_streaming` are already templated on
+   `<P>` for the accumulator — the change is that trace-type ≠ accumulator-type for this path, so add a
+   second template param (trace `TP`, accumulator `P`) or a thin dressed-fold wrapper.
+4. **Retire the C++ enumeration from the hot path.** `numeric_value_dressed_netval` / `dress_collect`
+   stay for the unit tests and as the small-D reference, but the generator no longer calls them.
+5. **Validation.** (i) `test_dpoly`: a new case asserting the assembled DPoly (plain traces × dress
+   monomials) bit-equals `numeric_value_dressed`. (ii) Regen `za3_147`, confirm `[cse]` now reports the
+   deduped distinct-trace count (≈ the distributed scale) and phase B drops to **~0.3–1 s**; grade with
+   `compare_za3_147_num` (must still reduce to struct-1). (iii) Confirm the emitted kernel stays the
+   compact DPoly form (parametric in dressings — the 178 KB win is preserved because the DPoly is still
+   assembled per net, only its contraction is deduped).
+
+Expected: `za3_147` generation **31.6 s → ~4–5 s** (below distributed's 13.3 s), bounded phase-B RAM (W
+live traces), kernel unchanged-small. Serves both the time and the ZAAqbq RAM north star. This is a
+focused contraction-pipeline change (~2 files of real logic + the fold generalisation) that must land as
+one validated unit — do NOT half-apply it (a sub-term scalar half-carrying a dress monomial silently
+drops dressings).
+
+#### SIMPLER realization (codegen-only — the one to build)
+
+The scalar/fold change above is avoidable. Instead of ONE dressed sub-term per net carrying the whole
+multi-option slot (so C++ `dress_collect` enumerates the 3ⁿ combinations serially at contraction time),
+**emit each combination as its OWN dressed sub-term whose slot has a SINGLE option** (the chosen
+combination: its concrete chain in `sdch`, that combination's coeff+dressing in `sdsl`). Then:
+- the sub-term key `(sdn, sln, sdch, sdsl)` dedups combinations **across nets** in the existing trace
+  table (the measured 5–7×) — and within a net the ~37 combinations are distinct anyway;
+- phase A contracts the distinct combinations over its **flat parallel** list (each is now a trivial
+  1-combination `numeric_value_dressed_netval` = one contraction, so no serial 3ⁿ loop anywhere);
+- the net's DPoly is assembled by the **existing** phase-B fold (each combination's trace is a
+  one-dressing-term DPoly, summed) — no scalar-type or fold-type change.
+
+So (b) reduces to a **codegen-only** change: where `compileDirac` emits `ntDressedCore[chain, slots]`
+(one sub-term), instead expand the slot's Cartesian product and emit **N single-option dressed
+sub-terms**. The C++ `dress_collect` stays (it now runs with one option per call — the deduped,
+parallel, on-demand path handles the 3ⁿ). This is the tractable implementation; validate as in step 5.
+
 ### Fix options (superseded by the correction above — kept for the design record)
 1. **Parallelise the sink into thread-local `GlobalEnv`s, then merge** — lower the 4 groups' DPolys
    concurrently, remap+dedup their programs at the end. Up to ~min(nGroups, cores)× on this phase; keeps a
