@@ -59,7 +59,7 @@ ntReportDiFfRG[name_String, flowDir_, lines_List] :=
     unchanged = Select[lines, StringContainsQ[#, "unchanged"]&];
     (* everything that is neither an "unchanged" note nor the UpdateFlows nudge = a file DiFfRG wrote *)
     wrote = Select[lines, !StringContainsQ[#, "unchanged"] && !StringContainsQ[#, "UpdateFlows"]&];
-    ntLog["[diffrg] ", #]& /@ lines;(* raw chatter, verbose only *)
+    ntLog["[DiFfRG] ", #]& /@ lines;(* raw chatter, verbose only *)
     Print["[NumTracer] " <> name <> ": DiFfRG scaffold — " <> ToString[Length[wrote]] <> " written, " <> ToString[Length[unchanged]] <> " unchanged"];
     If[ntCMakeStaleQ[flowDir, name, wrote],
       Print["[NumTracer] " <> name <> ": flows/CMakeLists.txt needs refreshing — run UpdateNTFlows[\"" <> name <> "\"]  (NOT UpdateFlows[], which would drop the NumTracer CMake patch)"]
@@ -263,7 +263,7 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
 (* (1) DiFfRG aggregation — regenerates flows/CMakeLists.txt from its template (wipes any prior patch).
    Chatter captured; step (4) prints the NumTracer-native summary once the patch is back on. *)
-    ntLog["[diffrg] ", #]& /@ Last @ ntCapturePrint[DiFfRG`CodeTools`UpdateFlows[name]];
+    ntLog["[DiFfRG] ", #]& /@ Last @ ntCapturePrint[DiFfRG`CodeTools`UpdateFlows[name]];
     f = FileNameJoin[{flowDir, "CMakeLists.txt"}];
     If[!FileExistsQ[f],
       Message[UpdateNTFlows::nocmake, f];

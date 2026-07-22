@@ -30,9 +30,11 @@
 #include "numtracer/third_party/gch/small_vector.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 #include <map>
@@ -64,8 +66,169 @@ namespace numtracer::numeric
   inline constexpr unsigned kMonoExpInline = 24; ///< covers nsym for the flows in practice
   inline constexpr unsigned kMonoAtomInline = 8;
 
-  using MonoExp = gch::small_vector<MonoExpT, kMonoExpInline>;
-  using MonoAtoms = gch::small_vector<MonoAtomT, kMonoAtomInline>;
+  /// A stateless allocator identical to `std::allocator<T>` but advertising a 32-bit `size_type`. The
+  /// `gch::small_vector` below stores its size and capacity in the allocator's `size_type` (packed to
+  /// the smallest int that fits it — see small_vector.hpp), so this halves BOTH small_vector headers
+  /// from 24 B (ptr + 8-byte size + 8-byte cap) to 16 B, shrinking `Mono` 112→96 B and the stored
+  /// polynomial term `pair<Mono,Cx>` 128→112 B (−12.5%, hence every `poly_bytes` floor). A monomial's
+  /// degree and atom count are single digits by construction, so the 2³² capacity ceiling is never
+  /// approached; only the WIDTH of the bookkeeping changes, never a value — so every emitted kernel is
+  /// bit-identical. Empty (EBO) like `std::allocator`, so it adds no bytes of its own.
+  template <class T> struct NarrowAlloc : std::allocator<T> {
+    using size_type = std::uint32_t;
+    using difference_type = std::int32_t;
+    template <class U> struct rebind { using other = NarrowAlloc<U>; };
+    NarrowAlloc() = default;
+    template <class U> NarrowAlloc(const NarrowAlloc<U> &) noexcept {}
+  };
+
+  /// @brief Packed exponent vector: the per-symbol exponents of a monomial stored as a fixed 128-bit
+  ///        key (`kExpBits` = 5 bits/symbol → degree ≤ 31, up to 24 symbols) instead of the 72-byte
+  ///        `small_vector`. This is the single largest RAM lever (`Mono` 96→40 B, the stored term
+  ///        `pair<Mono,Cx>` → 56 B), and it makes `Mono::operator<`/`==` two 64-bit integer compares
+  ///        instead of an nsym-long element walk.
+  ///
+  /// Packing is **big-endian within each word** (symbol 0 in the high bits, 12 symbols per 64-bit word,
+  /// so no symbol straddles the word boundary). That is deliberate: it makes the array's own ordering
+  /// (`w[0]` then `w[1]`, integer compares) reproduce the OLD element-wise lexicographic order of the
+  /// exponent vector EXACTLY — symbol 0 dominates, then symbol 1, … — for two monomials of equal nsym
+  /// (always the case in one polynomial), with unused high slots zero in both. So sort/merge/lookup
+  /// keep the identical order and the emitted kernel is byte-for-byte unchanged; only the STORAGE of the
+  /// exponents changes, never a value or an ordering.
+  ///
+  /// The common inline range is nsym ≤ 24 with degree ≤ 31 — which covers every flow "in practice"
+  /// (the same 24 the old `small_vector` inlined). It is NOT a hard cap: a monomial with a symbol index
+  /// ≥ 24 OR an exponent > 31 transparently falls back to a heap `std::vector<MonoExpT>` holding the
+  /// full exponent list, so nsym and degree are UNBOUNDED (whatever flow the user gives us), exactly
+  /// like the old heap-expanding `small_vector`. The overflow path never triggers for the practical
+  /// flows, so they keep the fast inline path; only an atypically large flow pays the indirection.
+  /// The inline representation stays 2 words + one pointer = 24 B (Mono → 56 B, term → 72 B), still
+  /// well under the old 128 B, and its integer ordering reproduces the old lexicographic exponent order
+  /// exactly (see below), so the emitted kernel is byte-for-byte unchanged.
+  struct MonoExp {
+    static constexpr unsigned kExpBits = 5;
+    static constexpr unsigned kPerWord = 64u / kExpBits;         ///< 12 symbols per 64-bit word (no straddle)
+    static constexpr int kInlineSyms = 2 * static_cast<int>(kPerWord); ///< 24 symbols inline
+    static constexpr MonoExpT kMaxExp = static_cast<MonoExpT>((1u << kExpBits) - 1u); ///< 31
+
+    std::array<std::uint64_t, 2> w{};        ///< packed inline exponents (big-endian per word)
+    std::vector<MonoExpT> *hp = nullptr;     ///< heap overflow (full list); nullptr ⇒ inline
+
+    static unsigned wordOf(int k) { return static_cast<unsigned>(k) / kPerWord; }
+    /// Big-endian slot: symbol 0 → shift 59 (high bits), symbol 11 → shift 4. Low nibble unused, so the
+    /// integer compare of `w[0]` then `w[1]` is exactly the lexicographic order of symbols 0,1,2,….
+    static unsigned shiftOf(int k) { return 64u - (static_cast<unsigned>(k) % kPerWord + 1u) * kExpBits; }
+    MonoExpT unpackInline(int k) const
+    {
+      return static_cast<MonoExpT>((w[wordOf(k)] >> shiftOf(k)) & static_cast<std::uint64_t>(kMaxExp));
+    }
+    /// Move all inline symbols into a fresh heap list (called when a set() first overflows the inline
+    /// range). After this `hp` is authoritative and holds the 24 inline exponents.
+    void promote()
+    {
+      hp = new std::vector<MonoExpT>();
+      hp->reserve(static_cast<std::size_t>(kInlineSyms));
+      for (int j = 0; j < kInlineSyms; ++j) hp->push_back(unpackInline(j));
+    }
+
+    MonoExp() = default;
+    /// `MonoExp(n, 0)`: the all-zero exponent (stays inline — an all-zero monomial never overflows,
+    /// and a heap peer of length n>24 compares correctly against it since get() returns 0 past 24).
+    MonoExp(int /*n*/, int fill) { assert(fill == 0); (void)fill; }
+    /// Pack from an iterator range of integer exponents (the generated component table hands a vector).
+    template <class It> MonoExp(It b, It e)
+    {
+      int k = 0;
+      for (; b != e; ++b, ++k) set(k, static_cast<MonoExpT>(*b));
+    }
+
+    ~MonoExp() { delete hp; }
+    MonoExp(const MonoExp &o) : w(o.w), hp(o.hp ? new std::vector<MonoExpT>(*o.hp) : nullptr) {}
+    MonoExp(MonoExp &&o) noexcept : w(o.w), hp(o.hp) { o.hp = nullptr; }
+    MonoExp &operator=(const MonoExp &o)
+    {
+      if (this != &o) {
+        std::vector<MonoExpT> *nh = o.hp ? new std::vector<MonoExpT>(*o.hp) : nullptr;
+        delete hp;
+        w = o.w;
+        hp = nh;
+      }
+      return *this;
+    }
+    MonoExp &operator=(MonoExp &&o) noexcept
+    {
+      if (this != &o) {
+        delete hp;
+        w = o.w;
+        hp = o.hp;
+        o.hp = nullptr;
+      }
+      return *this;
+    }
+
+    /// Logical length used by the slow (heap-involved) compares: the heap list's length, or the inline
+    /// ceiling. Symbols past a monomial's own extent read 0, so an over-long bound is harmless.
+    int logicalLen() const { return hp ? static_cast<int>(hp->size()) : kInlineSyms; }
+
+    MonoExpT get(int k) const
+    {
+      if (hp) return k < static_cast<int>(hp->size()) ? (*hp)[static_cast<std::size_t>(k)] : MonoExpT(0);
+      return k < kInlineSyms ? unpackInline(k) : MonoExpT(0);
+    }
+    void set(int k, MonoExpT v)
+    {
+      assert(k >= 0 && v >= 0);
+      if (hp) {
+        if (k >= static_cast<int>(hp->size())) hp->resize(static_cast<std::size_t>(k) + 1, 0);
+        (*hp)[static_cast<std::size_t>(k)] = v;
+        return;
+      }
+      if (k < kInlineSyms && v <= kMaxExp) { // fast inline path
+        const unsigned sh = shiftOf(k);
+        const std::uint64_t mask = static_cast<std::uint64_t>(kMaxExp) << sh;
+        w[wordOf(k)] = (w[wordOf(k)] & ~mask) | ((static_cast<std::uint64_t>(v) & kMaxExp) << sh);
+        return;
+      }
+      // overflow (symbol index ≥ 24 or exponent > 31): promote to the heap list and retry.
+      promote();
+      if (k >= static_cast<int>(hp->size())) hp->resize(static_cast<std::size_t>(k) + 1, 0);
+      (*hp)[static_cast<std::size_t>(k)] = v;
+    }
+
+    /// Mutable element proxy, so existing `e[k] = / += / -=` call sites keep working verbatim.
+    struct Ref {
+      MonoExp *o;
+      int k;
+      operator MonoExpT() const { return o->get(k); }
+      Ref &operator=(MonoExpT v) { o->set(k, v); return *this; }
+      Ref &operator+=(MonoExpT v) { o->set(k, static_cast<MonoExpT>(o->get(k) + v)); return *this; }
+      Ref &operator-=(MonoExpT v) { o->set(k, static_cast<MonoExpT>(o->get(k) - v)); return *this; }
+    };
+    MonoExpT operator[](int k) const { return get(k); }
+    Ref operator[](int k) { return Ref{this, k}; }
+
+    bool operator<(const MonoExp &o) const
+    {
+      if (!hp && !o.hp) return w < o.w; // fast path: both inline (symbols ≥24 are 0 in both)
+      const int n = std::max(logicalLen(), o.logicalLen());
+      for (int k = 0; k < n; ++k) {
+        const MonoExpT a = get(k), b = o.get(k);
+        if (a != b) return a < b;
+      }
+      return false;
+    }
+    bool operator==(const MonoExp &o) const
+    {
+      if (!hp && !o.hp) return w == o.w;
+      const int n = std::max(logicalLen(), o.logicalLen());
+      for (int k = 0; k < n; ++k)
+        if (get(k) != o.get(k)) return false;
+      return true;
+    }
+    bool operator!=(const MonoExp &o) const { return !(*this == o); }
+  };
+
+  using MonoAtoms = gch::small_vector<MonoAtomT, kMonoAtomInline, NarrowAlloc<MonoAtomT>>;
 
   struct Mono;
   /// Scratch list of (monomial, coeff) handed to @ref MPoly::from_scratch. Measured on a real flow,
@@ -159,6 +322,24 @@ namespace numtracer::numeric
       if (!(c.re == 0 && c.im == 0)) p.t.push_back({Mono{MonoExp(ns, 0), {}}, c});
       return p;
     }
+
+    /// Scale every coefficient of `p` by the constant `c`. This is exactly `constant(ns, c) * p`, but
+    /// without the n·m scratch and the `std::sort` that `operator*` pays: multiplying by a constant
+    /// leaves every monomial (hence `p`'s existing sort order and its distinctness) unchanged, so there
+    /// is nothing to sort and no like terms to collect. `c * coeff` matches the operand order of the
+    /// `constant(ns,c) * p` it replaces — and `Cx` multiply is componentwise, so `c*coeff == coeff*c`
+    /// bit-for-bit, making this bit-identical to BOTH the `constant * p` and `p * constant` call sites.
+    /// A nonzero `c` times a stored (nonzero) coeff is nonzero, so no term can vanish; `c == 0` yields
+    /// the empty (zero) polynomial, exactly as `constant(ns, 0) * p` does.
+    static MPoly scaled(int ns, const MPoly &p, Cx c)
+    {
+      MPoly r(ns);
+      if (c.re == 0 && c.im == 0) return r;
+      r.t.reserve(p.t.size());
+      for (const auto &kv : p.t)
+        r.t.push_back({kv.first, c * kv.second});
+      return r;
+    }
     /// The i-th user symbol (coefficient 1).
     static MPoly var(int ns, int i)
     {
@@ -215,6 +396,7 @@ namespace numtracer::numeric
   struct MPolyFactory {
     static MPoly zero(int ns) { return MPoly(ns); }
     static MPoly constant(int ns, Cx c) { return MPoly::constant(ns, c); }
+    static MPoly scaled(int ns, const MPoly &p, Cx c) { return MPoly::scaled(ns, p, c); }
     static MPoly atom(int ns, int aid) { return MPoly::atom(ns, aid); }
     static MPoly from_scratch(int ns, MPolyScratch s) { return MPoly::from_scratch(ns, std::move(s)); }
   };
@@ -272,7 +454,7 @@ namespace numtracer::numeric
       for (const auto &[mb, cb] : b.t) {
         auto &slot = s.emplace_back(Mono{}, ca * cb);
         Mono &m = slot.first;
-        m.e.resize(static_cast<std::size_t>(ns));
+        // Packed exponents are fixed-width (no resize); set each symbol's summed exponent directly.
         for (int k = 0; k < ns; ++k)
           m.e[k] = ma.e[k] + mb.e[k];
         // Only ask for capacity when the merge would actually overflow the inline buffer. Most
@@ -316,10 +498,10 @@ namespace numtracer::numeric
             const MonoExp &d = dm.first.e;
             const Cx dc = dm.second;
             bool dominates = dm.first.atoms.empty();
-            for (std::size_t k = 0; dominates && k < e.size(); ++k)
+            for (int k = 0; dominates && k < p.nsym; ++k)
               if (e[k] < d[k]) dominates = false;
             if (dominates) {
-              for (std::size_t k = 0; k < e.size(); ++k)
+              for (int k = 0; k < p.nsym; ++k)
                 e[k] -= d[k];
               // coeff /= dc   (complex division: z / w = z·conj(w) / |w|²)
               const double den = dc.re * dc.re + dc.im * dc.im;
@@ -434,7 +616,7 @@ namespace numtracer::numeric
         auto lead = std::prev(G.end());
         if (std::max(std::fabs(lead->second.re), std::fabs(lead->second.im)) < tol) { G.erase(lead); continue; }
         MonoExp e = lead->first;
-        for (std::size_t k = 0; k < e.size(); ++k) {
+        for (int k = 0; k < p.nsym; ++k) {
           if (e[k] < dlead.first.e[k]) return false;
           e[k] -= dlead.first.e[k];
         }
@@ -442,7 +624,7 @@ namespace numtracer::numeric
         Q[e] = Q[e] + c;
         for (const auto &dt : D.t) {
           MonoExp f = e;
-          for (std::size_t k = 0; k < f.size(); ++k) f[k] += dt.first.e[k];
+          for (int k = 0; k < p.nsym; ++k) f[k] += dt.first.e[k];
           Cx &g = G[f];
           g = Cx{g.re - (c.re * dt.second.re - c.im * dt.second.im),
                  g.im - (c.re * dt.second.im + c.im * dt.second.re)};

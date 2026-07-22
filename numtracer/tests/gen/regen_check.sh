@@ -75,6 +75,11 @@ WOLFRAM="$(command -v wolfram || command -v wolframscript || true)"
 [[ -n "$WOLFRAM" ]] || { echo "ERROR: no Wolfram kernel on PATH"; exit 1; }
 [[ -d "$BUILD" ]]   || { echo "ERROR: build dir not found: $BUILD"; exit 1; }
 
+# The density guard below greps the generator's "[cse] sub-terms:" line, which NumTracer emits through
+# ntLog — silent unless $NumTracerVerbose. Codegen.m turns that flag on when NT_GEN_VERBOSE is set, so
+# enable it here (harmless extra [time]/[prof] lines in the other flows' logs).
+export NT_GEN_VERBOSE=1
+
 echo "regenerating ${#FLOWS[@]} flow(s) from source ..."
 fail=0
 for f in "${FLOWS[@]}"; do

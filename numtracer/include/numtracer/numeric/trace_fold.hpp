@@ -58,7 +58,7 @@ namespace numtracer::numeric
   /// @brief Scale a contracted trace by its sub-term scalar. Overloaded so phase B is one template
   ///        over both backends: the plain path multiplies by a constant `MPoly`, the dressed path
   ///        scales every kinematic coefficient (@ref scaleCx).
-  inline MPoly scale_trace(int nsym, const MPoly &p, Cx c) { return MPolyFactory::constant(nsym, c) * p; }
+  inline MPoly scale_trace(int nsym, const MPoly &p, Cx c) { return MPolyFactory::scaled(nsym, p, c); }
   inline DPoly scale_trace(int, const DPoly &p, Cx c) { return scaleCx(p, c); }
 
   /// @brief Approximate heap footprint of a polynomial, for the trace-table RAM report. The table is

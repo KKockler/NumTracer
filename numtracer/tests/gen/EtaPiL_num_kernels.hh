@@ -58,7 +58,7 @@ static inline std::complex<double> tr1([[maybe_unused]] const double *f) {
   return std::complex<double>{0.0, s11};
 }
 static inline double tr2([[maybe_unused]] const double *f) {
-  const double s0 = -0.018000000000000002;
+  const double s0 = -0.017999999999999999;
   const double s1 = 18;
   const double s2 = f[3];
   const double s3 = s1*s2;
@@ -80,7 +80,7 @@ static inline double tr2([[maybe_unused]] const double *f) {
   const double s19 = s16*s18;
   const double s20 = s2*s9;
   const double s21 = s19+s20;
-  const double s22 = 0.018000000000000002;
+  const double s22 = 0.017999999999999999;
   const double s23 = s4*s22;
   const double s24 = s12*s23;
   const double s25 = s15*s24;

@@ -161,10 +161,13 @@ namespace numtracer::numeric
   {
     DPoly r(a.nsym);
     if (c.re == 0 && c.im == 0) return r;
-    const MPoly cc = MPolyFactory::constant(a.nsym, c);
     r.t.reserve(a.t.size());
     for (const auto &[d, mp] : a.t) {
-      MPoly s = mp * cc;
+      // Direct coefficient scaling instead of `mp * constant(c)`: skips the n·m scratch and the dead
+      // std::sort a constant multiply pays (see MPoly::scaled). Bit-identical (Cx multiply commutes
+      // componentwise). Each stored `mp` is non-empty and `c != 0`, so `s` is non-empty; the guard is
+      // kept for parity with the previous body.
+      MPoly s = MPolyFactory::scaled(a.nsym, mp, c);
       if (!s.empty()) r.t.push_back({d, std::move(s)});
     }
     return r;

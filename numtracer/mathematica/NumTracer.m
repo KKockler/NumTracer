@@ -34,6 +34,10 @@ MakeNTKernelDiFfRG::usage = "MakeNTKernelDiFfRG[ntk, \"Name\"->\"ZA\", \"Integra
 
 UpdateNTFlows::usage = "UpdateNTFlows[name] runs DiFfRG's UpdateFlows[name] then idempotently patches flows/CMakeLists.txt (find_package(NumTracer) + UNITY_BUILD OFF). Bundling the two makes the CMake patch atomic, so it can never be left un-applied after an UpdateFlows regenerates the file. Requires DiFfRG to be loaded.";
 
+SetNumTracerThreads::usage = "SetNumTracerThreads[n] caps the code-generator to n worker threads for BOTH generation phases; SetNumTracerThreads[nA, nB] sets them separately. Phase A is the parallel Dirac-trace contraction (peak RSS ~nA x the per-contraction working set). Phase B is the per-net fold AND the CSE/Horner LOWERING of the kernel. Two consequences for nB: (1) each phase-B worker holds one full (possibly large) contraction, so on the dense quark flows a large nB drives peak memory; but (2) the lowering is compute-heavy and parallel, so a SMALL nB badly slows compute-bound flows with big kernels (e.g. the pure-gauge ZA4 / ZA4-full-basis: its phase-B+lower is ~600 s at nB=2 vs tens of seconds unthrottled). Therefore throttle ONLY around the RAM-heavy flows (the 4-point two-quark-two-gluon vertices) and keep nB high (or unset) everywhere else — do NOT set a low global cap at the top of a multi-flow script. The counts are exported as the NT_GEN_MAXW / NT_GEN_MAXW_B environment variables, read by the generator at run time (inherited through Run[]); call it any time BEFORE code generation. Returns {nA, nB}. SetNumTracerThreads[] reports the current setting. NT_GEN_MAXW only ever LOWERS the count below hardware concurrency; it cannot raise it.";
+
+GetNumTracerThreads::usage = "GetNumTracerThreads[] returns {nA, nB} = the currently configured {phase-A, phase-B} generator thread caps (Automatic when unset, i.e. hardware concurrency). See SetNumTracerThreads.";
+
 (* ---- DSL tensor heads (inert tags; first arg of the momentum-bearing ones is
         a momentum/4-vector symbol, the rest are contraction index labels) ---- *)
 
@@ -102,6 +106,27 @@ propFrameFT::usage = "propFrameFT[p0, p, l0, l1, cos1, pSym, lSym] — finite-te
 Begin["`Private`"];
 
 $NumTracerDirectory = DirectoryName[$InputFileName];
+
+(* ---- generator thread / RAM caps ----
+   The generator binary reads NT_GEN_MAXW (phase A: parallel Dirac-trace contraction) and
+   NT_GEN_MAXW_B (phase B: per-net fold) via getenv at run time. SetEnvironment mutates the
+   process environment that Run[]'s child shell inherits, so setting them here reaches the
+   generator with no extra plumbing. Phase A's peak RSS is ~W x the per-contraction working
+   set (a hard ceiling), and each phase-B worker holds one full contraction — so for dense
+   flows nB is the dominant RAM lever. *)
+SetNumTracerThreads[nA_Integer?Positive, nB_Integer?Positive] := (
+   SetEnvironment["NT_GEN_MAXW" -> ToString[nA]];
+   SetEnvironment["NT_GEN_MAXW_B" -> ToString[nB]];
+   {nA, nB});
+
+SetNumTracerThreads[n_Integer?Positive] := SetNumTracerThreads[n, n];
+
+SetNumTracerThreads[] := GetNumTracerThreads[];
+
+GetNumTracerThreads[] := Module[{a = Environment["NT_GEN_MAXW"], b = Environment["NT_GEN_MAXW_B"]},
+   {If[a === $Failed, Automatic, ToExpression[a]],
+    If[b === $Failed, Automatic, ToExpression[b]]}];
+
 
 Get[FileNameJoin[{$NumTracerDirectory, "DSL.m"}]];
 
