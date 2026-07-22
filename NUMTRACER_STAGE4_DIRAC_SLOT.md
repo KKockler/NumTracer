@@ -263,10 +263,18 @@ user liked — small kernel — and disliked — slow generation — are two sid
    concurrently, remap+dedup their programs at the end. Up to ~min(nGroups, cores)× on this phase; keeps a
    (near-)shared final kernel. The real work is a correct, cheap env-merge (remap instruction refs, dedup
    constants). Best long-term answer; a non-trivial C++ change in `trace_fold.hpp` + `gen.hpp`.
-2. **Parallelise CSE, serialise only interning** — if `best_into` does its heavy CSE/Horner into the
-   thread-local `RBuilder w` and only touches shared `g` for constant interning, split those: build `w`
-   per group in parallel, fold `w→g` serially. Smaller change than (1) if the split is clean; needs a
-   look at `best_into`'s `w` vs `g` work division.
+2. **Parallelise CSE, serialise only interning (RECOMMENDED — the split IS clean).** Confirmed by reading
+   `lower_into`: the heavy `gdetail::best_into` (CSE/Horner) writes ONLY the thread-local `RBuilder w`; the
+   sole shared-`g` mutation is the id interning (`g.var_id/inv_id/dr_id`) while *building* the monomials,
+   which is cheap hash inserts. So: put a mutex on `GlobalEnv::intern`, pre-size `progs`, and run the
+   per-group sink (`progs[gi]=to_genprog(acc,g,ro)`) via `parallel_flat` — the CSE runs fully concurrent,
+   only the interning serialises. Expected ≈ min(nGroups, cores)× on phase B (za3_147: ~4 groups → the
+   26.9 s → ~7 s, making collection *faster* than distribution's 13.3 s). **Caveats:** (a) interning under
+   a lock is order-nondeterministic → the env is RENUMBERED vs a serial run (value-identical, not
+   byte-identical) — fine since collected kernels are value-graded, but it also perturbs the
+   NON-collected flows' byte fixtures, so it must be validated by the `compare_*` value grades across all
+   35 flows, and either gated (only when nGroups·polysize is large) or accepted as a global renumber; (b)
+   it slightly serialises every flow's interning (mutex overhead) — measure it stays negligible.
 3. **Independent per-group lowering (no shared env)** — trivially parallel, but a BIGGER kernel (loses
    cross-group interning). Directly trades the kernel-size win for generation speed; measure both.
 4. **Gate collection to RAM-bound flows** — collect only where distribution's RAM forces low `nB`
