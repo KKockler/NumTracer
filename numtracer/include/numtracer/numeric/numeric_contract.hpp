@@ -941,13 +941,27 @@ namespace numtracer::numeric
   // diagram then lowers to ONE trace function whose dressing factors the shared CSE/Horner collects.
 
   /// @brief One structure option of a dressed numerator slot: a numeric coefficient × a product of
-  ///        dressing atoms (`dress`) × a Dirac structure that is either the identity `δ` or a slash
-  ///        `γ·p` (`slash` with momentum `vlc`). Higher structures (σ^{μν}, …) are a later extension.
+  ///        dressing atoms (`dress`) × a Dirac structure.
+  ///
+  /// The structure is one of two families:
+  ///  - **internally contracted** (propagator-numerator collection): identity `δ` (`open==None`,
+  ///    `slash==false`) or a slash `γ·p̸` (`open==None`, `slash==true`, momentum in `vlc`). No open
+  ///    Lorentz index — every option of such a slot leaves the surrounding net unchanged.
+  ///  - **open gluon leg** (quark-gluon VERTEX collection, Stage 4): the structure carries the vertex's
+  ///    open Lorentz axis `openMu` — a net-known id shared by EVERY option of the slot (the gluon leg),
+  ///    so the surrounding net contracts that one μ for all structure choices. `GammaMu` is `γ^μ` (T1);
+  ///    `SigmaMu` is `σ^{μν}p̸_ν` with the slashed leg momentum in `openVlc` (T7). These reuse the
+  ///    existing `dgamma` / `dcomm_fs` Dirac tokens; the `VecMu` structure `p^μ·(δ|slash)` (T4), which
+  ///    puts the open index on a Lorentz VECTOR rather than a Dirac token, is Checkpoint 2.
+  enum class Open { None, GammaMu, SigmaMu, VecMu };
   struct DSlotOpt {
     Cx coeff{1, 0};
     std::vector<int> dress; ///< dressing-atom ids (need not be pre-sorted; merged sorted on use)
-    bool slash = false;     ///< true: structure is `γ·p` (use `vlc`); false: identity `δ`
+    bool slash = false;     ///< true: internally-contracted structure is `γ·p̸` (use `vlc`); false: `δ`
     std::vector<std::pair<double, int>> vlc; ///< slash momentum `Σ coeff·comp(vid)` (when `slash`)
+    Open open = Open::None; ///< open-gluon-leg structure family (Stage 4); None ⇒ the δ/slash case above
+    int openMu = -1;        ///< the shared open gluon Lorentz id (a net-known index) when `open != None`
+    std::vector<std::pair<double, int>> openVlc; ///< σ slashed-leg / vector momentum (SigmaMu / VecMu)
   };
   /// @brief A dressed numerator = the sum of its structure options.
   using DSlot = std::vector<DSlotOpt>;
@@ -1012,8 +1026,16 @@ namespace numtracer::numeric
           const DSlotOpt &opt = slots[tok.slot][choice[tok.slot]];
           combCoeff = combCoeff * opt.coeff;
           dressMono.insert(dressMono.end(), opt.dress.begin(), opt.dress.end());
-          if (opt.slash) concrete.push_back(network::dslash(opt.vlc));
-          // identity option: contributes no Dirac token (δ between the surrounding γ's)
+          // Open gluon-leg vertex structures (Stage 4): the shared axis `openMu` is closed by the net,
+          // so the token carries the open index and the contraction is otherwise the same code path.
+          if (opt.open == Open::GammaMu)
+            concrete.push_back(network::dgamma(opt.openMu)); // T1: γ^μ
+          else if (opt.open == Open::SigmaMu)
+            concrete.push_back(network::dcomm_fs(opt.openMu, opt.openVlc)); // T7: σ^{μν}p̸_ν
+          else if (opt.slash)
+            concrete.push_back(network::dslash(opt.vlc)); // internally-contracted γ·p̸
+          // else (open==None && !slash): identity δ — no Dirac token between the surrounding γ's.
+          // NOTE: Open::VecMu (T4, p^μ·δ) needs a Lorentz-factor into the net — Checkpoint 2.
         }
         if (!(combCoeff.re == 0 && combCoeff.im == 0)) {
           // restore tr(1)=4 for every spinor loop that collapsed to the identity in this combination

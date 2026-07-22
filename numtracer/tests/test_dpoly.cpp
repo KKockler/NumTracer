@@ -298,6 +298,57 @@ int main()
     if (worst != 0) ++fails;
   }
 
+  // ---- G) OPEN gluon-leg vertex slot {γ^μ, σ^{μν}p̸_ν} collected vs distributed (Stage 4, CP1) ----
+  // The quark-gluon vertex is a SUM of structures sharing ONE open gluon axis μ. Unlike a propagator
+  // numerator (every option internally contracted), here every option carries the SAME open μ, closed
+  // by the surrounding net — so the collected DPoly must equal the distributed structure sum.
+  std::printf("\n== G: open gluon-leg vertex slot {gamma^mu, sigma^{mu nu}} collected vs distributed ==\n");
+  {
+    const int nsym = 4; // p:0..3
+    nm::LorentzEnv env(nsym);
+    std::vector<std::array<nm::MPoly, 4>> comp(1);
+    for (int mu = 0; mu < 4; ++mu)
+      comp[0][mu] = env.var(mu);
+    // net closes the shared gluon leg μ=200 against the fixed γ^101 (playing the external gluon line).
+    nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(200, 101)}}};
+    // vertex slot: opt0 = γ^200 (T1, dressing atom 0); opt1 = σ^{200,ν}p̸_ν (T7, dressing atom 1).
+    nm::DSlotOpt o0;
+    o0.coeff = Cx{1, 0}; o0.dress = {0}; o0.open = nm::Open::GammaMu; o0.openMu = 200;
+    nm::DSlotOpt o1;
+    o1.coeff = Cx{1, 0}; o1.dress = {1}; o1.open = nm::Open::SigmaMu; o1.openMu = 200; o1.openVlc = {{1.0, 0}};
+    nm::DSlot sV = {o0, o1};
+    std::vector<nm::DChainTok> dchain = {nm::dtslot(0), nm::dtfix(network::dgamma(101))};
+    nm::DPoly dp = env.numeric_value_dressed(dchain, {sV}, lor, comp, {});
+    auto refTrace = [&](int cp, const std::vector<double> &x) {
+      network::DiracNet c;
+      if (cp == 0) c.push_back(network::dgamma(200));            // γ^μ
+      else c.push_back(network::dcomm_fs(200, {{1.0, 0}}));      // σ^{μν}p̸_ν
+      c.push_back(network::dgamma(101));
+      return nm::eval(env.numeric_value(c, lor, comp, {}), x, {});
+    };
+    int worst = 0;
+    double maxerr = 0.0;
+    for (int it = 0; it < 5000; ++it) {
+      std::vector<double> x(nsym);
+      for (double &v : x)
+        v = U(rng);
+      std::vector<double> drVal = {U(rng), U(rng)};
+      Cx collected = nm::eval(dp, x, {}, drVal);
+      Cx dist{0, 0};
+      for (int cp = 0; cp < 2; ++cp) {
+        double w = (cp == 0 ? drVal[0] : drVal[1]);
+        Cx tr = refTrace(cp, x);
+        dist = dist + Cx{tr.re * w, tr.im * w};
+      }
+      double e = cdiff(collected, dist);
+      maxerr = std::max(maxerr, e);
+      if (e >= 1e-10) ++worst;
+    }
+    std::printf("  dp terms=%d worst |collected-distributed|=%.2e (%d/5000 fail)  %s\n", dp.size(), maxerr, worst,
+                worst == 0 ? "ok" : "FAIL");
+    if (worst != 0) ++fails;
+  }
+
   std::printf("\n%s\n", fails == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
   return fails == 0 ? 0 : 1;
 }
