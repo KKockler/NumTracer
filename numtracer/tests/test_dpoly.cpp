@@ -116,8 +116,8 @@ int main()
       comp[1][mu] = env.var(4 + mu);
     }
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
-    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}};
+    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, {network::dslash({{1.0, 0}})}, {}}};
+    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, {network::dslash({{1.0, 1}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dgamma(100)), nm::dtslot(0),
                                          nm::dtfix(network::dgamma(101)), nm::dtslot(1)};
     nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, {});
@@ -167,7 +167,7 @@ int main()
     for (int mu = 0; mu < 4; ++mu)
       comp[0][mu] = env.var(mu);
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 102), nm::nmet(101, 103)}}};
-    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
+    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, {network::dslash({{1.0, 0}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dcomm(100, 101)), nm::dtslot(0),
                                          nm::dtfix(network::dgamma(102)), nm::dtfix(network::dgamma(103))};
     nm::DPoly dp = env.numeric_value_dressed(dchain, {sP}, lor, comp, {});
@@ -213,8 +213,8 @@ int main()
       comp[1][mu] = env.var(4 + mu);
     }
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 102), nm::nmet(101, 103)}}};
-    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
-    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}};
+    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, {network::dslash({{1.0, 0}})}, {}}};
+    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, {network::dslash({{1.0, 1}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dgamma(100)), nm::dtfix(network::dgamma(101)),
                                          nm::dtslot(0), nm::dtfix(network::dcomm(102, 103)), nm::dtslot(1)};
     nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, {});
@@ -262,8 +262,8 @@ int main()
       comp[2][mu] = env.var(8 + mu);
     }
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
-    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}};
-    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}};
+    nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {1}, {network::dslash({{1.0, 0}})}, {}}};
+    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}}, nm::DSlotOpt{Cx{1, 0}, {2}, {network::dslash({{1.0, 1}})}, {}}};
     std::vector<nm::DChainTok> dchain = {nm::dtfix(network::dgamma(100)), nm::dtslot(0),
                                          nm::dtfix(network::dcomm_fs(101, {{1.0, 2}})), nm::dtslot(1)};
     nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, {});
@@ -313,9 +313,9 @@ int main()
     nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(200, 101)}}};
     // vertex slot: opt0 = γ^200 (T1, dressing atom 0); opt1 = σ^{200,ν}p̸_ν (T7, dressing atom 1).
     nm::DSlotOpt o0;
-    o0.coeff = Cx{1, 0}; o0.dress = {0}; o0.open = nm::Open::GammaMu; o0.openMu = 200;
+    o0.coeff = Cx{1, 0}; o0.dress = {0}; o0.toks = {network::dgamma(200)};                  // T1: γ^μ
     nm::DSlotOpt o1;
-    o1.coeff = Cx{1, 0}; o1.dress = {1}; o1.open = nm::Open::SigmaMu; o1.openMu = 200; o1.openVlc = {{1.0, 0}};
+    o1.coeff = Cx{1, 0}; o1.dress = {1}; o1.toks = {network::dcomm_fs(200, {{1.0, 0}})};      // T7: σ^{μν}p̸_ν
     nm::DSlot sV = {o0, o1};
     std::vector<nm::DChainTok> dchain = {nm::dtslot(0), nm::dtfix(network::dgamma(101))};
     nm::DPoly dp = env.numeric_value_dressed(dchain, {sV}, lor, comp, {});
@@ -369,14 +369,16 @@ int main()
     const std::vector<std::pair<double, int>> aMom = {{1.0, 3}}; // external partner of γ^101 (comp 3)
     const std::vector<std::pair<double, int>> bMom = {{1.0, 4}}; // external partner of γ^102 (comp 4)
 
+    // a Lorentz-net Vector factor p^μ on leg μ (an open leg routed into the net).
+    auto netVec = [](int mu, std::vector<std::pair<double, int>> vlc) {
+      return network::Elem{network::Elem::Vector, mu, -1, -1, -1, std::move(vlc)};
+    };
     // one slot carrying all four vertex structures, sharing the open gluon axis μ = 200.
-    nm::DSlotOpt oT1;  oT1.coeff = Cx{1, 0};  oT1.dress = {0}; oT1.open = nm::Open::GammaMu; oT1.openMu = 200;
-    nm::DSlotOpt oT4d; oT4d.coeff = Cx{1, 0}; oT4d.dress = {1}; oT4d.open = nm::Open::VecMu; oT4d.openMu = 200;
-    oT4d.openVlc = pMom; oT4d.slash = false;                                    // T4, δ spinor part
-    nm::DSlotOpt oT4s; oT4s.coeff = Cx{1, 0}; oT4s.dress = {2}; oT4s.open = nm::Open::VecMu; oT4s.openMu = 200;
-    oT4s.openVlc = pMom; oT4s.slash = true; oT4s.vlc = qMom;                    // T4, slash spinor part (γ·q̸)
-    nm::DSlotOpt oT7;  oT7.coeff = Cx{1, 0};  oT7.dress = {3}; oT7.open = nm::Open::SigmaMu; oT7.openMu = 200;
-    oT7.openVlc = qMom;
+    nm::DSlotOpt oT1;  oT1.coeff = Cx{1, 0};  oT1.dress = {0}; oT1.toks = {network::dgamma(200)};        // T1: γ^μ
+    nm::DSlotOpt oT4d; oT4d.coeff = Cx{1, 0}; oT4d.dress = {1}; oT4d.netFacs = {netVec(200, pMom)};       // T4: p^μ·δ (open leg on a vector)
+    nm::DSlotOpt oT4s; oT4s.coeff = Cx{1, 0}; oT4s.dress = {2}; oT4s.toks = {network::dslash(qMom)};
+    oT4s.netFacs = {netVec(200, pMom)};                                                                   // T4: p^μ·(γ·q̸)
+    nm::DSlotOpt oT7;  oT7.coeff = Cx{1, 0};  oT7.dress = {3}; oT7.toks = {network::dcomm_fs(200, qMom)};  // T7: σ^{μν}p̸_ν
     nm::DSlot sV = {oT1, oT4d, oT4s, oT7};
 
     // build the concrete chain + net for ONE structure choice (distributed reference). `base` carries the
@@ -431,6 +433,119 @@ int main()
                   dp.size(), maxerr, worst, worst == 0 ? "ok" : "FAIL");
       if (worst != 0) ++fails;
     }
+  }
+
+  // ---- I) MULTI-TOKEN option: open leg is NOT the only token (real T4/T7 shape) (Stage 4 R0) ----
+  // The real quark-gluon vertex options are Dirac-token CHAINS, not single tokens: T4 = p̸₁·γ^μ (a slash
+  // THEN the open γ), and the open leg can sit anywhere in the chain. Collect a slot whose options are
+  // such chains and check it equals the distributed sum. Two fixed surroundings of opposite parity make
+  // the single-token (T1) and multi-token (T4) options each nonzero in one.
+  std::printf("\n== I: multi-token slot options {gamma^mu, slash.gamma^mu, slash.gamma^mu.slash} (R0) ==\n");
+  {
+    const int nsym = 20; // 5 momenta
+    nm::LorentzEnv env(nsym);
+    std::vector<std::array<nm::MPoly, 4>> comp(5);
+    for (int v = 0; v < 5; ++v)
+      for (int mu = 0; mu < 4; ++mu)
+        comp[v][mu] = env.var(4 * v + mu);
+    const std::vector<std::pair<double, int>> f1 = {{1.0, 0}}, f2 = {{1.0, 1}}, p1 = {{1.0, 2}},
+                                              rr = {{1.0, 3}};
+    // slot: T1 = γ^μ (1 token); T4 = p̸₁ γ^μ (2 tokens); T4' = p̸₁ γ^μ p̸₂ (3 tokens, open leg in the middle).
+    nm::DSlotOpt oT1;  oT1.dress = {0}; oT1.toks = {network::dgamma(200)};
+    nm::DSlotOpt oT4;  oT4.dress = {1}; oT4.toks = {network::dslash(p1), network::dgamma(200)};
+    nm::DSlotOpt oT4b; oT4b.dress = {2}; oT4b.toks = {network::dslash(p1), network::dgamma(200), network::dslash(f2)};
+    nm::DSlot sV = {oT1, oT4, oT4b};
+    nm::NNet base = {nm::NTerm{Cx{1, 0}, {nm::nvec(200, rr)}}}; // close μ=200 against external momentum r
+    struct Cfg { const char *name; network::DiracNet pre; };
+    std::vector<Cfg> cfgs = {
+        {"even [slash.f1, slash.f2, slot]", {network::dslash(f1), network::dslash(f2)}},
+        {"odd  [slash.f1, slot]", {network::dslash(f1)}}};
+    for (const Cfg &cfg : cfgs) {
+      std::vector<nm::DChainTok> dchain;
+      for (const network::DFac &d : cfg.pre) dchain.push_back(nm::dtfix(d));
+      dchain.push_back(nm::dtslot(0));
+      nm::DPoly dp = env.numeric_value_dressed(dchain, {sV}, base, comp, {});
+      int worst = 0; double maxerr = 0.0;
+      for (int it = 0; it < 5000; ++it) {
+        std::vector<double> x(nsym);
+        for (double &v : x) v = U(rng);
+        std::vector<double> drVal = {U(rng), U(rng), U(rng)};
+        Cx collected = nm::eval(dp, x, {}, drVal);
+        Cx dist{0, 0};
+        for (int cp = 0; cp < 3; ++cp) {
+          network::DiracNet c = cfg.pre;
+          for (const network::DFac &d : sV[cp].toks) c.push_back(d);
+          Cx tr = nm::eval(env.numeric_value(c, base, comp, {}), x, {});
+          dist = dist + Cx{tr.re * drVal[cp], tr.im * drVal[cp]};
+        }
+        double e = cdiff(collected, dist);
+        maxerr = std::max(maxerr, e);
+        if (e >= 1e-10) ++worst;
+      }
+      std::printf("  %-33s dp terms=%d worst=%.2e (%d/5000)  %s\n", cfg.name, dp.size(), maxerr, worst,
+                  worst == 0 ? "ok" : "FAIL");
+      if (worst != 0) ++fails;
+    }
+  }
+
+  // ---- J) TWO open legs per option (k=2, an AAqbq-like vertex) (Stage 4 R1) ----
+  // A two-gluon quark vertex exposes TWO open Lorentz legs {μ,ν}. Options may carry them on the Dirac
+  // side (two open γ's), on the net (a metric g^{μν}·δ), or mixed (γ^μ + a net vector on ν). All are
+  // collected in one slot and closed by a 2-leg net; collected must equal the distributed sum.
+  std::printf("\n== J: two-open-leg slot options {gamma^mu gamma^nu, g^{mu nu}.delta, gamma^mu . vec^nu} (R1) ==\n");
+  {
+    const int nsym = 20;
+    nm::LorentzEnv env(nsym);
+    std::vector<std::array<nm::MPoly, 4>> comp(5);
+    for (int v = 0; v < 5; ++v)
+      for (int mu = 0; mu < 4; ++mu)
+        comp[v][mu] = env.var(4 * v + mu);
+    const std::vector<std::pair<double, int>> f1 = {{1.0, 0}}, f2 = {{1.0, 1}}, s = {{1.0, 2}},
+                                              q = {{1.0, 3}};
+    auto netVec = [](int mu, std::vector<std::pair<double, int>> vlc) {
+      return network::Elem{network::Elem::Vector, mu, -1, -1, -1, std::move(vlc)};
+    };
+    auto netMet = [](int a, int b) { return network::Elem{network::Elem::Metric, a, b, -1, -1, {}}; };
+    // local Elem→NElem for the distributed reference (public builders; elem_to_nelem is body-only).
+    auto toNElem = [](const network::Elem &e) {
+      return e.kind == network::Elem::Metric ? nm::nmet(e.a, e.b) : nm::nvec(e.a, e.vlc);
+    };
+    const int MU = 200, NU = 201;
+    // options (all k=2, legs {MU,NU}): two open γ's; a net metric with δ spinor; γ^MU with a net vec on NU.
+    nm::DSlotOpt oA; oA.dress = {0}; oA.toks = {network::dgamma(MU), network::dgamma(NU)};
+    nm::DSlotOpt oB; oB.dress = {1}; oB.netFacs = {netMet(MU, NU)};                 // g^{μν}·δ (both legs on the net)
+    nm::DSlotOpt oC; oC.dress = {2}; oC.toks = {network::dslash(s), network::dgamma(MU)};
+    oC.netFacs = {netVec(NU, q)};                                                  // p̸·γ^μ · p^ν (mixed: γ leg + net-vec leg)
+    nm::DSlot sV = {oA, oB, oC};
+    // fixed surrounding: two slashes (even, non-collapsing) so no option zeroes by parity or loses tr(1).
+    network::DiracNet pre = {network::dslash(f1), network::dslash(f2)};
+    // 2-leg net: contract the two gluon legs together (g_{μν}) — a closed two-gluon sub-net.
+    nm::NNet base = {nm::NTerm{Cx{1, 0}, {nm::nmet(MU, NU)}}};
+    std::vector<nm::DChainTok> dchain = {nm::dtfix(pre[0]), nm::dtfix(pre[1]), nm::dtslot(0)};
+    nm::DPoly dp = env.numeric_value_dressed(dchain, {sV}, base, comp, {});
+    int worst = 0; double maxerr = 0.0; std::vector<double> mag(3, 0.0);
+    for (int it = 0; it < 5000; ++it) {
+      std::vector<double> x(nsym);
+      for (double &v : x) v = U(rng);
+      std::vector<double> drVal = {U(rng), U(rng), U(rng)};
+      Cx collected = nm::eval(dp, x, {}, drVal);
+      Cx dist{0, 0};
+      for (int cp = 0; cp < 3; ++cp) {
+        network::DiracNet c = pre;
+        for (const network::DFac &d : sV[cp].toks) c.push_back(d);
+        nm::NNet net = base;
+        for (const network::Elem &e : sV[cp].netFacs) net[0].e.push_back(toNElem(e));
+        Cx tr = nm::eval(env.numeric_value(c, net, comp, {}), x, {});
+        mag[cp] = std::max(mag[cp], std::abs(tr.re) + std::abs(tr.im));
+        dist = dist + Cx{tr.re * drVal[cp], tr.im * drVal[cp]};
+      }
+      double e = cdiff(collected, dist);
+      maxerr = std::max(maxerr, e);
+      if (e >= 1e-10) ++worst;
+    }
+    std::printf("  dp terms=%d worst=%.2e (%d/5000)  per-option |tr| max = {%.2f, %.2f, %.2f}  %s\n", dp.size(),
+                maxerr, worst, mag[0], mag[1], mag[2], worst == 0 ? "ok" : "FAIL");
+    if (worst != 0) ++fails;
   }
 
   std::printf("\n%s\n", fails == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");

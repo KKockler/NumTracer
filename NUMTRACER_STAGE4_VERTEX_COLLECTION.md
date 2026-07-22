@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-07-22) by `NUMTRACER_STAGE4_DIRAC_SLOT.md`.** The single-open-leg model below
+> (the `Open` enum: one `γ^μ`/`σ^{μν}`/`p^μ` token) is too narrow: real vertex options are multi-token
+> Dirac chains, and the AAqbq vertex has TWO open legs (n in general). The redesign generalises to a
+> collected Dirac slot with an arbitrary open-leg set. CP1/CP2 (committed) are retired by R0 there.
+> Kept for the design history and the still-valid verification/L2 recipe notes.
+
 # Stage 4 — eager quark-gluon vertex collection (retire dropAqbq47)
 
 Goal: keep an internal multi-structure quark-gluon vertex `Σ_a c_a T_a` (T1/T4/T7 of AqbqDirect) as ONE

@@ -940,29 +940,28 @@ namespace numtracer::numeric
   // verbatim), and accumulate the results into ONE @ref DPoly keyed by the dressing monomial. The whole
   // diagram then lowers to ONE trace function whose dressing factors the shared CSE/Horner collects.
 
-  /// @brief One structure option of a dressed numerator slot: a numeric coefficient × a product of
-  ///        dressing atoms (`dress`) × a Dirac structure.
+  /// @brief One structure option of a collected Dirac slot (Stage 4, general form): a numeric
+  ///        coefficient × a product of dressing atoms (`dress`) × a Dirac structure, where the
+  ///        structure is
+  ///          - a **Dirac-token chain** @ref toks spliced in place of the slot (spinor `din→dout`);
+  ///            its FREE-Lorentz tokens (a `dgamma(μ)` / an open `dcomm` leg) are open legs on the
+  ///            Dirac side, and
+  ///          - a set of **Lorentz-net factors** @ref netFacs (a vector `p^μ`, a metric `g^{μν}`, …)
+  ///            carrying any remaining open legs, appended to the surrounding net.
   ///
-  /// The structure is one of two families:
-  ///  - **internally contracted** (propagator-numerator collection): identity `δ` (`open==None`,
-  ///    `slash==false`) or a slash `γ·p̸` (`open==None`, `slash==true`, momentum in `vlc`). No open
-  ///    Lorentz index — every option of such a slot leaves the surrounding net unchanged.
-  ///  - **open gluon leg** (quark-gluon VERTEX collection, Stage 4): the structure carries the vertex's
-  ///    open Lorentz axis `openMu` — a net-known id shared by EVERY option of the slot (the gluon leg),
-  ///    so the surrounding net contracts that one μ for all structure choices. `GammaMu` is `γ^μ` (T1);
-  ///    `SigmaMu` is `σ^{μν}p̸_ν` with the slashed leg momentum in `openVlc` (T7). These reuse the
-  ///    existing `dgamma` / `dcomm_fs` Dirac tokens. `VecMu` is the vector structure `p^μ·(δ|slash)`
-  ///    (T4): the open index rides a Lorentz VECTOR `p^μ` (momentum in `openVlc`) routed into the net,
-  ///    while the spinor side δ/slash reuses the `slash`/`vlc` fields — the internally-contracted case.
-  enum class Open { None, GammaMu, SigmaMu, VecMu };
+  /// The union of the two sets' free Lorentz ids is the slot's shared open-leg set `{μ₁,…,μ_k}`, closed
+  /// by the surrounding net — the SAME set for every option (so the net contracts a fixed leg set
+  /// regardless of structure choice). This one form covers every case, any leg count `k ≥ 0`:
+  ///  - propagator numerator `δ` ⇒ `toks={}, netFacs={}`; slash `γ·p̸` ⇒ `toks={dslash(vlc)}` (k=0);
+  ///  - single-gluon vertex T1 `γ^μ` ⇒ `toks={dgamma(μ)}`; T4 `p̸₁γ^μ` ⇒ `toks={dslash(p1),dgamma(μ)}`;
+  ///    T7 `σ^{μν}p̸_ν` ⇒ `toks={dcomm_fs(μ,vlc)}` (k=1);
+  ///  - open leg on a vector `p^μ·δ` ⇒ `netFacs={Vector(μ,p)}`; two-gluon `g^{μν}·δ` ⇒
+  ///    `netFacs={Metric(μ,ν)}`; two open γ's ⇒ `toks={dgamma(μ),dgamma(ν)}` (k=2), etc.
   struct DSlotOpt {
     Cx coeff{1, 0};
     std::vector<int> dress; ///< dressing-atom ids (need not be pre-sorted; merged sorted on use)
-    bool slash = false;     ///< true: internally-contracted structure is `γ·p̸` (use `vlc`); false: `δ`
-    std::vector<std::pair<double, int>> vlc; ///< slash momentum `Σ coeff·comp(vid)` (when `slash`)
-    Open open = Open::None; ///< open-gluon-leg structure family (Stage 4); None ⇒ the δ/slash case above
-    int openMu = -1;        ///< the shared open gluon Lorentz id (a net-known index) when `open != None`
-    std::vector<std::pair<double, int>> openVlc; ///< σ slashed-leg / vector momentum (SigmaMu / VecMu)
+    std::vector<network::DFac> toks; ///< Dirac-token chain spliced for this option (free-Lorentz tokens = open legs)
+    std::vector<network::Elem> netFacs; ///< extra Lorentz-net factors for this option (open legs on vectors/metrics/…)
   };
   /// @brief A dressed numerator = the sum of its structure options.
   using DSlot = std::vector<DSlotOpt>;
@@ -992,17 +991,13 @@ namespace numtracer::numeric
 #if NUMTRACER_DEFINE_BODIES
   namespace ndetail
   {
-    /// One open-gluon-leg Lorentz vector `p^μ` produced by a `VecMu` structure (Stage 4, T4): the open
-    /// axis `first` = μ (a net-known id) rides the momentum `second` = `Σ coeff·comp(vid)`. The caller
-    /// routes each such vector into the Lorentz net so the surrounding net contracts μ against it.
-    using OpenVec = std::pair<int, std::vector<std::pair<double, int>>>;
-
     /// Enumerate the Cartesian product of slot-structure choices, contract each concrete Dirac chain
     /// via @p contract (an `MPoly`-returning closure that runs the full Dirac+Lorentz contraction), and
     /// collect the results into one @ref DPoly keyed by the dressing monomial. Each slot is referenced
     /// at most once in @p chain (a numerator occupies one chain position). @p contract receives the
-    /// concrete Dirac chain AND this combination's `VecMu` open-leg vectors (empty for every non-`VecMu`
-    /// combination ⇒ the caller takes a byte-identical fast path).
+    /// concrete Dirac chain AND this combination's extra Lorentz-net factors (the chosen options'
+    /// @ref DSlotOpt::netFacs — open legs on vectors/metrics/…); empty for every option whose structure
+    /// is purely Dirac-side ⇒ the caller takes a byte-identical fast path.
     template <class ContractFn>
     inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                ContractFn &&contract)
@@ -1026,7 +1021,7 @@ namespace numtracer::numeric
         DMono dressMono;
         network::DiracNet concrete;
         concrete.reserve(chain.size());
-        std::vector<OpenVec> extraVecs; // this combination's VecMu open-leg vectors (usually empty)
+        std::vector<network::Elem> extraNet; // this combination's options' net factors (usually empty)
         for (const DChainTok &tok : chain) {
           if (!tok.isSlot) {
             concrete.push_back(tok.fac);
@@ -1035,28 +1030,19 @@ namespace numtracer::numeric
           const DSlotOpt &opt = slots[tok.slot][choice[tok.slot]];
           combCoeff = combCoeff * opt.coeff;
           dressMono.insert(dressMono.end(), opt.dress.begin(), opt.dress.end());
-          // Open gluon-leg vertex structures (Stage 4): the shared axis `openMu` is closed by the net,
-          // so the token carries the open index and the contraction is otherwise the same code path.
-          if (opt.open == Open::GammaMu)
-            concrete.push_back(network::dgamma(opt.openMu)); // T1: γ^μ
-          else if (opt.open == Open::SigmaMu)
-            concrete.push_back(network::dcomm_fs(opt.openMu, opt.openVlc)); // T7: σ^{μν}p̸_ν
-          else if (opt.open == Open::VecMu) {
-            // T4: p^μ·(δ|slash). The open axis μ rides a Lorentz VECTOR p^μ (openVlc), routed into the
-            // net by the contract closure; the spinor side is the internally-contracted δ/slash, so it
-            // reuses the slash/vlc fields exactly like the Open::None case below.
-            if (opt.slash) concrete.push_back(network::dslash(opt.vlc)); // slash spinor part
-            // else δ spinor part: no Dirac token (identity), tr(1)=4 restored by nCollapsed below.
-            extraVecs.emplace_back(opt.openMu, opt.openVlc);
-          } else if (opt.slash)
-            concrete.push_back(network::dslash(opt.vlc)); // internally-contracted γ·p̸
-          // else (open==None && !slash): identity δ — no Dirac token between the surrounding γ's.
+          // General collected Dirac slot (Stage 4): splice this option's Dirac-token chain in place of
+          // the slot (its free-Lorentz tokens are open legs), and collect its Lorentz-net factors — the
+          // surrounding net closes every open leg for all structure choices alike. An option with an
+          // empty `toks` is the spinor identity δ (tr(1)=4 restored by nCollapsed below when a whole
+          // loop collapses); empty `netFacs` ⇒ no net change (the byte-identical fast path).
+          concrete.insert(concrete.end(), opt.toks.begin(), opt.toks.end());
+          extraNet.insert(extraNet.end(), opt.netFacs.begin(), opt.netFacs.end());
         }
         if (!(combCoeff.re == 0 && combCoeff.im == 0)) {
           // restore tr(1)=4 for every spinor loop that collapsed to the identity in this combination
           const int nCollapsed = nloops - static_cast<int>(split_loops(concrete).size());
           for (int c = 0; c < nCollapsed; ++c) combCoeff = combCoeff * Cx{4, 0};
-          MPoly mp = contract(concrete, extraVecs);
+          MPoly mp = contract(concrete, extraNet);
           if (!mp.empty()) {
             mp = mp * MPolyFactory::constant(nsym, combCoeff);
             out.add(dmono_sorted(std::move(dressMono)), mp);
@@ -1086,15 +1072,15 @@ namespace numtracer::numeric
                                                     const std::vector<std::vector<int>> &units)
   {
     return ndetail::dress_collect(nsym, chain, slots,
-                                  [&](const network::DiracNet &d, const std::vector<ndetail::OpenVec> &ev) {
-                                    if (ev.empty()) // non-VecMu combination: byte-identical to CP1 / the δ-slash collection
+                                  [&](const network::DiracNet &d, const std::vector<network::Elem> &ev) {
+                                    if (ev.empty()) // options with no net factors: byte-identical to the δ/slash collection
                                       return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
-                                    // VecMu (T4): append each open-leg vector p^μ to every net term so the surrounding
-                                    // net contracts μ against it — the exact Lorentz structure the distributed diagram emits.
+                                    // append this combination's open-leg net factors (vectors/metrics/…) to every net
+                                    // term so the surrounding net closes their legs — the exact Lorentz structure the
+                                    // distributed diagram emits, reusing all validated contraction machinery.
                                     network::NetVal lor2 = lor;
                                     for (network::PTerm &pt : lor2)
-                                      for (const ndetail::OpenVec &v : ev)
-                                        pt.e.push_back(network::Elem{network::Elem::Vector, v.first, -1, -1, -1, v.second});
+                                      pt.e.insert(pt.e.end(), ev.begin(), ev.end());
                                     return numeric_value_netval(nsym, d, lor2, comp, atomDen, units);
                                   });
   }
@@ -1106,14 +1092,14 @@ namespace numtracer::numeric
                                              const std::vector<MPoly> &atomDen)
   {
     return ndetail::dress_collect(nsym, chain, slots,
-                                  [&](const network::DiracNet &d, const std::vector<ndetail::OpenVec> &ev) {
+                                  [&](const network::DiracNet &d, const std::vector<network::Elem> &ev) {
                                     if (ev.empty()) return numeric_value(nsym, d, lorentz, comp, atomDen);
-                                    // VecMu (T4): route each open-leg vector p^μ into the numeric Lorentz net (see the
-                                    // netval variant above for the rationale).
+                                    // route this combination's open-leg net factors into the numeric Lorentz net (see
+                                    // the netval variant above for the rationale); convert Elem → NElem for this path.
                                     NNet lor2 = lorentz;
                                     for (NTerm &t : lor2)
-                                      for (const ndetail::OpenVec &v : ev)
-                                        t.e.push_back(nvec(v.first, v.second));
+                                      for (const network::Elem &e : ev)
+                                        t.e.push_back(elem_to_nelem(e));
                                     return numeric_value(nsym, d, lor2, comp, atomDen);
                                   });
   }
