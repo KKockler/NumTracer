@@ -17,7 +17,7 @@
 tensorQ[_ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
         _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
         _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
-        _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum] = True;
+        _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot] = True;
 tensorQ[_] = False;
 
 (* The 4 SU(N) group heads carry their rank N as the FIRST argument, so colour SU(Nc),
@@ -66,6 +66,13 @@ labelsOf[h_ntEpsFund] := Rest[List @@ h];
    so it exposes only its spinor in/out labels; the dressing collection is folded in C++ (one DPoly
    trace) instead of distributing the numerator into 2^D diagrams. *)
 labelsOf[ntDressedNum[_, din_, dout_]] := {din, dout};
+(* ntDiracSlot[options, din, dout, legs] — a collected Dirac slot (Stage 4 general form): a
+   coefficient-weighted sum of Dirac structures sharing spinor in/out (din,dout) AND the SAME SET of
+   open Lorentz legs `legs` (any count k>=0; k=0 = a propagator numerator, k>=1 = a vertex). `options`
+   is a list of {coeffExpr, structureProduct}; the structure's free Lorentz ids are exactly `legs`, so
+   the surrounding net closes them for every structure choice. It therefore exposes din,dout AND every
+   open leg as real contraction labels. *)
+labelsOf[ntDiracSlot[_, din_, dout_, legs_]] := Join[legs, {din, dout}];
 
 (* Spinor (Dirac) axis labels of a head — the subset of labelsOf that lives in the
    spinor index space. Used to give spinor axes a disjoint id range so the et engine
@@ -75,6 +82,7 @@ spinorLabelsHead[ntGamma5[din_, dout_]]   := {din, dout};
 spinorLabelsHead[ntSigma[_, _, din_, dout_]] := {din, dout};
 spinorLabelsHead[ntDeltaDirac[din_, dout_]] := {din, dout};
 spinorLabelsHead[ntDressedNum[_, din_, dout_]] := {din, dout};
+spinorLabelsHead[ntDiracSlot[_, din_, dout_, _]] := {din, dout};
 spinorLabelsHead[_]                       := {};
 (* All spinor labels anywhere under a (sub)expression. *)
 allSpinorLabels[e_] := DeleteDuplicates @ Flatten @ Cases[e, h_?tensorQ :> spinorLabelsHead[h], {0, Infinity}];
@@ -134,7 +142,7 @@ splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
 scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
                        _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
                        _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
-                       _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum];
+                       _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot];
 
 (* The free (uncontracted) index labels of a tensor (sub)expression. A product sums
    indices that appear twice (free = appear once); a sum's summands share free indices
@@ -336,6 +344,64 @@ expandDressedNum[ntDressedNum[opts_, din_, dout_]] := Plus @@ (Function[opt,
     "ident", ntDeltaDirac[din, dout],
     "slash", With[{mu = Unique["dexp"]},
        ntGamma[mu, din, dout] * (Plus @@ ((#[[1]] * ntVec[#[[2]], mu]) & /@ opt[[2, 2]]))]]] /@ opts);
+
+(* ---- general collected Dirac slot (Stage 4, ANY open-leg count) --------------------------------
+   A collected Dirac slot is a coefficient-weighted sum of Dirac structures that all share the spinor
+   in/out pair AND the SAME SET of open Lorentz legs `{μ...}` (k>=0). k=0 is the propagator numerator
+   (handled by the ntDressedNum path); k>=1 is a vertex with k open gluon legs (Aqbq: 1; AAqbq: 2; …).
+   The C++ engine already closes an arbitrary number of open legs against the net, so the front end
+   only has to keep the sum EAGER and package each structure as one option. Unlike the propagator
+   collection, an option's structure is kept WHOLE (its Dirac chain × its Lorentz-net factors, e.g. the
+   gluon propagator on the open leg); the codegen backend splits it into Dirac tokens vs net factors. *)
+
+(* colour (SU(N)) labels anywhere under an expression — the axes that must factor out of the slot. *)
+colourLabelsOf[e_] := DeleteDuplicates @ Flatten @ Cases[e,
+  h_ /; (fundamentalSUNQ[h] || adjointSUNQ[h]) :> labelsOf[h], {0, Infinity}];
+(* the OPEN Lorentz legs of a term: free indices that are neither spinor nor colour — the gluon axes. *)
+openLorentzOf[t_] := Complement[freeIdx[t], allSpinorLabels[t], colourLabelsOf[t]];
+
+(* A collectible general Dirac slot: a Plus whose EXPANDED terms are each a Dirac structure with the
+   same 2 open spinor indices and the same NON-EMPTY set of open Lorentz legs (so the surrounding net
+   contracts a fixed leg set for every structure choice). Expand first so a term carrying an inner Dirac
+   Plus (e.g. a σ commutator written out) splits into monomials. *)
+diracSlotSumQ[p_Plus] := Module[{terms = List @@ Expand[p], opens, lors},
+  opens = openSpinorOf /@ terms;
+  lors  = Sort /@ (openLorentzOf /@ terms);
+  AllTrue[terms, ! FreeQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &] &&
+    AllTrue[opens, Length[#] === 2 &] && SameQ @@ (Sort /@ opens) &&
+    Length[First[lors]] >= 1 && SameQ @@ lors];
+diracSlotSumQ[_] := False;
+
+(* Decompose a collectible vertex sum into `(commonColour) (commonScalar) ntDiracSlot[opts, din, dout,
+   legs]`, where each option is `{residualScalarCoeff, structureProduct}` and `structureProduct` is the
+   term's Dirac + Lorentz-net factors (colour and the common scalar factored out). $Failed if the colour
+   factor is not common across terms (then the sum is left to distribute). *)
+diracSlotDecompose[p_Plus] := Module[
+  {terms = List @@ Expand[p], legs, dinout, rows, cols, common, scals, commonScal, opts},
+  If[! diracSlotSumQ[p], Return[$Failed]];
+  legs   = Sort @ openLorentzOf[First[terms]];
+  dinout = Sort @ openSpinorOf[First[terms]];   (* order arbitrary — the structure carries the real din/dout *)
+  (* per term -> {scalar, sorted colour factors, sorted structure (Dirac + Lorentz-net, no colour/scalar)} *)
+  rows = Function[t, Module[{facs = If[Head[t] === Times, List @@ t, {t}], scal, col, struct},
+     scal   = Times @@ Select[facs, scalarQ];
+     col    = Sort @ Select[facs, (fundamentalSUNQ[#] || adjointSUNQ[#]) &];
+     struct = Sort @ Select[facs, (tensorQ[#] && ! (fundamentalSUNQ[#] || adjointSUNQ[#])) &];
+     {scal, col, struct}]] /@ terms;
+  cols = rows[[All, 2]];
+  If[! AllTrue[cols, # === cols[[1]] &], Return[$Failed]];   (* colour must factor out of the slot *)
+  common = cols[[1]];
+  (* factor the scalar common to every term (propagator denominator, flavour δ, …) out; the per-term
+     dressing residual (Zqbq1 vs Zqbq4 vs …) stays inside the option. *)
+  scals = Function[s, If[Head[s] === Times, List @@ s, {s}]][#[[1]]] & /@ rows;
+  commonScal = commonFactorMultiset[scals];
+  opts = MapThread[Function[{r, sf},
+     {Times @@ Fold[DeleteCases[#1, #2, {1}, 1] &, sf, commonScal], Times @@ r[[3]]}], {rows, scals}];
+  (Times @@ common) * (Times @@ commonScal) * ntDiracSlot[opts, dinout[[1]], dinout[[2]], legs]];
+diracSlotDecompose[_] := $Failed;
+
+(* Inverse: expand a collected slot back into its distributed Dirac structure sum (for redistDiagram's
+   small-D cross-check). Each option is coeff × its whole structure product, so this is exact. *)
+expandDiracSlot[ntDiracSlot[opts_, _, _, _]] := Plus @@ ((#[[1]] * #[[2]]) & /@ opts);
 
 (* Re-distribute ONE analysed (collected) diagram back to the non-collected path: rebuild its net,
    expand every ntDressedNum into the Dirac structure sum, distribute, drop odd-gamma traces, and

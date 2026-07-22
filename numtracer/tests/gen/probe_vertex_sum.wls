@@ -54,10 +54,29 @@ vertexCandQ[_] := False;
 
 cands = DeleteDuplicates @ Cases[net, p_Plus /; vertexCandQ[p] :> p, {0, Infinity}];
 Print["\n#### vertex-sum (open-Lorentz-leg) candidates found = ", Length[cands]];
+
+(* Stage 4 R2: validate the general Dirac-slot decompose/expand on the REAL captured vertex sums. *)
+dec = NumTracer`Private`diracSlotDecompose;
+exp = NumTracer`Private`expandDiracSlot;
+sumQ = NumTracer`Private`diracSlotSumQ;
+nDS = NumTracer`Private`ntDiracSlot;
+rtFails = 0;
+Do[
+  Module[{p = cands[[i]], d, r},
+    Print["\n---- candidate ", i, ": diracSlotSumQ = ", TrueQ[sumQ[p]], " ----"];
+    d = dec[p];
+    If[d === $Failed, Print["  decompose = $Failed  ROUND-TRIP FAIL"]; rtFails++,
+      Print["  slot legs = ", Cases[d, nDS[_, _, _, l_] :> l, {0, Infinity}],
+            "   #options = ", Cases[d, nDS[o_, _, _, _] :> Length[o], {0, Infinity}]];
+      r = d /. s_nDS :> exp[s];
+      If[Simplify[Expand[p] - Expand[r]] === 0,
+        Print["  round-trip: expand@decompose == Expand[sum]  ok"],
+        Print["  round-trip MISMATCH  FAIL"]; rtFails++]]];
+, {i, 1, Length[cands]}];
+Print["\n#### REAL-vertex round-trip: ", If[rtFails == 0, "ALL PASS", ToString[rtFails] <> " FAIL"]];
+
 Do[
   Print["\n================ vertex candidate ", i, " (nterms=", Length[cands[[i]]], ") ================"];
   Print["freeIdx        = ", freeIdx[cands[[i]]]];
   Print["lorentzFreeLegs= ", lorentzFreeLegs[cands[[i]]]];
-  Print["per-term:"];
-  Do[Print["  term ", j, ": ", FullForm[(List @@ cands[[i]])[[j]]]], {j, 1, Length[cands[[i]]]}];
 , {i, 1, Length[cands]}];

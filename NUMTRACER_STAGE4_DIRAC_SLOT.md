@@ -159,8 +159,34 @@ subsumes it. All `test_dpoly` cases C–H migrated to the new form (still exact)
   2-leg net, all three nonzero (|tr| 43/43/16), collected == distributed to ≤7e-15. Proves
   `numeric_value_netval` closes an arbitrary open-leg count through the slot.
 
-All 35 non-codegen tests green. **Next: R2** (Wolfram `collectibleDiracSlotQ`/`diracSlotDecompose`/
-`ntDiracSlot`/`expandDiracSlot`, general k) with the pre-distribution round-trip test.
+All 35 non-codegen tests green.
+
+**R2 — Wolfram decomposer, general k — LANDED 2026-07-22.**
+`DSL.m` gains `ntDiracSlot[opts, din, dout, legs]` (registered in `tensorQ`/`scalarQ`/`labelsOf`
+[= `Join[legs,{din,dout}]`]/`spinorLabelsHead`), and:
+- `openLorentzOf[t]` / `colourLabelsOf[e]` — a term's open Lorentz legs = free indices that are neither
+  spinor nor colour (the gluon axes).
+- `diracSlotSumQ[p]` — a Plus whose EXPANDED terms each carry Dirac structure, the same 2 open spinor
+  indices, and the same NON-EMPTY open-leg set (k≥1; k=0 stays on the `ntDressedNum` path).
+- `diracSlotDecompose[p]` → `(commonColour)(commonScalar) · ntDiracSlot[opts, din, dout, legs]`, each
+  option `{residualDressing, structureProduct}` with the structure kept WHOLE (Dirac chain × its
+  Lorentz-net factors, e.g. the gluon projector on the open leg); the toks/netFacs split is deferred to
+  codegen (R4). `Expand` first so an inner Dirac Plus (a σ commutator) splits into monomial options.
+- `expandDiracSlot` — inverse (for `redistDiagram`).
+
+Design choice: the slot's open legs = the **sum's free Lorentz legs** (the external gluon axis reached
+through the common propagator), NOT the internal γ index — so no per-term relabelling is needed and the
+common projector factors out cleanly. Validated by round-trip (`expand@decompose ≡ Expand[sum]`):
+- synthetic k=1 (open leg via a projector) and k=2 (Dirac legs / a metric / mixed vec+γ) — exact
+  (`tests/gen/test_diracslot_roundtrip.wls`).
+- the **three real `za3_147` `AqbqDirect147` vertex sums** captured pre-distribution — exact, legs
+  `{v_i}`, 6/14/9 options each (`Expand` distributes the T7 commutator into monomial options; each slot
+  is ONE collected trace vs 3ⁿ diagrams). `tests/gen/probe_vertex_sum.wls`.
+
+Existing flows are untouched (the new head appears in no current expression; the collection gate is not
+yet wired — that is R3). **Next: R3** (route `collectibleDiracSumQ`/`distributeQ`/`rewriteDressedNums`
+through `ntDiracSlot`, regen + grade), then **R4** (codegen token: split each option into `toks`/`netFacs`
+and emit `DSlotOpt`), then **R5** (full-basis flow grade + retire the `AqbqDirect1` restriction).
 
 ## Ground-truth evidence (probe `tests/gen/probe_vertex_sum.wls`, captured pre-`expandBridges`)
 
