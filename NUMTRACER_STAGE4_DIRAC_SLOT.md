@@ -258,7 +258,29 @@ The 26.9 s is **entirely phase-B lowering**, and it is **serial**:
 `GlobalEnv`, optionally `FusedStream` cross-CSE), and sharing forces serial lowering. The two things the
 user liked — small kernel — and disliked — slow generation — are two sides of the same coin.
 
-### Fix options (trade-offs, none free)
+### CORRECTION (measured 2026-07-22): the bottleneck is the CONTRACTION, not the sink
+
+Implementing the parallel sink (optional mutex on `GlobalEnv::intern` + parallel per-group `to_genprog`)
+and regenerating `za3_147` moved phase B **not at all** (26.9 s → 28.1 s). `NT_GEN_POLYSTATS=1` shows why:
+the collected DPolys are **small** (monos 6 / 18 / 113 / 1568; SSA ≤ 4717) — lowering is *fast*. The 28 s
+is the dressed **contraction** (`dress_collect` enumerating the quark-triangle option combinations), and
+it runs **inside phase B's fold**, not phase A: because no trace recurs (`nReused=0 → nCache=0`), the
+traces are contracted **on demand** in `fold_net`. The fold is parallel over nets, but there are only ~6
+nets and ONE dominates (its `dress_collect` does ~37 `numeric_value_netval` contractions **serially**).
+So the earlier "serial sink" reading was wrong: the sink is cheap; the serial cost is `dress_collect`.
+The parallel-sink change was reverted (correct but it optimises the wrong phase; shipping an unvalidated
+optimisation violates the measure-everything discipline).
+
+**The real fix: parallelise `dress_collect`'s combination enumeration** (each combination is an
+independent `contract` → accumulate; a flat parallel work list with a serial merge). The wrinkle is
+nesting — `dress_collect` runs *inside* the phase-B fold's `parallel_flat`, so either (a) make the
+dressed fold serial and let `dress_collect` use the cores (few dressed nets, so ≈ full parallelism, no
+nesting), or (b) expose each collected net's combinations to phase A's flat work list (the "matrix-of-
+DPoly" contraction, plan 4b) so the existing phase-A parallelism covers them. `numeric_contract.hpp`
+can't include `trace_fold.hpp` (circular; the net-builder TUs forbid its threads), so this needs a small
+shared parallel primitive or the fold restructured. This is the correct next optimisation.
+
+### Fix options (superseded by the correction above — kept for the design record)
 1. **Parallelise the sink into thread-local `GlobalEnv`s, then merge** — lower the 4 groups' DPolys
    concurrently, remap+dedup their programs at the end. Up to ~min(nGroups, cores)× on this phase; keeps a
    (near-)shared final kernel. The real work is a correct, cheap env-merge (remap instruction refs, dedup
