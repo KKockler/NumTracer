@@ -234,11 +234,49 @@ factor across — it trades the two runtime-lowering optimisations for the diagr
 
 **Implication.** Stage 4's payoff is diagram count, Mathematica-analysis time, emitted **kernel size**, and
 (expected) contraction **RAM** — NOT generator wall-time. On a small compile-light flow like `za3_147` the
-DPoly-lowering cost dominates and collection is a net time LOSS. The north-star bet is that on the dense
-`ZAAqbq` monsters — where distribution's RAM forces `nB=1..2` — the RAM/size win still pays off; that
-must be measured on `ZAAqbq` directly, and the DPoly reduce/lower path is now the thing to profile and
-optimise (or gate collection to only the flows where RAM forces it). This reframes W1: it is a
-**RAM/size** lever, and its generator-run cost is a real regression to weigh, not a speedup.
+DPoly-lowering cost dominates and collection is a net time LOSS.
+
+### Root cause of the generator-run regression (profiled, `NT_GEN_PROFILE=1`)
+
+```
+[num] phase A: 6 distinct traces, 0 cached, table 0.0 MB, 0.0 s (W=32)   ← contraction is FREE
+[num] phase B+lower: 6 nets in 4 groups, window 6, 26.9 s (W=32)          ← ALL the cost is here
+```
+The 26.9 s is **entirely phase-B lowering**, and it is **serial**:
+- In `fold_groups_streaming` (`trace_fold.hpp`) the per-net **fold** is parallel (`parallel_flat`, W=32),
+  but the **`sink` — the `to_genprog(acc)` lowering — runs on the calling thread in the drain loop**,
+  once per group in ascending order. That serial order is deliberate: every group lowers into ONE shared
+  `GlobalEnv g`, whose interning is what makes the kernel small (178 KB) and reproducible.
+- With collection there are only ~6 nets / 4 groups, each a **big DPoly** (the summed structure×dressing
+  combinations), so lowering is ~4–6 serial `to_genprog` calls on 32 cores — ≤6-way, 26 idle cores.
+- Compounding it: the collected DPoly is a bigger lowering job than the 221 distributed traces, because
+  distribution keeps them small + **dedup'd + cross-net-interned** (`best_into`/`GlobalEnv` sharing folds
+  the 221 to a compact program in 0.34 s), whereas the collected sum is one large unique polynomial the
+  CSE cannot factor across.
+
+**The tension is fundamental:** the small kernel comes from SHARING (serial interning into one
+`GlobalEnv`, optionally `FusedStream` cross-CSE), and sharing forces serial lowering. The two things the
+user liked — small kernel — and disliked — slow generation — are two sides of the same coin.
+
+### Fix options (trade-offs, none free)
+1. **Parallelise the sink into thread-local `GlobalEnv`s, then merge** — lower the 4 groups' DPolys
+   concurrently, remap+dedup their programs at the end. Up to ~min(nGroups, cores)× on this phase; keeps a
+   (near-)shared final kernel. The real work is a correct, cheap env-merge (remap instruction refs, dedup
+   constants). Best long-term answer; a non-trivial C++ change in `trace_fold.hpp` + `gen.hpp`.
+2. **Parallelise CSE, serialise only interning** — if `best_into` does its heavy CSE/Horner into the
+   thread-local `RBuilder w` and only touches shared `g` for constant interning, split those: build `w`
+   per group in parallel, fold `w→g` serially. Smaller change than (1) if the split is clean; needs a
+   look at `best_into`'s `w` vs `g` work division.
+3. **Independent per-group lowering (no shared env)** — trivially parallel, but a BIGGER kernel (loses
+   cross-group interning). Directly trades the kernel-size win for generation speed; measure both.
+4. **Gate collection to RAM-bound flows** — collect only where distribution's RAM forces low `nB`
+   (`ZAAqbq`); distribute the compile-light flows (`za3_147`). Sidesteps the regression but forfeits the
+   kernel-size win on the non-collected flows.
+
+**Recommendation.** Measure the RAM/`nB`/time picture on a real `ZAAqbq` regen first (the north-star flow —
+its distributed lowering is itself the bottleneck there, so collection may WIN on time too, not just RAM).
+Then pursue (2)→(1) to reclaim the phase-B parallelism while keeping the small kernel. This reframes W1 as
+a **RAM/size** lever whose generator-run cost is a real, now-understood regression with a clear fix path.
 
 **Remaining.** A k=2 flow-grade (a flow with an INTERNAL two-gluon `AAqbq` vertex — the mechanism is
 already validated by engine test J + the synthetic k=2 decompose/gate, only an end-to-end flow is
