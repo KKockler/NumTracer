@@ -286,11 +286,39 @@ namespace numtracer::network
       }
     }
 
-    /// Apply the NT_GEN_NOINLINE_TRACES escape hatch to a decorator (see @ref emit_cpp).
-    inline std::string eff_decor(const std::string &decor)
+    /// @brief Decide the effective decorator for one emitted trace/chunk function of @p nInstr SSA
+    ///        instructions, out-of-lining it when that is faster (see @ref emit_cpp).
+    ///
+    /// SIZE-GATED, DEVICE ONLY. Measured on sm_89 (RTX 4070), GPU runtime, sweep over 12 flows: whether a
+    /// trace function should be `inline` tracks its OWN instruction count, not the whole-kernel size. A
+    /// function inlined into the kernel adds its SSA temporaries to the register pool; past ~500
+    /// instructions that spills (up to 26 KB/thread on the dense 4-point flows) and the kernel goes
+    /// memory-bound, so out-of-lining is runtime-FASTER — ZA4 (655 instr/fn) 0.73x, ZAAqbq1 (772) 0.70x —
+    /// as well as ~3x cheaper to compile. BELOW the threshold inlining wins decisively via cross-trace CSE
+    /// and no call overhead: ZAqbq1_147's 108 small (125-instr) functions run 1.66x FASTER inlined, even
+    /// though that kernel is large. So the gate is per-function, and it never picks the losing side on the
+    /// swept flows (>=500: noinline wins or ties; <500: inline wins).
+    ///
+    /// Only for DEVICE code (the decorator carries `__device__`): the host has no 255-register cliff, and
+    /// its all-inline emission stays byte-identical. Overrides:
+    ///   NT_GEN_NOINLINE_TRACES : force out-of-line for EVERY function (host+device) — the compile-cost
+    ///                            lever for the 100k+-line kernels, and the A/B control.
+    ///   NT_GEN_NOINLINE_MIN=N  : set the per-function threshold (default 500; 0 = always out-of-line on device).
+    inline std::string eff_decor(const std::string &decor, std::size_t nInstr = 0)
     {
       std::string effDecor = decor;
-      if (std::getenv("NT_GEN_NOINLINE_TRACES")) {
+      bool noinline = std::getenv("NT_GEN_NOINLINE_TRACES") != nullptr;
+      if (!noinline && decor.find("__device__") != std::string::npos) {
+        static const std::size_t thr = [] {
+          if (const char *e = std::getenv("NT_GEN_NOINLINE_MIN")) {
+            const long v = std::atol(e);
+            if (v >= 0) return static_cast<std::size_t>(v);
+          }
+          return static_cast<std::size_t>(500);
+        }();
+        noinline = nInstr > thr;
+      }
+      if (noinline) {
         const std::string kw = " inline";
         if (effDecor.size() >= kw.size() && effDecor.compare(effDecor.size() - kw.size(), kw.size(), kw) == 0)
           effDecor.replace(effDecor.size() - kw.size(), kw.size(), " __attribute__((noinline))");
@@ -307,13 +335,12 @@ namespace numtracer::network
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor)
   {
-    // Compile-time escape hatch (NT_GEN_NOINLINE_TRACES): force the per-diagram trace functions OUT-OF-LINE.
-    // The default all-inlined emission is runtime-optimal — any register spill on a huge fused kernel is
-    // benign (the loop is fp64-pipe-bound, and inlining keeps cross-trace CSE), so out-of-lining is measurably
-    // slower. Its only purpose is compile cost: out-of-lining roughly halves the nvcc compile time and RAM of
-    // the largest (100k+-line) kernels. `__attribute__((noinline))` is honoured by both g++ (host) and nvcc
-    // (device); fill()/powr stay inline. See PERFORMANCE.md / tests/gpu/README.md for the measurements.
-    const std::string effDecor = edetail::eff_decor(decor);
+    // Per-function inline decision (see @ref edetail::eff_decor): on the DEVICE target a trace function
+    // above ~500 SSA instructions is out-of-lined (register isolation — measurably faster AND cheaper to
+    // compile), below that it stays inline (cross-trace CSE wins). Host emission is unchanged (byte-identical).
+    // NT_GEN_NOINLINE_TRACES forces out-of-line everywhere; `__attribute__((noinline))` is honoured by both
+    // g++ and nvcc; fill()/powr stay inline.
+    const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
     auto emitRhs = [&out](const RInstr &in) { edetail::emit_rhs(out, in); };
     // Liveness of the SSA slots: a slot that feeds neither a result root nor another slot's operand is
     // dead (greedy Horner + CSE occasionally leaves one). Tag exactly those `const double sN` with
@@ -379,7 +406,7 @@ namespace numtracer::network
     inline void emit_fused_one(std::ostream &out, const FusedProg &p, const std::string &name,
                                const std::string &decor, bool anyComplex, const char *elemT)
     {
-    const std::string effDecor = edetail::eff_decor(decor);
+    const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
     const std::size_t n = p.root.size();
 
     std::vector<char> used(p.ins.size(), 0);
