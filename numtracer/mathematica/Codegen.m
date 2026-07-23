@@ -2171,7 +2171,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
 
 (* ---- whole kernel (boilerplate delegated to FunKit) ------------------------- *)
 (* regulator wrappers, prefixed with the user-chosen decorator (default plain "static inline";
-   pass e.g. "Decorator" -> "static __host__ __device__ inline" for CUDA-callable kernels) *)
+   pass e.g. "Decorator" -> "static __host__ __device__ inline" for CUDA-callable kernels).
+   Emitted ONLY under "RegulatorTemplate" -> True (the fRG/DiFfRG shape); see ntKernelClass. *)
 
 privDefs[decor_] :=
   StringRiffle[(decor <> " auto " <> # <> "(const auto &k2, const auto &p2) { return REG::" <> # <> "(k2, p2); }")& /@ {"RB", "RF", "RBdot", "RFdot", "dq2RB", "dq2RF"}, "\n"];
@@ -2183,6 +2184,39 @@ privDefs[decor_] :=
 
 ntReImDefs[decor_] :=
   StringRiffle[{decor <> " double ntRe(double x) { return x; }", "template <class T> " <> decor <> " double ntRe(const T &z) { return z.real(); }", decor <> " double ntIm(double) { return 0.0; }", "template <class T> " <> decor <> " double ntIm(const T &z) { return z.imag(); }"}, "\n"];
+
+(* ---- the kernel CLASS. -----------------------------------------------------------------------
+   Two shapes, one code path (it is emitted twice — once up front, once after the real probe
+   re-lowers the integrand — and the two must not drift):
+
+     regTemplate = False (DEFAULT, the general emission): a PLAIN class. NumTracer emits the kernel
+       and nothing else; a flow whose dressing rules mention RB/RF/RBdot/RFdot/dq2RB/dq2RF emits
+       UNQUALIFIED calls to them, which the consumer supplies (e.g. via "ExtraIncludes" -> {hdr},
+       or from the "RuntimeInclude" header). Unqualified lookup runs class -> kernel namespace ->
+       global, so free functions at global scope are found from any "KernelNamespace".
+
+     regTemplate = True (the fRG/DiFfRG shape): `template<typename REG> class ...` plus the six
+       private wrappers forwarding to REG::. DiFfRG's scaffold forward-declares the kernel as a
+       template and instantiates it as KERNEL<Regulator>, so MakeNTKernelDiFfRG needs this.
+
+   regAlias adds `using Regulator = REG;` (DiFfRG reads it back off the kernel class) and only makes
+   sense with the template, which is why it implies it at the call sites below. *)
+
+ntKernelClass[name_, members_List, decor_, regTemplate_, regAlias_, extraPriv_List] :=
+  FunKit`MakeCppClass[
+    Sequence @@
+      If[TrueQ[regTemplate],
+        {"TemplateTypes" -> {"REG"}},
+        {}],
+    "Name" -> name,
+    "MembersPublic" ->
+      If[TrueQ[regAlias],
+        Prepend[members, "using Regulator = REG;"],
+        members],
+    "MembersPrivate" ->
+      If[TrueQ[regTemplate],
+        Join[{privDefs[decor]}, extraPriv],
+        extraPriv]];
 
 (* ---- emit helpers: support `using`s, namespace wrapping, runtime include -------------------
    A generated kernel pulls its math helpers (complex, powr, pow, sqrt, fma) from a configurable
@@ -2254,6 +2288,7 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
     "KernelNamespace" -> "numtracer_kernels",
     "SupportNamespace" -> "numtracer",
     "DressingType" -> Automatic,
+    "RegulatorTemplate" -> False,
     "RegulatorAlias" -> False,
     "RealProbe" -> True,
     "PruneRealTraces" -> False,
@@ -2296,7 +2331,15 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
      "SupportNamespace" -> "ns"         : where `complex`/`compute` are looked up via `using`
         (default "numtracer").
      "DressingType" -> Automatic | "T"  : dressing-parameter type; Automatic emits `const auto&`
-        (fully generic), or give a concrete type string. *)
+        (fully generic), or give a concrete type string.
+     "RegulatorTemplate" -> False       : by default the kernel is a PLAIN class. A flow whose
+        dressing rules use the regulators emits unqualified RB/RF/RBdot/RFdot/dq2RB/dq2RF calls,
+        which the CONSUMER supplies — put them at global (or kernel-namespace) scope in a header and
+        pull it in with "ExtraIncludes" -> {"my_regulators.hpp"} (or from the "RuntimeInclude"
+        header). True restores the fRG/DiFfRG shape: `template<typename REG> class ...` plus private
+        wrappers forwarding to REG::. Implied by "RegulatorAlias".
+     "RegulatorAlias" -> False          : emit `using Regulator = REG;` in the class (DiFfRG reads
+        the regulator type back off the kernel). Implies "RegulatorTemplate" -> True. *)
 (* "RunGenerator" -> False: emit the generator sources only, without compiling/running them
    (the committed traces header is left untouched). *)
 (* "Decorator" -> "<prefix>": the function prefix on EVERY emitted function — kernel/constant,
@@ -2621,7 +2664,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
     Needs["FunKit`"];
 (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
    steps (the integrand Sum, COEN's expression lowering) recurse ~linearly in that count, so the
@@ -2659,6 +2702,10 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
     sns = OptionValue["SupportNamespace"];
     runInc = OptionValue["RuntimeInclude"];
     extraInc = OptionValue["ExtraIncludes"];
+(* the fRG/DiFfRG kernel shape (template<typename REG> + the private REG:: wrappers) is opt-in; the
+   Regulator alias is meaningless without it, so it implies it. *)
+    regAlias = TrueQ[OptionValue["RegulatorAlias"]];
+    regTemplate = TrueQ[OptionValue["RegulatorTemplate"]] || regAlias;
     interpTy = ntDressType[OptionValue["DressingType"]];
     ns = OptionValue["Namespace"] /. Automatic -> ToLowerCase[name];
     nsHome = kns <> "::" <> ns;(* where the generated trace fns / nenv / fill live *)
@@ -3088,15 +3135,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
         AbsoluteTiming[
           kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
-          classStr =
-            FunKit`MakeCppClass[
-              "TemplateTypes" -> {"REG"},
-              "Name" -> name,
-              "MembersPublic" ->
-                If[TrueQ[OptionValue["RegulatorAlias"]],
-                  Prepend[{kernelFn, constFn}, "using Regulator = REG;"],
-                  {kernelFn, constFn}],
-              "MembersPrivate" -> {privDefs[decor]}];
+          classStr = ntKernelClass[name, {kernelFn, constFn}, decor, regTemplate, regAlias, {}];
           hdrInc = FileNameTake[headerFile];
           header =
             FunKit`MakeCppHeader[
@@ -3330,15 +3369,7 @@ and ntRe(double)=passthrough / ntRe(complex)=.real() keeps it real arithmetic. *
             ntLog["[probe] imaginary part survives -> keeping the complex kernel (consumer takes Re)"]];
         If[verdict === "Pure" || verdict === "RePart",
           kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
-          classStr =
-            FunKit`MakeCppClass[
-              "TemplateTypes" -> {"REG"},
-              "Name" -> name,
-              "MembersPublic" ->
-                If[TrueQ[OptionValue["RegulatorAlias"]],
-                  Prepend[{kernelFn, constFn}, "using Regulator = REG;"],
-                  {kernelFn, constFn}],
-              "MembersPrivate" -> Join[{privDefs[decor]}, extraPriv]];
+          classStr = ntKernelClass[name, {kernelFn, constFn}, decor, regTemplate, regAlias, extraPriv];
           header = FunKit`MakeCppHeader["Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}], "Body" -> ntWrapBody[kns, classStr, name]]
         ]]];
     (* kernel header (write-if-changed). *)
@@ -3355,7 +3386,7 @@ and ntRe(double)=passthrough / ntRe(complex)=.real() keeps it real arithmetic. *
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0.};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0.};
 
 MakeNTKernel::disconnectmix = "Diagram `1` disconnects into >= 2 Dirac/colour trace components (a product of independent Dirac traces, a genuine >=2-loop structure). The numeric backend handles a single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored), but does not yet multiply two or more independent Dirac traces.";
 

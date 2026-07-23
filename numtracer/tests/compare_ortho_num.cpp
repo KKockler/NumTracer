@@ -39,11 +39,9 @@
 #include <cstdio>
 #include <random>
 
-struct Reg {}; // no regulator/dressing is referenced by this kernel
-
 int main()
 {
-  using K = numtracer_kernels::Ortho147_kernel<Reg>;
+  using K = numtracer_kernels::Ortho147_kernel;
   const double want = 36.0; // Prime[1] + Prime[5] + Prime[9]
 
   struct Pt { double l1, cos1, cos2, p1m, p2m, cosP; };
@@ -64,7 +62,7 @@ int main()
   std::printf("AqbqDirect147 weighted orthonormality trace: got=%.12f want=%.1f\n", first, want);
   std::printf("  worst |W - sum_i w_ii| = %.3e   kinematic spread = %.3e\n", worst, spread);
 
-  using K12 = numtracer_kernels::Ortho12_kernel<Reg>;
+  using K12 = numtracer_kernels::Ortho12_kernel;
   const double want12 = 4543.0; // sum_i Prime[12*(i-1)+i]
   double worst12 = 0.0, spread12 = 0.0, first12 = 0.0;
   for (std::size_t i = 0; i < sizeof(pts) / sizeof(pts[0]); ++i) {

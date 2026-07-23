@@ -14,15 +14,15 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = cos1;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = -0.74999999999999989;
-  const double s1 = 0.8660254037844386;
+  const double s0 = -0.75;
+  const double s1 = 0.86602540378444004;
   const double s2 = f[2];
   const double s3 = s1*s2;
   const double s4 = f[1];
   const double s5 = s0*s4;
   const double s6 = s3+s5;
   const double s7 = 0.75;
-  const double s8 = 0.99999999999999989;
+  const double s8 = 1;
   const double s9 = s2*s2;
   const double s10 = s7*s9;
   const double s11 = s8+s10;

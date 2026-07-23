@@ -18,7 +18,7 @@
 
 int main() {
   using Dense = DiFfRG::ZA3_147_num_dense_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::ZA3_147_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::ZA3_147_num_kernel;
   DressingSet d;
   auto cDense = [&](double l, double c1, double c2, double p, double k) {
     return std::real(Dense::kernel(l, c1, c2, p, k, d.ZA3, d.ZAcbc, d.ZA4, d.ZAqbq1, d.ZAqbq4, d.ZAqbq7,

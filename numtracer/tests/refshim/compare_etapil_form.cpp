@@ -16,7 +16,7 @@
 int main()
 {
   using Form  = DiFfRG::EtaPiL_form_kernel<DiFfRG::ShimRegulator>;
-  using Num   = DiFfRG::EtaPiL_num_kernel<DiFfRG::ShimRegulator>;
+  using Num   = DiFfRG::EtaPiL_num_kernel;
   DressingSet d;
 
   // scalar runtime params (etaPiL, etaSigL, d1V, d2V, rhoL); only rhoL (the quark constituent mass

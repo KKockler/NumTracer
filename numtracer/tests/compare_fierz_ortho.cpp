@@ -30,8 +30,7 @@
 
 int main()
 {
-  using Reg = double;
-  using K = numtracer_kernels::FierzOrtho_kernel<Reg>;
+  using K = numtracer_kernels::FierzOrtho_kernel;
 
   const double want = 2451.0;
   std::mt19937_64 rng(20260718);

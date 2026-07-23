@@ -17,8 +17,6 @@
 #include <cstdio>
 #include <random>
 
-struct Reg {}; // no regulator/dressing is referenced by these kernels
-
 namespace {
 constexpr double Nc = 3.0;
 using V4 = std::array<double, 4>;
@@ -41,7 +39,7 @@ double oracle(double l1, double cos1, double cos2, double p)
 
 int main()
 {
-  using Num = numtracer_kernels::Discdirac_num_kernel<Reg>;
+  using Num = numtracer_kernels::Discdirac_num_kernel;
 
   std::mt19937_64 rng(31337);
   std::uniform_real_distribution<double> Ul(0.05, 3.0), Uc(-0.999, 0.999);

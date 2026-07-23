@@ -72,5 +72,8 @@ ntk = NumTrace[net, "Frame" -> frame, "Args" -> {Global`l1, Global`cos1, Global`
 NumTracer`Private`$NumTracerFundETMaxEntries = 0;
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_glu_quark_num.cpp"}],
   FileNameJoin[{$gen, "Glu_quark_num_kernel.hh"}], FileNameJoin[{$gen, "Glu_quark_num_kernels.hh"}],
-  "Name" -> "Glu_quark_num_kernel", "Namespace" -> "glu_quark_num"];
+  "Name" -> "Glu_quark_num_kernel", "Namespace" -> "glu_quark_num",
+  (* the kernel calls RF/RFdot unqualified (NumTracer emits no regulators); this flow uses the
+     SELF-CONTAINED runtime, not the shim, so it must pull the test regulators in itself. *)
+  "ExtraIncludes" -> {"nt_regulators.hpp"}];
 Print["gluon->quark-loop->gluon numeric kernel generated."];

@@ -52,5 +52,8 @@ ntk   = NumTrace[net, "Frame" -> frame, "Args" -> {Global`l1, Global`cos1, Globa
 
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_sigl_dirac_num.cpp"}],
   FileNameJoin[{$gen, "Sigl_dirac_num_kernel.hh"}], FileNameJoin[{$gen, "Sigl_dirac_num_kernels.hh"}],
-  "Name" -> "Sigl_dirac_num_kernel", "Namespace" -> "sigl_dirac_num"];
+  "Name" -> "Sigl_dirac_num_kernel", "Namespace" -> "sigl_dirac_num",
+  (* the kernel calls RF/RFdot unqualified (NumTracer emits no regulators); this flow uses the
+     SELF-CONTAINED runtime, not the shim, so it must pull the test regulators in itself. *)
+  "ExtraIncludes" -> {"nt_regulators.hpp"}];
 Print["σL δ-closed meson-loop regression kernel generated (numeric)."];

@@ -17,8 +17,6 @@
 #include <cstdio>
 #include <random>
 
-struct Reg {}; // no regulator/dressing is referenced by these kernels
-
 namespace {
 using V4 = std::array<double, 4>;
 double dot4(const V4 &a, const V4 &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; }
@@ -41,7 +39,7 @@ double oracle(double p0, double p, double l0, double l1, double cos1)
 
 int main()
 {
-  using Num = numtracer_kernels::FTProj_num_kernel<Reg>;
+  using Num = numtracer_kernels::FTProj_num_kernel;
 
   std::mt19937_64 rng(31337);
   std::uniform_real_distribution<double> Up(0.05, 3.0), Uc(-0.999, 0.999), Ut(-3.0, 3.0);

@@ -30,7 +30,7 @@
 
 int main() {
   using Form = DiFfRG::YM_ZA4_form_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::YM_ZA4_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::YM_ZA4_num_kernel;
 
   // s3/s4 in {0,1} by swapping the ZA3 / ZA4 dressing for an identically-zero one.
   auto mk = [](bool s3, bool s4) {

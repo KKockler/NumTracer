@@ -160,6 +160,28 @@ test shim. A `"Decorator"` option annotates the kernel for GPU use (`__host__ __
 `"AngleDefs"` hoists shared kinematic angle definitions into the kernel body so a common angular
 `sqrt` is computed once.
 
+### Regulators are the consumer's
+
+The emitted kernel is a **plain class** — no regulator template parameter, no regulator definitions.
+NumTracer emits the kernel and nothing else. A flow whose dressing rules mention the regulators (the
+inverse propagators typically do) emits **unqualified** calls to `RB`, `RF`, `RBdot`, `RFdot`,
+`dq2RB`, `dq2RF`, exactly as it emits unqualified calls to the dressing parameters and to `powr`.
+Supplying them is the consumer's job: put them in a header and pull it in with
+
+```wolfram
+"ExtraIncludes" -> {"my_regulators.hpp"}
+```
+
+(or define them in the `"RuntimeInclude"` header). Definitions at global scope are found from a
+kernel emitted into any `"KernelNamespace"`, since unqualified lookup runs class → namespace →
+global. The in-repo tests do exactly this — see `tests/refshim/nt_regulators.hpp`, which
+`tests/refshim/shim.hpp` includes so every shim-emitted kernel gets it for free.
+
+`"RegulatorTemplate" -> True` restores the fRG/DiFfRG shape instead: `template<typename REG> class
+…` plus private wrappers forwarding to `REG::RB` and friends. `MakeNTKernelDiFfRG` sets it (with
+`"RegulatorAlias" -> True`, which emits `using Regulator = REG;` and implies it), because DiFfRG's
+scaffold forward-declares the kernel as a template and instantiates it as `KERNEL<Regulator>`.
+
 A few further `MakeNTKernel` options shape the emitted kernel: `"GlobalCollect"` (default
 `True`) folds fundamental colour numerically so diagrams sharing a dressing coefficient merge
 into one trace; `"ScalarParams"` threads extra loop-independent doubles into the signature;

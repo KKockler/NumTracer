@@ -35,7 +35,7 @@ double zero(double) { return 0.0; }
 int main()
 {
   using Form = DiFfRG::Flavour_split_form_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::Flavour_split_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::Flavour_split_num_kernel;
 
   const DiFfRG::Fn Gu{&gu}, Gd{&gd}, GuDot{&guDot}, GdDot{&gdDot}, Z{&zero};
 

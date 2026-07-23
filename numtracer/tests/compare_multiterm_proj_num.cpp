@@ -48,8 +48,6 @@
 #include <cstdio>
 #include <random>
 
-struct Reg {}; // no regulator/dressing is referenced by this kernel
-
 namespace {
 using V4 = std::array<double, 4>;
 double dot(const V4 &a, const V4 &b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; }
@@ -66,7 +64,7 @@ double oracle(double l1, double cos1, double cos2, double p)
 
 int main()
 {
-  using Num = numtracer_kernels::Multiterm_proj_num_kernel<Reg>;
+  using Num = numtracer_kernels::Multiterm_proj_num_kernel;
 
   std::mt19937_64 rng(31337);
   std::uniform_real_distribution<double> Ul(0.05, 3.0), Uc(-0.999, 0.999);
@@ -81,7 +79,7 @@ int main()
   std::printf("multi-term projector codegen numeric vs analytic:  pointwise=%.3e  maxAbs=%.3e\n", pw, maxAbs);
 
   // collapsed delta-loop: tr(1)=4 must survive a token-free spinor loop
-  using Del = numtracer_kernels::Deltaloop_num_kernel<Reg>;
+  using Del = numtracer_kernels::Deltaloop_num_kernel;
   std::mt19937_64 rng2(90210);
   double pwD = 0, maxAbsD = 0;
   for (int i = 0; i < 200000; ++i) {
@@ -101,7 +99,7 @@ int main()
   }
 
   // momentum-free metric loop: g_{uv} g^{uv} = D = 4
-  using Met = numtracer_kernels::Metricloop_num_kernel<Reg>;
+  using Met = numtracer_kernels::Metricloop_num_kernel;
   std::mt19937_64 rng3(5150);
   double pwM = 0, maxAbsM = 0;
   for (int i = 0; i < 200000; ++i) {
@@ -127,7 +125,7 @@ int main()
   //   => 3 + (-2)(4) = -5, times the Lorentz factor (q1.ql).
   // The sign matters: a fix that dropped a branch, or summed the branches as a product, would land
   // on +3, -8 or -24 rather than -5, all of which this catches.
-  using Csum = numtracer_kernels::Colsum_num_kernel<Reg>;
+  using Csum = numtracer_kernels::Colsum_num_kernel;
   std::mt19937_64 rng4(90210);
   double pwC = 0, maxAbsC = 0;
   for (int i = 0; i < 200000; ++i) {
@@ -154,7 +152,7 @@ int main()
   //   2*6 + 3*(-6) + 5*2 + 7*(-2) = -10
   // Direct vs crossed differ ONLY by the antisymmetry sign, so a dropped Signature flips H2/H4 and
   // lands on +22 rather than perturbing -10 — a sign error cannot hide here.
-  using Eps = numtracer_kernels::Epsfund_num_kernel<Reg>;
+  using Eps = numtracer_kernels::Epsfund_num_kernel;
   std::mt19937_64 rng5(31337);
   double pwE = 0, maxAbsE = 0;
   for (int i = 0; i < 200000; ++i) {
@@ -181,7 +179,7 @@ int main()
   // Oracle: eps^abc f^abc = f^abc f^abc = 3! = 6 for SU(2), times (q1.ql). This contraction is
   // LINEAR in the rewrite coefficient, which is the point: every quadratic-in-eps contraction is
   // invariant under c -> -c and would pass with the sign inverted.
-  using Eadj = numtracer_kernels::Epsadj_num_kernel<Reg>;
+  using Eadj = numtracer_kernels::Epsadj_num_kernel;
   std::mt19937_64 rng6(24601);
   double pwA = 0, maxAbsA = 0;
   for (int i = 0; i < 200000; ++i) {
@@ -209,7 +207,7 @@ int main()
   // Oracle: summand 1 = 2 * (direct colour 6) * (direct flavour 2) = 24
   //         summand 2 = 3 * (crossed colour -6) * (crossed flavour -2) = 36   -> 60 * (q1.ql)
   // The crossed summand carries two sign flips, so one dropped Signature lands on -12, not near 60.
-  using Estr = numtracer_kernels::Epsstraddle_num_kernel<Reg>;
+  using Estr = numtracer_kernels::Epsstraddle_num_kernel;
   std::mt19937_64 rng7(90210);
   double pwS = 0, maxAbsS = 0;
   for (int i = 0; i < 200000; ++i) {
@@ -237,7 +235,7 @@ int main()
   // Oracle: colour deltaFund^2 = Nc = 3 in all 4 branches; the Dirac loop gives
   //   (2,3): 6*tr(1) = 24;  (7,5): 35*tr(q1slash qlslash) = 140*(q1.ql);  the two odd-gamma
   //   branches vanish.  ->  3*(24 + 140*(q1.ql)) = 72 + 420*(q1.ql)
-  using Cpow = numtracer_kernels::Colpow_num_kernel<Reg>;
+  using Cpow = numtracer_kernels::Colpow_num_kernel;
   std::mt19937_64 rng8(13579);
   double pwP = 0, maxAbsP = 0;
   for (int i = 0; i < 200000; ++i) {

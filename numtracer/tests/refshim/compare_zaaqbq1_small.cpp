@@ -56,8 +56,8 @@
 
 int main()
 {
-  using Dedup = DiFfRG::ZAAqbq1Small_num_kernel<DiFfRG::ShimRegulator>;
-  using Ref = DiFfRG::ZAAqbq1SmallRef_num_kernel<DiFfRG::ShimRegulator>;
+  using Dedup = DiFfRG::ZAAqbq1Small_num_kernel;
+  using Ref = DiFfRG::ZAAqbq1SmallRef_num_kernel;
   DressingSet d;
 
   std::mt19937_64 rng(31337);

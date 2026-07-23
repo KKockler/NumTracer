@@ -15,7 +15,7 @@
 
 int main() {
   using Form = DiFfRG::Glu_quark_form_kernel<DiFfRG::ShimRegulator>;
-  using Num = Glu_quark_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = Glu_quark_num_kernel;
 
   auto cF = [&](double l1, double c1, double p, double k) { return std::real(Form::kernel(l1, c1, p, k)); };
   auto cN = [&](double l1, double c1, double p, double k) { return std::real(Num::kernel(l1, c1, p, k)); };

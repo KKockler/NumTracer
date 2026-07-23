@@ -12,7 +12,7 @@
 
 int main() {
   using Form = DiFfRG::Zq_form_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::Zq_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::Zq_num_kernel;
   DressingSet d;
   auto cF = [&](double l1, double c1, double p, double k) {
     return std::real(Form::kernel(l1, c1, p, k, d.ZA, d.Zq, d.Mq, d.ZAqbq1, d.dtZA, d.dtZq));

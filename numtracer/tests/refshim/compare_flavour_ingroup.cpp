@@ -25,8 +25,8 @@ double gdDot(double x) { return 0.70 + 0.20 * std::cos(0.25 * x); }
 
 int main()
 {
-  using InGroup = DiFfRG::Flavour_ingroup_num_kernel<DiFfRG::ShimRegulator>;
-  using Split = DiFfRG::Flavour_split_num_kernel<DiFfRG::ShimRegulator>;
+  using InGroup = DiFfRG::Flavour_ingroup_num_kernel;
+  using Split = DiFfRG::Flavour_split_num_kernel;
 
   const DiFfRG::Fn Gu{&gu}, Gd{&gd}, GuDot{&guDot}, GdDot{&gdDot};
 

@@ -35,15 +35,15 @@ static inline double tr3([[maybe_unused]] const double *f) {
   return s6;
 }
 static inline double tr4([[maybe_unused]] const double *f) {
-  const double s0 = -0.74999999999999989;
-  const double s1 = -0.8660254037844386;
+  const double s0 = -0.75;
+  const double s1 = -0.86602540378444004;
   const double s2 = f[1];
   const double s3 = s1*s2;
   const double s4 = f[3];
   const double s5 = s0*s4;
   const double s6 = s3+s5;
   const double s7 = -0.25;
-  const double s8 = 0.99999999999999989;
+  const double s8 = 1;
   const double s9 = s2*s2;
   const double s10 = s7*s9;
   const double s11 = s8+s10;
@@ -55,7 +55,7 @@ static inline double tr4([[maybe_unused]] const double *f) {
   return s16;
 }
 static inline double tr5([[maybe_unused]] const double *f) {
-  const double s0 = 3.4641016151377544;
+  const double s0 = 3.4641016151378001;
   const double s1 = -2;
   const double s2 = f[1];
   const double s3 = s1*s2;
@@ -79,7 +79,7 @@ static inline double tr6([[maybe_unused]] const double *f) {
 }
 static inline double tr7(const double *f) { return tr3(f); }
 static inline double tr8([[maybe_unused]] const double *f) {
-  const double s0 = -1.9999999999999996;
+  const double s0 = -2;
   const double s1 = f[2];
   const double s2 = s1*s1;
   const double s3 = s0*s2;

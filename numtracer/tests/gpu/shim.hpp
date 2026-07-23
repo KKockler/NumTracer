@@ -25,6 +25,18 @@
 
 #define KOKKOS_FORCEINLINE_FUNCTION inline
 
+// ---- the regulators the generated kernels call UNQUALIFIED -------------------
+// NumTracer emits a plain kernel class; the consumer supplies RB/RF/... . Global scope,
+// so unqualified lookup from a kernel member (class -> namespace -> global) finds them.
+// Same formulas as tests/refshim/nt_regulators.hpp, carrying NT_DH because the GPU
+// kernels are __host__ __device__ and a plain host function cannot be called there.
+NT_DH inline double RB(double k2, double p2) { return k2 * std::exp(-p2 / k2); }
+NT_DH inline double RBdot(double k2, double p2) { return 2.0 * (k2 + p2) * std::exp(-p2 / k2); }
+NT_DH inline double RF(double k2, double p2) { return std::sqrt(k2) * std::exp(-p2 / k2); }
+NT_DH inline double RFdot(double k2, double p2) { return (k2 + 2.0 * p2) / std::sqrt(k2) * std::exp(-p2 / k2); }
+NT_DH inline double dq2RB(double, double) { return 0.0; }
+NT_DH inline double dq2RF(double, double) { return 0.0; }
+
 namespace DiFfRG {
 
 // The complex type the generated kernels resolve UNQUALIFIED (they are emitted without
@@ -112,14 +124,15 @@ struct Fn {
 template <class A, class B, class C> using SplineInterpolator1D = Fn;
 
 // ---- a fixed analytic regulator (same on both paths) -----------------------
-// Formulas verbatim from tests/refshim/shim.hpp.
+// The REG type parameter of the still-templated oracles; forwards to the free functions
+// above. The `::` is load-bearing — an unqualified RB here would recurse into the member.
 struct ShimRegulator {
-  NT_DH static double RB(double k2, double p2) { return k2 * std::exp(-p2 / k2); }
-  NT_DH static double RBdot(double k2, double p2) { return 2.0 * (k2 + p2) * std::exp(-p2 / k2); }
-  NT_DH static double RF(double k2, double p2) { return std::sqrt(k2) * std::exp(-p2 / k2); }
-  NT_DH static double RFdot(double k2, double p2) { return (k2 + 2.0 * p2) / std::sqrt(k2) * std::exp(-p2 / k2); }
-  NT_DH static double dq2RB(double, double) { return 0.0; }
-  NT_DH static double dq2RF(double, double) { return 0.0; }
+  NT_DH static double RB(double k2, double p2) { return ::RB(k2, p2); }
+  NT_DH static double RBdot(double k2, double p2) { return ::RBdot(k2, p2); }
+  NT_DH static double RF(double k2, double p2) { return ::RF(k2, p2); }
+  NT_DH static double RFdot(double k2, double p2) { return ::RFdot(k2, p2); }
+  NT_DH static double dq2RB(double k2, double p2) { return ::dq2RB(k2, p2); }
+  NT_DH static double dq2RF(double k2, double p2) { return ::dq2RF(k2, p2); }
 };
 
 } // namespace DiFfRG

@@ -37,9 +37,9 @@ double zero(double) { return 0.0; }
 
 int main()
 {
-  using Cartan = DiFfRG::Gluon_condensate_cartan_kernel<DiFfRG::ShimRegulator>;
-  using Diag = DiFfRG::Gluon_condensate_diag_kernel<DiFfRG::ShimRegulator>;
-  using Plain = DiFfRG::Gluon_condensate_plain_kernel<DiFfRG::ShimRegulator>;
+  using Cartan = DiFfRG::Gluon_condensate_cartan_kernel;
+  using Diag = DiFfRG::Gluon_condensate_diag_kernel;
+  using Plain = DiFfRG::Gluon_condensate_plain_kernel;
 
   const DiFfRG::Fn ZAflat{&zflat}, ZAflatDot{&zflatDot};
   const DiFfRG::Fn ZA3{&z3}, ZA8{&z8}, ZA3dot{&z3dot}, ZA8dot{&z8dot};

@@ -69,5 +69,8 @@ ntk = NumTrace[net, "Frame" -> frame, "Args" -> {Global`l1, Global`cos1, Global`
 
 MakeNTKernel[ntk, FileNameJoin[{$gen, "gen_pion_quark_num.cpp"}],
   FileNameJoin[{$gen, "Pion_quark_num_kernel.hh"}], FileNameJoin[{$gen, "Pion_quark_num_kernels.hh"}],
-  "Name" -> "Pion_quark_num_kernel", "Namespace" -> "pion_quark_num"];
+  "Name" -> "Pion_quark_num_kernel", "Namespace" -> "pion_quark_num",
+  (* the kernel calls RF/RFdot unqualified (NumTracer emits no regulators); this flow uses the
+     SELF-CONTAINED runtime, not the shim, so it must pull the test regulators in itself. *)
+  "ExtraIncludes" -> {"nt_regulators.hpp"}];
 Print["pion->quark-loop->pion Yukawa numeric kernel generated."];

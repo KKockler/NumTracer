@@ -49,11 +49,11 @@ int main() {
   std::printf("QCD quark-gluon vertex flow, full {1,4,7} basis, projected per structure:\n");
   bool ok = true;
   ok &= run(1, &DiFfRG::ZAqbq1_147_kernel<DiFfRG::ShimRegulator>::kernel,
-               &DiFfRG::ZAqbq1_147_num_kernel<DiFfRG::ShimRegulator>::kernel);
+               &DiFfRG::ZAqbq1_147_num_kernel::kernel);
   ok &= run(4, &DiFfRG::ZAqbq4_147_kernel<DiFfRG::ShimRegulator>::kernel,
-               &DiFfRG::ZAqbq4_147_num_kernel<DiFfRG::ShimRegulator>::kernel);
+               &DiFfRG::ZAqbq4_147_num_kernel::kernel);
   ok &= run(7, &DiFfRG::ZAqbq7_147_kernel<DiFfRG::ShimRegulator>::kernel,
-               &DiFfRG::ZAqbq7_147_num_kernel<DiFfRG::ShimRegulator>::kernel);
+               &DiFfRG::ZAqbq7_147_num_kernel::kernel);
   std::printf(ok ? "\nALL TESTS PASSED\n" : "\nTESTS FAILED\n");
   return ok ? 0 : 1;
 }

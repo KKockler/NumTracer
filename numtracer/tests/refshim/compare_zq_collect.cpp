@@ -12,8 +12,8 @@
 #include <random>
 
 int main() {
-  using Dist = DiFfRG::Zq_num_kernel<DiFfRG::ShimRegulator>;      // distributed (FORM-validated)
-  using Coll = DiFfRG::Zq_collect_kernel<DiFfRG::ShimRegulator>;  // symbolic dressing collection
+  using Dist = DiFfRG::Zq_num_kernel;      // distributed (FORM-validated)
+  using Coll = DiFfRG::Zq_collect_kernel;  // symbolic dressing collection
   DressingSet d;
   auto cDist = [&](double l1, double c1, double p, double k) {
     return std::real(Dist::kernel(l1, c1, p, k, d.ZA, d.Zq, d.Mq, d.ZAqbq1, d.dtZA, d.dtZq));

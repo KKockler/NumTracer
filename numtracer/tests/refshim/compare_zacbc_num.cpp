@@ -14,7 +14,7 @@
 
 int main() {
   using Form = DiFfRG::ZAcbc_form_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::ZAcbc_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::ZAcbc_num_kernel;
   DressingSet d;
   auto cDense = [&](double l1, double c1, double c2, double p, double k) {
     return std::real(Form::kernel(l1, c1, c2, p, k, d.ZA3, d.ZAcbc, d.ZA4, d.dtZc, d.Zc, d.dtZA, d.ZA));

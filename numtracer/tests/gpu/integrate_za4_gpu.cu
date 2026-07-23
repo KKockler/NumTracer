@@ -14,7 +14,7 @@
 #include <cstdio>
 #include <vector>
 
-using K = DiFfRG::ZA4_gpu_kernel<DiFfRG::ShimRegulator>;
+using K = DiFfRG::ZA4_gpu_kernel;
 static constexpr int NV = 4;
 
 int main() {

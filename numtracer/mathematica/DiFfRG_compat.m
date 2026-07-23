@@ -7,7 +7,9 @@
 
      MakeNTKernelDiFfRG[ntk, "Name"->..., "Integrator"->..., "Parameters"->..., ...]
         = DiFfRG MakeKernel[0.] scaffold  +  NumTracer numeric MakeNTKernel  (with the DiFfRG
-          emission constants baked in and the Regulator alias emitted natively).
+          emission constants baked in and the DiFfRG kernel shape — `template<typename REG>` plus
+          the `using Regulator = REG;` alias — emitted natively; the general NumTracer emission is a
+          plain class with consumer-supplied regulators).
      UpdateNTFlows[name]
         = DiFfRG UpdateFlows[name]  +  an idempotent flows/CMakeLists.txt patch (find_package +
           NumTracer link libs + UNITY_BUILD OFF), bundled so the patch can never be left un-applied.
@@ -244,7 +246,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    Its per-file Prints are captured and replaced by one NumTracer line (see ntReportDiFfRG). *)
     ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"]]]];
     (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel *)
-    MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorAlias" -> True];
+    MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
     kernelFile
   ];
 

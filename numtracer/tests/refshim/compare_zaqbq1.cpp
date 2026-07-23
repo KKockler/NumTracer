@@ -21,7 +21,7 @@
 
 int main() {
   using Form = DiFfRG::ZAqbq1_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::ZAqbq1_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::ZAqbq1_num_kernel;
   DressingSet d;
   const double Nf = 2.0;
 

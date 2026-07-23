@@ -6,7 +6,7 @@
 
 std::vector<double> cpu_reference_za4(const Axis ax[4], const std::vector<double> &p_grid, double k,
                                       double prefactor) {
-  using K = DiFfRG::ZA4_num_kernel<DiFfRG::ShimRegulator>;
+  using K = DiFfRG::ZA4_num_kernel;
   DressingSet d;
   std::vector<double> out(p_grid.size());
   for (size_t ip = 0; ip < p_grid.size(); ++ip) {

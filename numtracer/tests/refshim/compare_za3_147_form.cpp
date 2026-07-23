@@ -12,7 +12,7 @@
 
 int main() {
   using Form = DiFfRG::ZA3_147_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::ZA3_147_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::ZA3_147_num_kernel;
   DressingSet d;
   const double Nf = 2.0;
   auto cForm = [&](double l1, double c1, double c2, double p, double k) {

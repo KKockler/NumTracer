@@ -11,7 +11,7 @@
 
 int main() {
   using Form = DiFfRG::ZA3_kernel<DiFfRG::ShimRegulator>;
-  using Num = DiFfRG::ZA3_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = DiFfRG::ZA3_num_kernel;
   DressingSet d;
   const double Nf = 2.0;
   auto cForm = [&](double l1, double c1, double c2, double p, double k) {

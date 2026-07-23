@@ -9,7 +9,13 @@
 // The specific regulator/dressing formulas are arbitrary but fixed: the test
 // checks that the two evaluation PATHS agree as algebraic functions, so any
 // consistent definitions used on both sides suffice.
+//
+// This header is the "RuntimeInclude" of every shim-emitted kernel, so pulling
+// nt_regulators.hpp in here is what puts the free RB/RF/... a generated kernel
+// now calls unqualified into scope — no generator option needed for those flows.
 #pragma once
+
+#include "nt_regulators.hpp"
 
 #include <array>
 #include <cmath>
@@ -83,17 +89,18 @@ namespace DiFfRG
   template <class A, class B, class C> using SplineInterpolator1D = Fn;
 
   // ---- a fixed analytic regulator (same on both paths) -----------------------
-  // Exponential-type: RB(k2,p2) = k2 * exp(-p2/k2). RBdot is a fixed companion.
-  // The fermionic RB/RFdot are nonzero analytic companions (the exact form is
-  // arbitrary but FIXED and identical on both paths — the Zq quark loop needs them
-  // live so the regularized quark propagator and its regulator-dot are exercised).
+  // The REG type parameter of the still-templated oracles (the copied FormTracer
+  // kernels, the frozen dense kernels). The formulas live in nt_regulators.hpp,
+  // which the NumTracer kernels call directly, so the two paths cannot drift.
+  // The `::` is load-bearing: an unqualified RB here would resolve to the member
+  // itself and recurse.
   struct ShimRegulator {
-    static double RB(double k2, double p2) { return k2 * std::exp(-p2 / k2); }
-    static double RBdot(double k2, double p2) { return 2.0 * (k2 + p2) * std::exp(-p2 / k2); }
-    static double RF(double k2, double p2) { return std::sqrt(k2) * std::exp(-p2 / k2); }
-    static double RFdot(double k2, double p2) { return (k2 + 2.0 * p2) / std::sqrt(k2) * std::exp(-p2 / k2); }
-    static double dq2RB(double, double) { return 0.0; }
-    static double dq2RF(double, double) { return 0.0; }
+    static double RB(double k2, double p2) { return ::RB(k2, p2); }
+    static double RBdot(double k2, double p2) { return ::RBdot(k2, p2); }
+    static double RF(double k2, double p2) { return ::RF(k2, p2); }
+    static double RFdot(double k2, double p2) { return ::RFdot(k2, p2); }
+    static double dq2RB(double k2, double p2) { return ::dq2RB(k2, p2); }
+    static double dq2RF(double k2, double p2) { return ::dq2RF(k2, p2); }
   };
 
 } // namespace DiFfRG

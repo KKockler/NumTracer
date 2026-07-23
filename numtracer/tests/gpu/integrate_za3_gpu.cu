@@ -20,7 +20,7 @@
 #include <cstdio>
 #include <vector>
 
-using K = DiFfRG::ZA3_gpu_kernel<DiFfRG::ShimRegulator>;
+using K = DiFfRG::ZA3_gpu_kernel;
 static constexpr int NV = 3;
 
 int main() {

@@ -6,7 +6,6 @@
 
 namespace DiFfRG
 {
-  template<typename REG>
   class ZA4_num_kernel
   {
     public:
@@ -122,13 +121,6 @@ return 0.;
 
 }
 private:
-static inline auto RB(const auto &k2, const auto &p2) { return REG::RB(k2, p2); }
-static inline auto RF(const auto &k2, const auto &p2) { return REG::RF(k2, p2); }
-static inline auto RBdot(const auto &k2, const auto &p2) { return REG::RBdot(k2, p2); }
-static inline auto RFdot(const auto &k2, const auto &p2) { return REG::RFdot(k2, p2); }
-static inline auto dq2RB(const auto &k2, const auto &p2) { return REG::dq2RB(k2, p2); }
-static inline auto dq2RF(const auto &k2, const auto &p2) { return REG::dq2RF(k2, p2); }
-
 static inline double ntRe(double x) { return x; }
 template <class T> static inline double ntRe(const T &z) { return z.real(); }
 static inline double ntIm(double) { return 0.0; }

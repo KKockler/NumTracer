@@ -18,7 +18,7 @@
 int main()
 {
   using Form = DiFfRG::Pion_quark_form_kernel<DiFfRG::ShimRegulator>;
-  using Num = Pion_quark_num_kernel<DiFfRG::ShimRegulator>;
+  using Num = Pion_quark_num_kernel;
 
   auto cForm = [&](double l1, double c1, double p, double k) { return Form::kernel(l1, c1, p, k); };
   auto cNum = [&](double l1, double c1, double p, double k) { return std::real(Num::kernel(l1, c1, p, k)); };

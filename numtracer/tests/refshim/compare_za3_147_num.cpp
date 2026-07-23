@@ -12,8 +12,8 @@
 #include <random>
 
 int main() {
-  using K147 = DiFfRG::ZA3_147_num_kernel<DiFfRG::ShimRegulator>;
-  using K1 = DiFfRG::ZA3_num_kernel<DiFfRG::ShimRegulator>;
+  using K147 = DiFfRG::ZA3_147_num_kernel;
+  using K1 = DiFfRG::ZA3_num_kernel;
   DressingSet d;
   DiFfRG::Fn zero{+[](double) { return 0.0; }};
 

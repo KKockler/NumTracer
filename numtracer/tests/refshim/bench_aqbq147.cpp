@@ -49,10 +49,10 @@ int main() {
   };
 
   run(1, &DiFfRG::ZAqbq1_147_kernel<DiFfRG::ShimRegulator>::kernel,
-         &DiFfRG::ZAqbq1_147_num_kernel<DiFfRG::ShimRegulator>::kernel);
+         &DiFfRG::ZAqbq1_147_num_kernel::kernel);
   run(4, &DiFfRG::ZAqbq4_147_kernel<DiFfRG::ShimRegulator>::kernel,
-         &DiFfRG::ZAqbq4_147_num_kernel<DiFfRG::ShimRegulator>::kernel);
+         &DiFfRG::ZAqbq4_147_num_kernel::kernel);
   run(7, &DiFfRG::ZAqbq7_147_kernel<DiFfRG::ShimRegulator>::kernel,
-         &DiFfRG::ZAqbq7_147_num_kernel<DiFfRG::ShimRegulator>::kernel);
+         &DiFfRG::ZAqbq7_147_num_kernel::kernel);
   return 0;
 }
