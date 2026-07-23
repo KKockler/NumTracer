@@ -63,17 +63,16 @@ namespace numtracer::numeric
   using MonoExpT = std::int16_t;
   using MonoAtomT = std::int16_t;
 
-  inline constexpr unsigned kMonoExpInline = 24; ///< covers nsym for the flows in practice
   inline constexpr unsigned kMonoAtomInline = 8;
 
-  /// A stateless allocator identical to `std::allocator<T>` but advertising a 32-bit `size_type`. The
-  /// `gch::small_vector` below stores its size and capacity in the allocator's `size_type` (packed to
-  /// the smallest int that fits it — see small_vector.hpp), so this halves BOTH small_vector headers
-  /// from 24 B (ptr + 8-byte size + 8-byte cap) to 16 B, shrinking `Mono` 112→96 B and the stored
-  /// polynomial term `pair<Mono,Cx>` 128→112 B (−12.5%, hence every `poly_bytes` floor). A monomial's
-  /// degree and atom count are single digits by construction, so the 2³² capacity ceiling is never
-  /// approached; only the WIDTH of the bookkeeping changes, never a value — so every emitted kernel is
-  /// bit-identical. Empty (EBO) like `std::allocator`, so it adds no bytes of its own.
+  /// A stateless allocator identical to `std::allocator<T>` but advertising a 32-bit `size_type`.
+  /// `gch::small_vector` stores its size and capacity in the allocator's `size_type` (packed to the
+  /// smallest int that fits it — see small_vector.hpp), so this halves the @ref MonoAtoms header from
+  /// 24 B (ptr + 8-byte size + 8-byte cap) to 16 B — one step of the `Mono` 112→96→56 B chain
+  /// documented on @ref MonoExp. A monomial's atom count is single digits by construction, so the 2³²
+  /// capacity ceiling is never approached; only the WIDTH of the bookkeeping changes, never a value —
+  /// so every emitted kernel is bit-identical. Empty (EBO) like `std::allocator`, so it adds no bytes
+  /// of its own.
   template <class T> struct NarrowAlloc : std::allocator<T> {
     using size_type = std::uint32_t;
     using difference_type = std::int32_t;
@@ -84,51 +83,54 @@ namespace numtracer::numeric
 
   /// @brief Packed exponent vector: the per-symbol exponents of a monomial stored as a fixed 128-bit
   ///        key (`kExpBits` = 5 bits/symbol → degree ≤ 31, up to 24 symbols) instead of the 72-byte
-  ///        `small_vector`. This is the single largest RAM lever (`Mono` 96→40 B, the stored term
-  ///        `pair<Mono,Cx>` → 56 B), and it makes `Mono::operator<`/`==` two 64-bit integer compares
-  ///        instead of an nsym-long element walk.
+  ///        `small_vector`. This is the single largest RAM lever, and it makes `Mono::operator<`/`==`
+  ///        two 64-bit integer compares instead of an nsym-long element walk.
+  ///
+  /// Size chain, measured: the stored polynomial term `pair<Mono,Cx>` went 128 B → 112 B (@ref
+  /// NarrowAlloc on the atom list) → **72 B** here, i.e. −43.75% overall, which is why every
+  /// `poly_bytes` estimate has a lower floor than it used to. The struct itself is 2 words + one
+  /// pointer = 24 B, taking `Mono` to 56 B.
   ///
   /// Packing is **big-endian within each word** (symbol 0 in the high bits, 12 symbols per 64-bit word,
   /// so no symbol straddles the word boundary). That is deliberate: it makes the array's own ordering
-  /// (`w[0]` then `w[1]`, integer compares) reproduce the OLD element-wise lexicographic order of the
-  /// exponent vector EXACTLY — symbol 0 dominates, then symbol 1, … — for two monomials of equal nsym
-  /// (always the case in one polynomial), with unused high slots zero in both. So sort/merge/lookup
+  /// (`packed[0]` then `packed[1]`, integer compares) reproduce the OLD element-wise lexicographic order
+  /// of the exponent vector EXACTLY — symbol 0 dominates, then symbol 1, … — for two monomials of equal
+  /// nsym (always the case in one polynomial), with unused high slots zero in both. So sort/merge/lookup
   /// keep the identical order and the emitted kernel is byte-for-byte unchanged; only the STORAGE of the
   /// exponents changes, never a value or an ordering.
   ///
-  /// The common inline range is nsym ≤ 24 with degree ≤ 31 — which covers every flow "in practice"
-  /// (the same 24 the old `small_vector` inlined). It is NOT a hard cap: a monomial with a symbol index
-  /// ≥ 24 OR an exponent > 31 transparently falls back to a heap `std::vector<MonoExpT>` holding the
-  /// full exponent list, so nsym and degree are UNBOUNDED (whatever flow the user gives us), exactly
-  /// like the old heap-expanding `small_vector`. The overflow path never triggers for the practical
-  /// flows, so they keep the fast inline path; only an atypically large flow pays the indirection.
-  /// The inline representation stays 2 words + one pointer = 24 B (Mono → 56 B, term → 72 B), still
-  /// well under the old 128 B, and its integer ordering reproduces the old lexicographic exponent order
-  /// exactly (see below), so the emitted kernel is byte-for-byte unchanged.
+  /// The common inline range is nsym ≤ 24 with degree ≤ 31 — which covers every flow in practice (the
+  /// same 24 the old `small_vector` inlined; the largest `nsym` across all committed flows is 6). It is
+  /// NOT a hard cap: a symbol index ≥ 24, an exponent > 31, or a negative exponent transparently falls
+  /// back to a heap `std::vector<MonoExpT>` holding the full exponent list, so nsym and degree are
+  /// bounded only by `MonoExpT` (`int16_t`, ≤ 32767) — exactly like the old heap-expanding
+  /// `small_vector`. The overflow path never triggers for the practical flows, so they keep the fast
+  /// inline path; only an atypically large flow pays the indirection.
   struct MonoExp {
     static constexpr unsigned kExpBits = 5;
     static constexpr unsigned kPerWord = 64u / kExpBits;         ///< 12 symbols per 64-bit word (no straddle)
     static constexpr int kInlineSyms = 2 * static_cast<int>(kPerWord); ///< 24 symbols inline
     static constexpr MonoExpT kMaxExp = static_cast<MonoExpT>((1u << kExpBits) - 1u); ///< 31
 
-    std::array<std::uint64_t, 2> w{};        ///< packed inline exponents (big-endian per word)
-    std::vector<MonoExpT> *hp = nullptr;     ///< heap overflow (full list); nullptr ⇒ inline
+    std::array<std::uint64_t, 2> packed{};             ///< packed inline exponents (big-endian per word)
+    std::unique_ptr<std::vector<MonoExpT>> overflow;   ///< full exponent list; null ⇒ inline
 
     static unsigned wordOf(int k) { return static_cast<unsigned>(k) / kPerWord; }
     /// Big-endian slot: symbol 0 → shift 59 (high bits), symbol 11 → shift 4. Low nibble unused, so the
-    /// integer compare of `w[0]` then `w[1]` is exactly the lexicographic order of symbols 0,1,2,….
+    /// integer compare of `packed[0]` then `packed[1]` is exactly the lexicographic order of symbols
+    /// 0,1,2,….
     static unsigned shiftOf(int k) { return 64u - (static_cast<unsigned>(k) % kPerWord + 1u) * kExpBits; }
     MonoExpT unpackInline(int k) const
     {
-      return static_cast<MonoExpT>((w[wordOf(k)] >> shiftOf(k)) & static_cast<std::uint64_t>(kMaxExp));
+      return static_cast<MonoExpT>((packed[wordOf(k)] >> shiftOf(k)) & static_cast<std::uint64_t>(kMaxExp));
     }
-    /// Move all inline symbols into a fresh heap list (called when a set() first overflows the inline
-    /// range). After this `hp` is authoritative and holds the 24 inline exponents.
-    void promote()
+    /// Move all inline symbols into a fresh heap list (called when a set() first leaves the inline
+    /// range). Afterwards `overflow` is authoritative and holds the 24 previously-inline exponents.
+    void spillToHeap()
     {
-      hp = new std::vector<MonoExpT>();
-      hp->reserve(static_cast<std::size_t>(kInlineSyms));
-      for (int j = 0; j < kInlineSyms; ++j) hp->push_back(unpackInline(j));
+      overflow = std::make_unique<std::vector<MonoExpT>>();
+      overflow->reserve(static_cast<std::size_t>(kInlineSyms));
+      for (int j = 0; j < kInlineSyms; ++j) overflow->push_back(unpackInline(j));
     }
 
     MonoExp() = default;
@@ -142,75 +144,80 @@ namespace numtracer::numeric
       for (; b != e; ++b, ++k) set(k, static_cast<MonoExpT>(*b));
     }
 
-    ~MonoExp() { delete hp; }
-    MonoExp(const MonoExp &o) : w(o.w), hp(o.hp ? new std::vector<MonoExpT>(*o.hp) : nullptr) {}
-    MonoExp(MonoExp &&o) noexcept : w(o.w), hp(o.hp) { o.hp = nullptr; }
+    // `overflow` owns its list, so the moves are the compiler's; only the deep COPY is hand-written.
+    MonoExp(MonoExp &&) noexcept = default;
+    MonoExp &operator=(MonoExp &&) noexcept = default;
+    MonoExp(const MonoExp &o)
+        : packed(o.packed),
+          overflow(o.overflow ? std::make_unique<std::vector<MonoExpT>>(*o.overflow) : nullptr)
+    {
+    }
     MonoExp &operator=(const MonoExp &o)
     {
       if (this != &o) {
-        std::vector<MonoExpT> *nh = o.hp ? new std::vector<MonoExpT>(*o.hp) : nullptr;
-        delete hp;
-        w = o.w;
-        hp = nh;
-      }
-      return *this;
-    }
-    MonoExp &operator=(MonoExp &&o) noexcept
-    {
-      if (this != &o) {
-        delete hp;
-        w = o.w;
-        hp = o.hp;
-        o.hp = nullptr;
+        auto copy = o.overflow ? std::make_unique<std::vector<MonoExpT>>(*o.overflow) : nullptr;
+        packed = o.packed;
+        overflow = std::move(copy);
       }
       return *this;
     }
 
-    /// Logical length used by the slow (heap-involved) compares: the heap list's length, or the inline
-    /// ceiling. Symbols past a monomial's own extent read 0, so an over-long bound is harmless.
-    int logicalLen() const { return hp ? static_cast<int>(hp->size()) : kInlineSyms; }
+    /// Number of symbol slots the slow (heap-involved) compares must walk: the heap list's length, or
+    /// the inline ceiling. Symbols past a monomial's own extent read 0, so an over-long bound is
+    /// harmless.
+    int symbolCount() const { return overflow ? static_cast<int>(overflow->size()) : kInlineSyms; }
 
     MonoExpT get(int k) const
     {
-      if (hp) return k < static_cast<int>(hp->size()) ? (*hp)[static_cast<std::size_t>(k)] : MonoExpT(0);
+      if (overflow)
+        return k < static_cast<int>(overflow->size()) ? (*overflow)[static_cast<std::size_t>(k)] : MonoExpT(0);
       return k < kInlineSyms ? unpackInline(k) : MonoExpT(0);
     }
     void set(int k, MonoExpT v)
     {
-      assert(k >= 0 && v >= 0);
-      if (hp) {
-        if (k >= static_cast<int>(hp->size())) hp->resize(static_cast<std::size_t>(k) + 1, 0);
-        (*hp)[static_cast<std::size_t>(k)] = v;
+      assert(k >= 0); // the intended domain; a negative exponent is still stored faithfully below
+      if (overflow) {
+        if (k >= static_cast<int>(overflow->size())) overflow->resize(static_cast<std::size_t>(k) + 1, 0);
+        (*overflow)[static_cast<std::size_t>(k)] = v;
         return;
       }
-      if (k < kInlineSyms && v <= kMaxExp) { // fast inline path
+      if (k < kInlineSyms && v >= 0 && v <= kMaxExp) { // fast inline path
         const unsigned sh = shiftOf(k);
         const std::uint64_t mask = static_cast<std::uint64_t>(kMaxExp) << sh;
-        w[wordOf(k)] = (w[wordOf(k)] & ~mask) | ((static_cast<std::uint64_t>(v) & kMaxExp) << sh);
+        packed[wordOf(k)] = (packed[wordOf(k)] & ~mask) | ((static_cast<std::uint64_t>(v) & kMaxExp) << sh);
         return;
       }
-      // overflow (symbol index ≥ 24 or exponent > 31): promote to the heap list and retry.
-      promote();
-      if (k >= static_cast<int>(hp->size())) hp->resize(static_cast<std::size_t>(k) + 1, 0);
-      (*hp)[static_cast<std::size_t>(k)] = v;
+      // A zero past the inline range is already what get() reports, so storing it changes nothing —
+      // and returning here is what keeps `operator*` allocation-free on an nsym > kInlineSyms flow,
+      // where its `for (k < ns) m.e[k] = …` writes a zero to every high slot of every product monomial.
+      if (v == 0) return;
+      // Genuine overflow: symbol index ≥ kInlineSyms, exponent > kMaxExp, or NEGATIVE. The last case
+      // matters — masking a negative into 5 bits would silently store a bogus positive exponent, so it
+      // takes the faithful heap representation instead. (Both subtracting call sites,
+      // divThroughMonomialAtoms and divThroughPolyAtoms, guard against going negative; this is the
+      // backstop for when that invariant moves.)
+      spillToHeap();
+      if (k >= static_cast<int>(overflow->size())) overflow->resize(static_cast<std::size_t>(k) + 1, 0);
+      (*overflow)[static_cast<std::size_t>(k)] = v;
     }
 
     /// Mutable element proxy, so existing `e[k] = / += / -=` call sites keep working verbatim.
     struct Ref {
-      MonoExp *o;
-      int k;
-      operator MonoExpT() const { return o->get(k); }
-      Ref &operator=(MonoExpT v) { o->set(k, v); return *this; }
-      Ref &operator+=(MonoExpT v) { o->set(k, static_cast<MonoExpT>(o->get(k) + v)); return *this; }
-      Ref &operator-=(MonoExpT v) { o->set(k, static_cast<MonoExpT>(o->get(k) - v)); return *this; }
+      MonoExp *owner;
+      int slot;
+      operator MonoExpT() const { return owner->get(slot); }
+      Ref &operator=(MonoExpT v) { owner->set(slot, v); return *this; }
+      Ref &operator+=(MonoExpT v) { owner->set(slot, static_cast<MonoExpT>(owner->get(slot) + v)); return *this; }
+      Ref &operator-=(MonoExpT v) { owner->set(slot, static_cast<MonoExpT>(owner->get(slot) - v)); return *this; }
     };
     MonoExpT operator[](int k) const { return get(k); }
     Ref operator[](int k) { return Ref{this, k}; }
 
     bool operator<(const MonoExp &o) const
     {
-      if (!hp && !o.hp) return w < o.w; // fast path: both inline (symbols ≥24 are 0 in both)
-      const int n = std::max(logicalLen(), o.logicalLen());
+      // fast path: both inline (symbols ≥ kInlineSyms are 0 in both)
+      if (!overflow && !o.overflow) return packed < o.packed;
+      const int n = std::max(symbolCount(), o.symbolCount());
       for (int k = 0; k < n; ++k) {
         const MonoExpT a = get(k), b = o.get(k);
         if (a != b) return a < b;
@@ -219,8 +226,8 @@ namespace numtracer::numeric
     }
     bool operator==(const MonoExp &o) const
     {
-      if (!hp && !o.hp) return w == o.w;
-      const int n = std::max(logicalLen(), o.logicalLen());
+      if (!overflow && !o.overflow) return packed == o.packed;
+      const int n = std::max(symbolCount(), o.symbolCount());
       for (int k = 0; k < n; ++k)
         if (get(k) != o.get(k)) return false;
       return true;

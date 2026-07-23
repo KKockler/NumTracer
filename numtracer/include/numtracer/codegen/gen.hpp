@@ -299,24 +299,34 @@ namespace numtracer::network
     /// though that kernel is large. So the gate is per-function, and it never picks the losing side on the
     /// swept flows (>=500: noinline wins or ties; <500: inline wins).
     ///
-    /// Only for DEVICE code (the decorator carries `__device__`): the host has no 255-register cliff, and
-    /// its all-inline emission stays byte-identical. Overrides:
+    /// Only for DEVICE code: the host has no 255-register cliff, and its all-inline emission stays
+    /// byte-identical. Device-ness is decided by the decorator containing `__device__` — that is the
+    /// CONTRACT, not a heuristic: every decorator the codegen emits for a device target spells it, and
+    /// a decorator that does not is treated as host (all-inline) with no diagnostic.
+    ///
+    /// Overrides:
     ///   NT_GEN_NOINLINE_TRACES : force out-of-line for EVERY function (host+device) — the compile-cost
     ///                            lever for the 100k+-line kernels, and the A/B control.
-    ///   NT_GEN_NOINLINE_MIN=N  : set the per-function threshold (default 500; 0 = always out-of-line on device).
+    ///   NT_GEN_NOINLINE_MIN=N  : per-function threshold, default 500. Out-of-lines when `nInstr > N`,
+    ///                            so N=0 out-of-lines every device function that has any instruction at
+    ///                            all (a 0-instruction function stays inline — degenerate, and it has
+    ///                            nothing to spill). Read ONCE per process and cached: emission must be
+    ///                            consistent across every function in a run, so changing the variable
+    ///                            mid-process deliberately has no effect.
     inline std::string eff_decor(const std::string &decor, std::size_t nInstr = 0)
     {
       std::string effDecor = decor;
       bool noinline = std::getenv("NT_GEN_NOINLINE_TRACES") != nullptr;
-      if (!noinline && decor.find("__device__") != std::string::npos) {
-        static const std::size_t thr = [] {
+      const bool isDevice = decor.find("__device__") != std::string::npos;
+      if (!noinline && isDevice) {
+        static const std::size_t noinlineMinInstr = [] {
           if (const char *e = std::getenv("NT_GEN_NOINLINE_MIN")) {
             const long v = std::atol(e);
             if (v >= 0) return static_cast<std::size_t>(v);
           }
           return static_cast<std::size_t>(500);
         }();
-        noinline = nInstr > thr;
+        noinline = nInstr > noinlineMinInstr;
       }
       if (noinline) {
         const std::string kw = " inline";

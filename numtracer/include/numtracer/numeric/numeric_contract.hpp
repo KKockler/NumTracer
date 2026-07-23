@@ -868,6 +868,33 @@ namespace numtracer::numeric
     return nmet(e.a, e.b); // unreachable; silences -Wreturn-type
   }
 
+  /// @brief Append a collected-slot combination's open-leg net factors (@ref DSlotOpt::netFacs — a
+  ///        vector `p^μ`, a metric `g^{μν}`, …) to EVERY term of a Lorentz net, so the surrounding net
+  ///        closes their legs. This is the exact Lorentz structure the distributed diagram emits, which
+  ///        is why it can reuse all the validated contraction machinery unchanged.
+  ///
+  /// An empty @p facs returns @p lor untouched — that is the case for every option whose structure is
+  /// purely Dirac-side, and it keeps the byte-identical fast path of the pre-Stage-4 δ/slash collection.
+  /// Both overloads exist because the two dressed entry points read different net representations
+  /// (@ref network::NetVal for the codegen path, @ref NNet for the numeric one).
+  inline network::NetVal with_slot_facs(const network::NetVal &lor, const std::vector<network::Elem> &facs)
+  {
+    if (facs.empty()) return lor;
+    network::NetVal out = lor;
+    for (network::PTerm &pt : out)
+      pt.e.insert(pt.e.end(), facs.begin(), facs.end());
+    return out;
+  }
+  inline NNet with_slot_facs(const NNet &lor, const std::vector<network::Elem> &facs)
+  {
+    if (facs.empty()) return lor;
+    NNet out = lor;
+    for (NTerm &t : out)
+      for (const network::Elem &e : facs)
+        t.e.push_back(elem_to_nelem(e));
+    return out;
+  }
+
   /// Multi-term denominator cancellation (@ref divThroughPolyAtoms) — on by default; `NT_GEN_NO_POLYDIV=1`
   /// disables it, which is how it was A/B'd. See that function for the measurement.
   inline bool polydiv_enabled()
@@ -1090,11 +1117,27 @@ namespace numtracer::numeric
 
     /// @brief The STRUCTURAL MPoly reduction (lever (b)): sum every combination into ONE plain MPoly,
     ///        discarding the dressing monomial. Correct only when the slots carry no dressing (the
-    ///        generator strips it out first); see @ref numeric_value_dressed_netval_mp.
+    ///        generator strips it out first); see @ref numeric_value_dressed_netval_mp. The debug
+    ///        assert below makes that precondition checkable instead of comment-only: fed genuine
+    ///        dressings, this would silently sum structures that belong in different channels.
+    ///
+    /// The left-to-right accumulation is deliberate and is NOT a quadratic hazard, despite looking
+    /// like one. Under lever (b) the generator expands each structure×dressing combination into its
+    /// own SINGLE-option sub-term at codegen time (`Codegen.m`, `sdsl[k].push_back(DSlot{optp[oi]})`),
+    /// so every production call has exactly one combination and this loop body runs once. Folding the
+    /// sum as a balanced tree instead would reassociate the like-term coefficient sums (≤ 1 ulp) and
+    /// so could shift the emitted kernel's literals — a real cost for a case no caller reaches. Every
+    /// caller today (the generator, and test_dpoly.cpp case K, which mirrors it) passes single-option
+    /// dressing-free slots; the general loop is kept only so the entry point stays total.
     template <class ContractFn>
     inline MPoly dress_collect_mp(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
                                   ContractFn &&contract)
     {
+#ifndef NDEBUG
+      for (const DSlot &s : slots)
+        for (const DSlotOpt &o : s)
+          assert(o.dress.empty() && "dress_collect_mp requires dressing-free slots (lever (b))");
+#endif
       MPoly out = MPolyFactory::zero(nsym);
       dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
                       [&](const DMono &, MPoly &&mp) { out = out + mp; });
@@ -1112,18 +1155,10 @@ namespace numtracer::numeric
                                                     const std::vector<MPoly> &atomDen,
                                                     const std::vector<std::vector<int>> &units)
   {
-    return ndetail::dress_collect(nsym, chain, slots,
-                                  [&](const network::DiracNet &d, const std::vector<network::Elem> &ev) {
-                                    if (ev.empty()) // options with no net factors: byte-identical to the δ/slash collection
-                                      return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
-                                    // append this combination's open-leg net factors (vectors/metrics/…) to every net
-                                    // term so the surrounding net closes their legs — the exact Lorentz structure the
-                                    // distributed diagram emits, reusing all validated contraction machinery.
-                                    network::NetVal lor2 = lor;
-                                    for (network::PTerm &pt : lor2)
-                                      pt.e.insert(pt.e.end(), ev.begin(), ev.end());
-                                    return numeric_value_netval(nsym, d, lor2, comp, atomDen, units);
-                                  });
+    return ndetail::dress_collect(
+        nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
+          return numeric_value_netval(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
+        });
   }
 
   /// @brief STRUCTURAL MPoly reduction of a collected diagram (lever (b)). Same contraction machinery as
@@ -1137,14 +1172,10 @@ namespace numtracer::numeric
                                                        const std::vector<MPoly> &atomDen,
                                                        const std::vector<std::vector<int>> &units)
   {
-    return ndetail::dress_collect_mp(nsym, chain, slots,
-                                     [&](const network::DiracNet &d, const std::vector<network::Elem> &ev) {
-                                       if (ev.empty()) return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
-                                       network::NetVal lor2 = lor;
-                                       for (network::PTerm &pt : lor2)
-                                         pt.e.insert(pt.e.end(), ev.begin(), ev.end());
-                                       return numeric_value_netval(nsym, d, lor2, comp, atomDen, units);
-                                     });
+    return ndetail::dress_collect_mp(
+        nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
+          return numeric_value_netval(nsym, d, with_slot_facs(lor, slotFacs), comp, atomDen, units);
+        });
   }
 
   /// @brief Dressed analogue of @ref numeric_value (reading the numeric @ref NNet Lorentz network).
@@ -1153,17 +1184,10 @@ namespace numtracer::numeric
                                              const std::vector<std::array<MPoly, 4>> &comp,
                                              const std::vector<MPoly> &atomDen)
   {
-    return ndetail::dress_collect(nsym, chain, slots,
-                                  [&](const network::DiracNet &d, const std::vector<network::Elem> &ev) {
-                                    if (ev.empty()) return numeric_value(nsym, d, lorentz, comp, atomDen);
-                                    // route this combination's open-leg net factors into the numeric Lorentz net (see
-                                    // the netval variant above for the rationale); convert Elem → NElem for this path.
-                                    NNet lor2 = lorentz;
-                                    for (NTerm &t : lor2)
-                                      for (const network::Elem &e : ev)
-                                        t.e.push_back(elem_to_nelem(e));
-                                    return numeric_value(nsym, d, lor2, comp, atomDen);
-                                  });
+    return ndetail::dress_collect(
+        nsym, chain, slots, [&](const network::DiracNet &d, const std::vector<network::Elem> &slotFacs) {
+          return numeric_value(nsym, d, with_slot_facs(lorentz, slotFacs), comp, atomDen);
+        });
   }
 
   /// @brief Build the projector inverse-atom denominators by scanning the Lorentz nets for every

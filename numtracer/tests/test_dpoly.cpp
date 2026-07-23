@@ -655,6 +655,63 @@ int main()
     if (!ok) ++fails;
   }
 
+  // ---- L) MonoExp HEAP-FALLBACK path: nsym > kInlineSyms (24) and degree > kMaxExp (31) ----
+  // MonoExp packs exponents into two 64-bit words for nsym <= 24 / degree <= 31 and spills to a heap
+  // list outside that range. Every committed flow has nsym <= 6, so the spill path had NO coverage at
+  // all — yet it is what makes nsym/degree unbounded. Exercise both triggers and check the two
+  // properties the packed representation must preserve: the lexicographic monomial ORDER (which is
+  // what keeps emitted kernels byte-identical) and the arithmetic itself.
+  std::printf("\n== L: MonoExp heap fallback (nsym=30 > 24 inline, and degree > 31) ==\n");
+  {
+    const int nsym = 30; // past kInlineSyms, so high symbols live on the heap
+    nm::LorentzEnv env(nsym);
+    std::mt19937 rg(20260723);
+    std::uniform_real_distribution<double> UU(-2.0, 2.0);
+
+    // (i) products spanning the inline/heap boundary: (x0 + x25)*(x3 + x29) must expand to the four
+    //     cross terms and evaluate as the factored form does.
+    nm::MPoly a = env.var(0) + env.var(25);
+    nm::MPoly b = env.var(3) + env.var(29);
+    nm::MPoly ab = a * b;
+
+    // (ii) degree past kMaxExp: x7^40 — 40 > 31 forces the spill on a LOW symbol index too.
+    nm::MPoly hi = env.var(7);
+    for (int i = 1; i < 40; ++i)
+      hi = hi * env.var(7);
+
+    int worst = 0;
+    double maxerr = 0.0;
+    for (int it = 0; it < 2000; ++it) {
+      std::vector<double> x(nsym);
+      for (double &v : x)
+        v = UU(rg);
+      const Cx got = nm::eval(ab, x, {});
+      const double want = (x[0] + x[25]) * (x[3] + x[29]);
+      maxerr = std::max(maxerr, std::fabs(got.re - want));
+      if (std::fabs(got.re - want) >= 1e-10 || std::fabs(got.im) >= 1e-12) ++worst;
+    }
+    // x7^40 at x7 = 1 and -1: exact, and the sign proves the exponent survived the spill intact.
+    std::vector<double> one(nsym, 0.0), neg(nsym, 0.0);
+    one[7] = 1.0;
+    neg[7] = -1.0;
+    const bool powOk = std::fabs(nm::eval(hi, one, {}).re - 1.0) < 1e-12 &&
+                       std::fabs(nm::eval(hi, neg, {}).re - 1.0) < 1e-12 && hi.size() == 1;
+
+    // (iii) ORDER: x_i must sort ascending in i across the inline→heap boundary, exactly as the old
+    //       element-wise exponent-vector comparison did. Build Σ x_i and read the term order back.
+    nm::MPoly sum = env.var(0);
+    for (int i = 1; i < nsym; ++i)
+      sum = sum + env.var(i);
+    bool orderOk = sum.size() == nsym;
+    for (int i = 0; orderOk && i < nsym; ++i)
+      orderOk = sum.t[static_cast<std::size_t>(i)].first.e[nsym - 1 - i] == 1; // descending exponent order
+
+    const bool ok = worst == 0 && powOk && orderOk;
+    std::printf("  ab terms=%d worst=%.2e (%d/2000)  x7^40 exact=%d  cross-boundary order=%d  %s\n", ab.size(),
+                maxerr, worst, powOk, orderOk, ok ? "ok" : "FAIL");
+    if (!ok) ++fails;
+  }
+
   std::printf("\n%s\n", fails == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");
   return fails == 0 ? 0 : 1;
 }
