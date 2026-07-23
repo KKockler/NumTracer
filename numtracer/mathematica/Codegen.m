@@ -2572,7 +2572,12 @@ diagColPolys[colnetStrs_, includeDir_] :=
     cppFile = FileNameJoin[{$TemporaryDirectory, "ntdiagpoly.cpp"}];
     bin = StringReplace[cppFile, ".cpp" -> ""];
     ntExportCpp[cppFile, src];
-    rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> includeDir <> "' '" <> cppFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
+(* HEADER_ONLY: this one-off TU calls a SPLIT engine entry point (sun_value_dressed), whose body is
+   `#if NUMTRACER_DEFINE_BODIES` — in a normal consumer TU only the declaration is visible and the
+   definition is linked from libNumTracer.a. This helper links nothing, so without the define it
+   fails at link time with an undefined reference (which aborted every diagonal-colour flow:
+   gen_flavour_ingroup, gen_gluon_condensate). The TU is tiny, so inlining the bodies is free. *)
+    rc = Run[cxx <> " -std=c++20 -O1 -w -DNUMTRACER_HEADER_ONLY=1 -I '" <> includeDir <> "' '" <> cppFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
     If[rc =!= 0,
       Print["[diagpoly] compile failed (rc=", rc, "):\n", Quiet @ Check[Import[bin <> ".cerr", "Text"], ""]];
       Abort[]];
