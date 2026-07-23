@@ -684,30 +684,16 @@ frameMask[components_List] := FromDigits[Reverse[Boole[# =!= 0 && # =!= 0.] & /@
 
 (* ---- NumTrace --------------------------------------------------------------- *)
 
-(* ---- front-end parallelism (subkernels) -------------------------------------------------------
-   analyseDiagram and the checkLabels label-census are PURE per-diagram maps over INDEPENDENT
-   diagrams; on a dense distributed flow (e.g. full-basis ZAAqbq: 3350 diagrams) they are the
-   dominant SERIAL cost (~35 s + ~8 s single-threaded). Run them over subkernels loaded with the
-   package. Order-preserving, so the output is identical to the serial `/@` (validated: Diagrams+Env
-   IDENTICAL). Missing/unlaunchable kernels fall back to serial.
-   OFF BY DEFAULT — opt in with NT_PARALLEL=1. MEASURED marshalling-bound: Wolfram subkernels
-   serialise every diagram AND its analyseDiagram result across processes, costing ~as much as the
-   compute (full-basis ZAAqbq: NumTrace 55 s serial vs 55 s parallel; checkLabels got SLOWER, its
-   census is too cheap to beat the transfer). The real front-end lever is NT_NO_LABEL_CHECK (skip the
-   census, ~14%). Kept opt-in for the case where per-diagram work is heavy enough to beat marshalling. *)
-$ntParallel = (Environment["NT_PARALLEL"] =!= $Failed);
-$ntKernelsReady = False;
-ntEnsureKernels[] := (
-  If[TrueQ[$ntParallel] && ! TrueQ[$ntKernelsReady],
-    Quiet@If[Length[Kernels[]] == 0, LaunchKernels[]];
-    If[Length[Kernels[]] > 0,
-      ParallelEvaluate[Quiet@Needs["NumTracer`"]]; $ntKernelsReady = True,
-      $ntParallel = False]];   (* no kernels -> permanently serial this session *)
-  TrueQ[$ntKernelsReady]);
-(* serial fallback + a size floor (subkernel marshalling is not worth it for few diagrams).
-   CoarsestGrained hands each kernel one contiguous batch, amortising the per-item marshalling. *)
-ntParMap[f_, list_] := If[TrueQ[$ntParallel] && TrueQ[$ntKernelsReady] && Length[list] >= 128,
-  ParallelMap[f, list, Method -> "CoarsestGrained"], f /@ list];
+(* NOTE (do not re-attempt): running analyseDiagram / labelCensus over Wolfram SUBKERNELS was tried
+   and REMOVED. Both are pure per-diagram maps, so parallelism is trivially correct — but it is
+   marshalling-bound, not compute-bound: the kernel serialises every diagram AND its result across
+   processes, costing about as much as the work. Measured on full-basis ZAAqbq (3350 diagrams):
+   NumTrace 55 s serial vs 55 s parallel, and the label census got *slower* (it is too cheap to beat
+   the transfer). It also had a correctness trap — the subkernels needed every collection global
+   ($ntDressCollect, $ntVertexCollect, …) pushed to them by hand, and a flow that sets one by symbol
+   assignment rather than by environment variable would silently analyse differently on the workers.
+   The real front-end lever is NT_NO_LABEL_CHECK (skip the census, ~14%). See
+   NUMTRACER_TRACE_PERF_FINDINGS.md. *)
 
 (* Each SU(N) group head carries its own rank N as the first argument (baked in when the
    network is built — Global`Nc for colour, the FromFunKit "FlavourGroup" option for the
@@ -783,15 +769,12 @@ NumTrace[net_, OptionsPattern[]] := Module[
      the et engine mis-pairs them into a silently wrong number. Checked per diagram (not on the
      raw net): only after expandBridges is each diagram a flat Times in which "1 = free,
      2 = contracted" is the actual invariant. *)
-  (* parallel front-end: launch/reuse subkernels once and push the one global the maps read
-     ($ntDressCollect; labelCensus reads no globals). No-op when serial. *)
-  If[ntEnsureKernels[],
-    With[{dc = $ntDressCollect}, ParallelEvaluate[NumTracer`Private`$ntDressCollect = dc]]];
   ntLog["[prof] NumTrace checkLabels: ", First@AbsoluteTiming[
   With[{frees = If[TrueQ[$ntCheckLabels],
-      (* the census (labelCensus) is pure & parallel; the abort/Message validation stays on main *)
-      With[{census = ntParMap[labelCensus, diagrams]},
-        MapThread[checkLabelsC[#2, #1, #3] &, {diagrams, census, Range[Length[diagrams]]}]],
+      (* the census (labelCensus) is pure; the abort/Message validation is kept separate so a
+         failure reports the diagram index (see checkLabels) *)
+      With[{census = labelCensus /@ diagrams},
+        MapThread[checkLabels[#1, #2, #3] &, {diagrams, census, Range[Length[diagrams]]}]],
       ConstantArray[{}, Length[diagrams]]]},
     ntLog["[labels] ", Length[diagrams], " diagram(s) validated; free-index set(s) = ",
       DeleteDuplicates[Sort /@ frees]]];], " s"];
@@ -805,7 +788,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
   {env, nenv} = buildEnv[allMom, invMom, invSMom];
 
   ntLog["[prof] NumTrace analyseDiagram (", Length[diagrams], " diagrams): ",
-    First@AbsoluteTiming[diags = ntParMap[analyseDiagram, diagrams]], " s"];
+    First@AbsoluteTiming[diags = analyseDiagram /@ diagrams], " s"];
 
   NTKernel[<|
     "Diagrams"  -> diags,
@@ -936,23 +919,12 @@ labelCensus[e_] := Which[
 (* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). *)
 $ntCheckLabels = (Environment["NT_NO_LABEL_CHECK"] === $Failed);
 
-checkLabels[diagram_, idx_] := If[! TrueQ[$ntCheckLabels], {},
-  Module[{c = labelCensus[diagram], bad},
-    bad = c[[3]];
-    If[bad =!= {},
-      Do[Switch[b[[2]],
-           "plus-free-mismatch", Message[NumTrace::plusfree, idx, b[[1]], Short[diagram, 8]],
-           "private-clash",      Message[NumTrace::privclash, idx, b[[1]], Short[diagram, 8]],
-           _,                    Message[NumTrace::badlabel, idx, b[[1]], b[[2]], Short[diagram, 8]]],
-         {b, bad}];
-      Abort[]];
-    c[[1]]]];
-
-(* Validate a PRECOMPUTED census (so the expensive labelCensus can run over subkernels while the
-   abort/Message — which must run on the MAIN kernel to surface — stays here). Same diagnostics as
-   checkLabels; `diagram` is passed only for the Short[...] in the message. *)
-checkLabelsC[c_, diagram_, idx_] := (
-  With[{bad = c[[3]]},
+(* Validate a PRECOMPUTED census and return the diagram's free-index set. Split from labelCensus so
+   the pure counting stays free of side effects and this half owns the diagnostics; `diagram` is
+   carried only for the Short[...] in the message, and `idx` is the diagram's 1-based position (what
+   the user sees in the abort). *)
+checkLabels[diagram_, census_, idx_] := (
+  With[{bad = census[[3]]},
     If[bad =!= {},
       Do[Switch[b[[2]],
            "plus-free-mismatch", Message[NumTrace::plusfree, idx, b[[1]], Short[diagram, 8]],
@@ -960,4 +932,4 @@ checkLabelsC[c_, diagram_, idx_] := (
            _,                    Message[NumTrace::badlabel, idx, b[[1]], b[[2]], Short[diagram, 8]]],
          {b, bad}];
       Abort[]]];
-  c[[1]]);
+  census[[1]]);
