@@ -4,6 +4,13 @@ Generated numeric kernels vs their FormTracer (FORM) reference, on this machine
 (`-O3 -march=native`, `bench_aqbq147` over 200k random points). `num/FORM` is the ratio of
 kernel evaluation time; correctness is the max relative error against FORM.
 
+```{note}
+The kernel-runtime numbers below were last measured **2026-07-19** and still stand — nothing since
+has changed how a kernel evaluates on the host. What has changed is **generation** cost and the GPU
+emission default; see "Generation (2026-07-22/23)" at the end of this file. Do not read the
+2026-07-19 date as covering those.
+```
+
 ## Current headline (2026-07-19): the numeric backend is FASTER than FORM
 
 `bench_aqbq147`, 200k points, `taskset`-pinned:
@@ -96,6 +103,27 @@ suite passes, including the per-flavour / per-component / disconnected flows
 three-gluon `ZA3` 1/4/7 within a small factor of FORM), see the per-flow `compare_*` drivers and
 `tests/refshim/`. The generation pipeline (the disposable build-time generator program) is
 described in the repo's top-level `README.md` (the *Architecture* section).
+
+## Generation (2026-07-22/23) — cost of *producing* a kernel
+
+Distinct from everything above, which is how a kernel *runs*. These changes moved the generator, not
+the emitted arithmetic; the host kernels are byte-identical across all of them.
+
+| change | effect |
+|---|---|
+| Packed-exponent `MonoExp` + `NarrowAlloc` (`numeric/mpoly.hpp`) | stored polynomial term `pair<Mono,Cx>` **128 B → 72 B** (−43.75%), ~30% faster on a contraction microbench. Monomial compare becomes two integer compares. |
+| Blocked `MPoly::operator*` above a scratch threshold | bounds the transient peak of a "collapsing" multiply (where the result is far smaller than the `n·m` scratch) instead of materialising all of it. |
+| `MPolyFactory::scaled` | scaling a trace by a constant no longer pays `operator*`'s scratch and its dead `std::sort`: 3.7–4.1× on that operation, bit-identical. |
+| **Lever (b)** — dedup dressed traces on structure | the trace table loses its dressing dimension: combinations sharing a concrete Dirac structure collapse to one contraction (**6.2×** fewer on the dense flows). Full-basis `ZAAqbq1` went from *not generating at all* (OOM at 20 GB after 8.66 CPU-hours, still inside phase A) to **2.4 GB at W=8**. |
+| Vertex collection (`ntDiracSlot`, opt-in) | `za3_147` generates in **8.9 s** collected vs **13.3 s** distributed. Off by default — see the codegen internals doc for why. |
+
+The generator-side dials that trade RAM against time (`NT_GEN_MAXW`, `NT_GEN_MAXW_B`,
+`NT_GEN_GROUP_WINDOW`, `NT_GEN_MEMO_MAX`) are tabulated in
+[documentation/internals/codegen.md](documentation/internals/codegen.md).
+
+**GPU emission default changed.** Device trace functions above ~500 SSA instructions are now emitted
+out-of-line, which is both faster and cheaper to compile at that size; below it they stay inlined.
+The measurements and the two overrides are in [tests/gpu/README.md](tests/gpu/README.md).
 
 ## Reproducing
 

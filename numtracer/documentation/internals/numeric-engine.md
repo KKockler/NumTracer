@@ -46,6 +46,17 @@ namespaces:
   generated component table writes these directly, e.g. `env.mono({1,1,0,0,0},…)` on a
   `LorentzEnv env(5)` (five symbols) is `l1·cos1`.)
 
+  It *behaves* as that vector — `e[k]` reads and writes a power — but it is **stored** as a packed
+  128-bit key: 5 bits per symbol, 12 symbols per 64-bit word, up to 24 symbols. That takes the
+  stored term `pair<Mono,Cx>` from 128 B to 72 B and turns the monomial comparison that dominates
+  `MPoly`'s sort into two integer compares instead of an `nsym`-long walk. The packing is
+  **big-endian within each word** precisely so that comparing the two words *is* the old
+  element-wise lexicographic order — symbol 0 dominates, then symbol 1, … — which is what keeps the
+  emitted kernels byte-identical across the change. A symbol index past 24, a power above 31, or a
+  negative power transparently spills to a heap exponent list, so `nsym` and degree are bounded only
+  by `MonoExpT` (`int16_t`); no committed flow comes close (the largest `nsym` is 6), so in practice
+  every monomial stays inline.
+
 * **A sorted multiset of atom ids** (`Mono::atoms`). An **atom id** is an integer that *names a
   projector's denominator `k²`* — it is neither a symbol index nor the value `1/k²`. Each
   transverse/longitudinal/electric/magnetic projector in the network carries an id (`Elem::inv`,
@@ -88,6 +99,17 @@ that must stay symbolic to the end of the trace rather than cancel:
   *is* an `MPoly`, so `DPoly` reuses `MPoly::operator*`/`+` verbatim and undressed flows are
   byte-identical (their `DPoly` is a single empty-dressing term). Walked through in the
   [dressed-numerators tutorial](../tutorials/dressed-numerators.md).
+
+  **Where the `DPoly` is assembled matters.** The generator's *trace table* is plain `MPoly` even
+  for dressed flows: at codegen time each structure×dressing combination is stripped to its bare
+  structure, and the dressing is carried alongside as a per-sub-term scalar plus a `DMono`. So
+  combinations that share a concrete Dirac structure and differ only in dressing collapse to **one**
+  contraction — a 6.2× reduction in distinct traces on the dense quark–gluon flows, and what makes
+  full-basis `ZAAqbq1` generate at all. The `DPoly` is then built in phase B, where
+  `fold_net_dressed` (`numeric/trace_fold.hpp`) routes each sub-term's scaled `MPoly` into its
+  dressing channel. The alternative — collecting the `DPoly` during contraction
+  (`numeric_value_dressed_netval`) — is still the reference implementation and what
+  `tests/test_dpoly.cpp` grades against, but it re-contracts once per dressing channel.
 * **`SUNPoly`** (`network/sun_net.hpp`) — the colour/flavour analogue described in
   [step 3](#step-3-the-colour-fold): a group-diagonal `δ` folds to `Σ_a c_a Z_a` over named
   dressing ids instead of one flavour-blind number.

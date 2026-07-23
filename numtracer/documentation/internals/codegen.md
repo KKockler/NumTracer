@@ -98,6 +98,25 @@ appear as runtime atoms. This is what lets a flow dress individual flavours or c
 components differently in one trace. Flows with no dressed-numerator sum regenerate
 byte-identical with the option on or off.
 
+### Collected vertices (open Lorentz legs)
+
+The same argument applies to an internal **vertex** sum — a quark–gluon vertex written over a
+tensor basis, $\sum_a c_a T_a$ — except that its structures carry *open gluon legs* that the
+surrounding net must close. The `ntDiracSlot` token generalises `ntDressedNum` to exactly that: a
+coefficient-weighted sum of structures sharing both the spinor in/out pair **and** the same set of
+$k \ge 1$ open Lorentz legs. ($k=0$ is the propagator numerator above; a two-gluon vertex is
+$k=2$, and so on.) Each option is split into a Dirac-token chain plus any Lorentz-net factors —
+see the [dressed-numerators tutorial](../tutorials/dressed-numerators.md) for the data model.
+
+**This path is OFF by default and must be enabled per flow.** Collection replaces $3^n$ diagrams
+with one, which is a large win where the combination count stays bounded — `za3_147` generates in
+8.9 s collected against 13.3 s distributed — but the codegen expansion materialises the
+structure×dressing Cartesian product, and on a high-multiplicity flow (full-basis `ZAAqbq`: order
+$10^6$ combinations per net) that OOMs the Wolfram kernel. Such flows *must* distribute. Enable it
+with `NT_VERTEX_COLLECT=1`, or by setting `NumTracer`Private`$ntVertexCollect = True` in the
+generator script, as `tests/gen/gen_qcd_za3_147_numeric.wls` does. The propagator-numerator
+collection ($k=0$, at most two options apiece) is bounded and stays on unconditionally.
+
 ## Disconnected diagrams
 
 A single diagram can disconnect into several index-disjoint closed pieces (a quark loop *and* a
@@ -146,3 +165,27 @@ A few further `MakeNTKernel` options shape the emitted kernel: `"GlobalCollect"`
 into one trace; `"ScalarParams"` threads extra loop-independent doubles into the signature;
 `"Constant"` flat-adds a loop-independent term (DiFfRG's `constant(...)`); and `"Components"`
 restricts which external-projection components are emitted.
+
+## Generation knobs (environment variables)
+
+Generation is a two-phase C++ program the Wolfram front end compiles and runs (phase A contracts
+each distinct trace; phase B folds each net and lowers it to straight-line SSA). Both phases, and
+a few front-end steps, are steered by environment variables rather than options, because they are
+resource dials rather than semantics — set them around one flow, not globally.
+
+| variable | affects | default | effect |
+|---|---|---|---|
+| `NT_GEN_MAXW` | phase A | hardware concurrency | Cap phase-A workers. Peak RSS is ~`W` × the per-contraction working set, so this is the hard RAM ceiling for the contraction. Only ever *lowers* the count. |
+| `NT_GEN_MAXW_B` | phase B | `NT_GEN_MAXW` | Cap phase-B workers separately. Each holds one full contraction, so it is the RAM dial for dense quark flows — but the lowering is compute-heavy and parallel, so a low value badly slows big-kernel flows (`ZA4_147`: ~600 s at `nB=2` vs tens of seconds unthrottled). Throttle around the RAM-heavy flows only. |
+| | | | *Both are also settable from Wolfram via `SetNumTracerThreads[nA, nB]` / `GetNumTracerThreads[]`, which export them for the generator's child process.* |
+| `NT_GEN_GROUP_WINDOW` | phase B | `max(64, 8·W)` | How many net polynomials may be in flight at once — the streaming-fold RAM bound. A value ≥ the net count reproduces the old all-resident schedule. |
+| `NT_GEN_MEMO_MAX` | phase A/B | all distinct traces | Cap how many contracted traces stay resident; the rest are recomputed in phase B. The memory-bound dressed flows (`ZAAqbq`) dial this back. |
+| `NT_GEN_NO_DEDUP` | codegen | off | Disable the global sub-term dedup. The A/B control for the dedup speedup — `gen_zaaqbq1_small_numeric.wls` emits a dedup-off kernel with it as a graded reference. |
+| `NT_GEN_NO_POLYDIV` | phase A | off | Disable multi-term denominator cancellation (`divThroughPolyAtoms`). Costs a large amount of kernel size on quark/ghost loops; the control for that measurement. |
+| `NT_GEN_CC_CHUNK` | codegen | full fusion | Chunk size for fused-trace (`CrossTraceCSE`) lowering. Measured: full fusion wins. |
+| `NT_VERTEX_COLLECT` | front end | off | Enable the open-leg vertex collection (`ntDiracSlot`, above). Off because high-multiplicity flows OOM; on where it wins. |
+| `NT_NO_LABEL_CHECK` | front end | check on | Skip the per-diagram label census. ~14% of front-end time, but it is the guard that catches a label occurring more than twice — which otherwise becomes a silently wrong contraction. |
+| `NT_GEN_NOINLINE_MIN` | emission | `500` | Per-function instruction threshold above which a device trace function is emitted out-of-line. See [tests/gpu/README.md](../../tests/gpu/README.md). |
+| `NT_GEN_NOINLINE_TRACES` | emission | off | Force out-of-line for every trace function, host and device — the nvcc compile-cost lever. |
+| `NT_GEN_PROFILE` | both | off | Per-phase timing/RSS diagnostics from the generator binary. `=2` adds the per-wave RSS trace. Note it must be run against the compiled `gen_<name>` binary directly — the output is lost through `wolframscript`'s `Run[]`. |
+| `NT_GEN_VERBOSE` | front end | off | Enable the `[prof]`/`[cse]`/`[time]` Wolfram-side diagnostics (`ntLog`). `tests/gen/regen_check.sh` sets it because its density guard greps the `[cse]` line. |

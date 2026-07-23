@@ -58,14 +58,15 @@ for (int mu = 0; mu < 4; ++mu) {
 nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
 
 // The dressed numerators. A DSlot is a numerator's list of structure options; a DSlotOpt is
-//   { coeff , dressing-atom ids , slash? , slash-momentum }.
+//   { coeff , dressing-atom ids , Dirac-token chain , Lorentz-net factors }.
 //   S(p): option 0 = 𝟙 dressed by atom 0 ("Mq");   option 1 = p̸ dressed by atom 1 ("Z(p)").
 //   S(q): option 0 = 𝟙 dressed by atom 0 ("Mq");   option 1 = q̸ dressed by atom 2 ("Z(q)").
+// An empty token chain IS the spinor identity 𝟙; the net-factor list is empty here (see below).
 // Atom 0 is SHARED: both mass terms are the same runtime Mq.
-nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}},
-                nm::DSlotOpt{Cx{1, 0}, {1}, true, {{1.0, 0}}}}; // p̸ = 1·comp[0]
-nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, false, {}},
-                nm::DSlotOpt{Cx{1, 0}, {2}, true, {{1.0, 1}}}}; // q̸ = 1·comp[1]
+nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}},
+                nm::DSlotOpt{Cx{1, 0}, {1}, {net::dslash({{1.0, 0}})}, {}}}; // p̸ = 1·comp[0]
+nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}},
+                nm::DSlotOpt{Cx{1, 0}, {2}, {net::dslash({{1.0, 1}})}, {}}}; // q̸ = 1·comp[1]
 
 // The dressed Dirac chain in trace order: dtfix = a fixed factor, dtslot(i) = the i-th slot.
 std::vector<nm::DChainTok> dchain = {nm::dtfix(net::dgamma(100)), nm::dtslot(0),
@@ -104,6 +105,22 @@ The coefficient of each dressing monomial **is a full `MPoly`**, so `DPoly` reus
 `MPoly::operator*`/`operator+` verbatim and only diagrams that actually carry a dressed structure
 sum pay for the dressing layer. See
 [the numeric engine](../internals/numeric-engine.md) for how the id-namespaces relate.
+
+**Beyond propagator numerators.** A `DSlotOpt`'s structure is described by two lists, because a
+collected slot is not restricted to the $\{\mathbb{1}, \slashed p\}$ pair above:
+
+* `toks` — a **Dirac-token chain** spliced in place of the slot (spinor `din → dout`). Any free
+  Lorentz index it carries (a `dgamma(μ)`, an open `dcomm` leg) is an *open leg*.
+* `netFacs` — **Lorentz-net factors** (a vector $p^\mu$, a metric $g^{\mu\nu}$, …) carrying any
+  remaining open legs, appended to the surrounding net.
+
+Every option in one slot shares the same open-leg set, so the surrounding net closes a fixed set of
+legs whatever structure is chosen. That one form covers any leg count $k \ge 0$: $k=0$ is the
+propagator numerator of this tutorial (`toks = {}` for $\mathbb{1}$, `{dslash(p)}` for
+$\slashed p$, both with `netFacs = {}`); $k=1$ is a quark–gluon vertex ($\gamma^\mu$,
+$\slashed p_1\gamma^\mu$, $\sigma^{\mu\nu}\slashed p_\nu$, or $p^\mu\cdot\mathbb{1}$ with the leg on
+a `netFacs` vector); $k=2$ a two-gluon vertex, and so on. `tests/test_dpoly.cpp` cases G–J walk that
+ladder against explicit distributed sums.
 
 ```{admonition} How the front-end produces slots
 :class: note

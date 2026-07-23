@@ -16,7 +16,7 @@
 # Reading a failure:
 #   this fails but plain ctest passes -> your codegen change altered the emitted kernel.
 #   both fail                         -> the committed artifacts are stale, not necessarily wrong.
-#                                        See tests/gen/README.md and FUNKIT_ROUTING_ISSUE.md.
+#                                        See tests/gen/README.md.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

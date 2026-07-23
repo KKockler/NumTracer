@@ -50,6 +50,26 @@ swapped for `shim.hpp`:
 So the oracle only moves when someone copies it. This is a trap: regenerate the numeric kernel alone
 and it is compared against an oracle that may be months older.
 
+## `probe_*.wls` — measurement scripts, not tests
+
+`probe_*.wls` are one-off instruments kept as the evidence behind a measurement in the design docs:
+they build a net and *report* something (diagram counts, generation timing, peak RSS, a label
+census) rather than emitting or grading a kernel. Nothing runs them — they are in no ctest target
+and not in `regen_check.sh`'s `DEFAULT_FLOWS` — so they are also not maintained against front-end
+changes; expect to fix one up before re-running it. Current set:
+
+| probe | reports |
+|---|---|
+| `probe_za3_147_count.wls` | diagram count, vertex collection ON vs OFF (the 36.8× figure) |
+| `probe_za3_147_timing.wls` | `NumTrace` + `MakeNTKernel` wall time, collection ON vs OFF |
+| `probe_za4_147_ramtime.wls` | phase-A/B time and peak RSS on the pure-gauge four-point flow |
+| `probe_zaaqbq147.wls` | net/diagram/trace counts for the full-basis `ZAAqbq` setup |
+| `probe_vertex_sum.wls` | the raw `AqbqDirect147` vertex structures, as the Stage-4 ground truth |
+| `probe_a4_dummies.wls`, `probe_ym_za4_labels.wls` | index-label censuses behind two earlier bugs |
+
+`test_diracslot_roundtrip.wls` is the exception in this family: it is an assertion (decompose →
+expand must reproduce the original sum), not a report.
+
 ## Both sides must be frozen from the same run
 
 The tests compare **integrands pointwise**. That comparison is *not* invariant under the choice of

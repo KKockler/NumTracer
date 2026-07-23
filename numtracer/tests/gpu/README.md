@@ -138,17 +138,41 @@ even cleaner: `tr0` of ZA4_num (1186 fp ops) compiles to a **0-byte stack frame,
 Horner form has bounded register pressure by construction, so each flat-SSA trace is
 register-clean regardless of length.
 
-**Verdict: the flat all-inlined emission is the runtime-optimal one; don't change the default.**
-The only lever that would speed these kernels up is fewer arithmetic ops (the IBP/collection
-problem), which is orthogonal to emission style; a register-pressure-aware emission order is
-not worth pursuing because register pressure is not the binding constraint.
+### Superseded (2026-07-23): the decision is per-FUNCTION, and it is now size-gated by default
 
-The one cost of all-inlining is *compile* time: the 147 k-line ZA4_147 TU takes ~2.5 min /
-2.7 GB through nvcc (host pass dominates). For users who hit nvcc time/RAM limits on a monster
-kernel, the codegen exposes an opt-in escape hatch — set `NT_GEN_NOINLINE_TRACES=1` when running
-the generator and the per-diagram `trN` are emitted `__attribute__((noinline))` (`fill`/`powr`
-stay inline). That roughly halves the ZA4_147 compile time and RAM, at the ~7–19 % runtime cost
-above. It is **not** the default and leaves the emitted bytes unchanged when unset.
+The table above compared *whole-kernel* emission styles, and on that basis this section used to
+conclude "the flat all-inlined emission is the runtime-optimal one; don't change the default."
+A sweep over **12 flows** on the same sm_89 / RTX 4070 shows the choice does not track the kernel
+at all — it tracks each trace function's **own** instruction count:
+
+| flow | instr / trace fn | `__noinline__` vs inlined |
+|---|--:|--:|
+| ZAqbq1_147 (108 functions) | 125 | 1.66× **slower** out-of-lined |
+| ZA4 | 655 | **0.73×** (faster out-of-lined) |
+| ZAAqbq1 | 772 | **0.70×** (faster out-of-lined) |
+
+A function inlined into the kernel contributes its SSA temporaries to the register pool; past
+~500 instructions that spills (up to 26 KB/thread on the dense four-point flows) and the kernel
+goes memory-bound, so out-of-lining wins on runtime *and* costs ~3× less to compile. Below the
+threshold, inlining wins decisively — cross-trace CSE plus no call overhead — even when the kernel
+as a whole is large, which is exactly the ZAqbq1_147 row and why the whole-kernel framing got it
+backwards.
+
+So the default is now a **per-function size gate on the device target**: `nInstr > 500` is emitted
+`__attribute__((noinline))`, below stays `inline`. It never picks the losing side on any swept flow
+(≥500: out-of-lining wins or ties; <500: inlining wins). **Host emission is unchanged and stays
+byte-identical** — there is no 255-register cliff there, and the CPU measurement above (`tr0` of
+ZA4_num: 0-byte stack frame, 0 spills) still stands.
+
+Two overrides, both read by the generator:
+
+| variable | effect |
+|---|---|
+| `NT_GEN_NOINLINE_MIN=N` | move the per-function threshold (default `500`). Read once per process, so emission is consistent across a run. |
+| `NT_GEN_NOINLINE_TRACES=1` | force out-of-line for **every** function, host and device. The compile-cost lever for the 100 k+-line kernels (roughly halves the ZA4_147 TU's ~2.5 min / 2.7 GB nvcc pass), and the A/B control for the measurements above. |
+
+`fill`/`powr` stay inline under both. The remaining runtime lever is still fewer arithmetic ops
+(the IBP/collection problem), which is orthogonal to emission style.
 
 ## Build & run
 
