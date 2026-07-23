@@ -62,5 +62,14 @@ wants the transfer-matrix (matrix-of-`DPoly`) contraction as a follow-on.
   reasons, not as a RAM lever.
 - Everything already on the pre-existing rejected list (`MPoly::t` inline, matmul sparsity skip,
   hash-collect in `from_scratch`, single-pass `Mono::operator<`).
+- **Front-end parallelism over Wolfram subkernels** (`analyseDiagram` / the label census, both pure
+  per-diagram maps). Landed 2026-07-22 behind `NT_PARALLEL=1`, measured, and **removed 2026-07-23**.
+  It is marshalling-bound, not compute-bound: the kernel serialises each diagram *and* its result
+  across processes, costing about as much as the work. Full-basis ZAAqbq (3350 diagrams): `NumTrace`
+  **55 s serial vs 55 s parallel**, and the label census got *slower* — its census is too cheap to
+  beat the transfer. It also carried a correctness trap: the subkernels needed every collection
+  global (`$ntDressCollect`, `$ntVertexCollect`, …) pushed by hand, and a flow that sets one by
+  symbol assignment rather than by environment variable would silently analyse differently on the
+  workers. The real front-end lever is `NT_NO_LABEL_CHECK` (skip the census, ~14%).
 
 See `NUMTRACER_TRACE_PERF_PLAN.md` for the staged, measured implementation plan.
