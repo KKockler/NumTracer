@@ -1432,10 +1432,13 @@ dressedSlotStrBody[ntDressedNum[opts_, _, _], env_] :=
                         ,
                         ""
                      ];
-                  (* new DSlotOpt form {coeff, {dress}, {toks}, {netFacs}}: k=0 propagator numerator has NO
-                     open leg (netFacs empty); ident → empty toks, slash → one dslash token. *)
-                  "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <> StringRiffle[ToString /@ dr, ", "] <> "}, {" <>
-                     If[opt[[2, 1]] === "slash", "dslash({" <> vlcStr <> "})", ""] <> "}, {}}"
+                  (* LEVER (b): return the STRUCTURE separately from the dressing, as {structStr, num, dr}.
+                     structStr is the dressing-free DSlotOpt (coeff 1, no dress atoms) — ident → empty toks,
+                     slash → one dslash token (netFacs empty: a k=0 propagator numerator has no open leg).
+                     num (numeric Cx) folds into the sub-term scalar and dr (dress-atom ids) becomes the
+                     DPoly key, so the trace table dedups on structure alone. *)
+                  {"DSlotOpt{Cx{1,0}, {}, {" <>
+                     If[opt[[2, 1]] === "slash", "dslash({" <> vlcStr <> "})", ""] <> "}, {}}", num, dr}
                ]
             ] /@ opts;
 
@@ -1505,9 +1508,10 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, mask_, nc_]
                            "dslash({{1.0," <> ToString[env[vecOf[mu]]["Base"]] <> "}})",
                            "dgamma(" <> ToString[ids[mu]] <> ")"]]]] /@ ordered;
                netFacs = builderInvElem[#, ids, env] & /@ lorFacs;
-               "DSlotOpt{Cx{" <> cppNum[Re[num]] <> "," <> cppNum[Im[num]] <> "}, {" <>
-                  StringRiffle[ToString /@ dr, ", "] <> "}, {" <> StringRiffle[toks, ", "] <> "}, {" <>
-                  StringRiffle[netFacs, ", "] <> "}}"
+               (* LEVER (b): {structStr, num, dr} — dressing-free DSlotOpt (coeff 1, no dress) + the numeric
+                  Cx (num) and dress-atom ids (dr) carried separately by the sub-term. See dressedSlotStrBody. *)
+               {"DSlotOpt{Cx{1,0}, {}, {" <> StringRiffle[toks, ", "] <> "}, {" <>
+                  StringRiffle[netFacs, ", "] <> "}}", num, dr}
             ]] /@ opts;
 
 (* Turn a component's factor list into the C++ Dirac-chain token(s) + its Lorentz "rest".
@@ -1899,14 +1903,15 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] :=
 
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False] :=
    Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], bb, tmpl, pre, unitPre, nUnits, units, decl, ddl, dStr, lStr, dscv, ddch, ddsl, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl,
-      chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl},
+      chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, ddr},
       bb[x_] := ToString[x];
 (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
-   (a numerator structure-sum kept eager). hasDressed routes the generator to the DPoly branch:
-   mp[] is a vector<DPoly>, a dressed sub-term contracts via numeric_value_dressed_netval, and the
-   dressings ride the env as kind-2 `dress` leaves filled by fm.dress. The CSE / sub-term dedup
-   (optimisations for the dense σ case) are SKIPPED when hasDressed so the non-dressed path stays
-   byte-identical. *)
+   (a numerator structure-sum kept eager). LEVER (b): the trace table is PLAIN MPoly for both paths — a
+   dressed sub-term's structural trace (dressing stripped) contracts via numeric_value_dressed_netval_mp,
+   and its dressing rides the per-sub-term scalar (dsc, numeric) + monomial (sdr, atom ids). The phase-B
+   fold (fold_groups_streaming_dressed) assembles those into the per-net DPoly, and the dressings ride the
+   env as kind-2 `dress` leaves filled by fm.dress. So combinations that share a concrete structure but
+   differ only in dressing collapse to ONE trace; the non-dressed path is byte-identical. *)
       hasDressed = !FreeQ[invNets, _ntDressedCore];
       (* shared wrapper templates (same as the inv generator) so the net-builder strings compile. *)
       tmpl = "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal tproj(){ return projT(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv> NetVal lproj(){ return projL(Mu,Nu,Lb,Inv); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int InvS> NetVal mproj(){ return projM(Mu,Nu,Lb,InvS); }\n" <> "template<int Mu,int Nu,int Lb,int Mask,int Inv,int InvS> NetVal eproj(){ return projE(Mu,Nu,Lb,Inv,InvS); }\n" <> "template<int Mu,int Nu> NetVal lmetric(){ return met(Mu,Nu); }\n" <> "template<int Lbl,int Base,int Mask> NetVal lvec(){ return vec(Lbl,Base); }\n" <> "template<int A,int B,int C,int D> NetVal leps(){ return epsilon(A,B,C,D); }\n" <> "inline NetVal konst(double c){ return NetVal{PTerm{Cx{c,0}, {}}}; }\n" <> "template<class L> struct litco;\n" <> "template<numtracer::Cx C> struct litco<numtracer::Lit<C>>{ static constexpr numtracer::Cx v=C; };\n" <> "template<class L> NetVal sc(NetVal x){ return scale(litco<L>::v, std::move(x)); }\n";
@@ -1915,20 +1920,21 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    parallel. Build per net the parallel lists of {DiracNet builder, NetVal builder} (a gamma-free
    branch → empty DiracNet + the whole net as the rest) plus the sub-term scalars; the generator
    sums mp[i] = Σ_b scal_b · numeric_value_netval(dn[i][b], ln[i][b]). *)
-(* Each branch yields a LIST of {ds, ls, scal, dc, dl} sub-terms (usually length 1). A DRESSED branch
-   expands the Cartesian product of its chain's slot options (Tuples) into ONE single-option sub-term
-   per combination: same DiracNet{}/rest/scalar/chain, but its DSlot list has exactly one DSlotOpt per
-   slot (the chosen combination). Each combination is then an ordinary dressed trace that dedups across
-   nets and contracts over phase A's flat parallel list, so C++ dress_collect no longer enumerates the
-   3ⁿ combinations serially per net (numeric-identical, not byte-identical — dedup renumbers). A slot's
-   option list is nv[[2]][[k]]; Tuples over them gives every combination. The non-dressed branches are
-   unchanged (one sub-term each), so non-dressed flows stay byte-identical. *)
-      {dStr, lStr, dscv, ddch, ddsl} =
+(* Each branch yields a LIST of {ds, ls, scal, dc, dl, dr} sub-terms (usually length 1). A DRESSED branch
+   expands the Cartesian product of its chain's slot options (Tuples) into ONE structural sub-term per
+   combination. LEVER (b): each slot option is now a TRIPLE {structStr, num, dr} (dressing-free DSlotOpt +
+   numeric Cx + dress-atom ids). For each combination we keep the STRUCTURE (dl = the list of structStr,
+   one per slot) for the trace key, fold the numeric part (∏ num) INTO the sub-term scalar, and carry the
+   dressing-atom multiset (dr = ⋃ dress) as the DPoly key. So combinations that share a concrete structure
+   but differ only in dressing collapse to ONE plain-MPoly trace (the 6.2× dedup), and the trace table
+   loses its dressing dimension entirely. A slot's option list is nv[[2]][[k]]; Tuples over them gives every
+   combination. The non-dressed branches carry an empty dress key, so non-dressed flows stay byte-identical. *)
+      {dStr, lStr, dscv, ddch, ddsl, ddr} =
          Transpose @
             MapThread[
                Function[{cores, rss},
                   If[cores === {},
-                     {{}, {}, {}, {}, {}}
+                     {{}, {}, {}, {}, {}, {}}
                      ,
                      Transpose[
                         Join @@
@@ -1936,21 +1942,25 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                               Function[{nv, rv, scal},
                                  Module[{lsStr = If[rv === "", "NetVal{}", rv]},
                                     Which[
-                                       MatchQ[nv, _ntDressedCore],(* dressed numerator: expand slot options → single-option sub-terms *)
+                                       MatchQ[nv, _ntDressedCore],(* dressed numerator: expand slot options → structural sub-terms *)
                                           With[{chain = nv[[1]], slotOpts = nv[[2]]},
-                                             (* 5th slot = this combination's option-string LIST (one option per chain slot),
-                                                kept STRUCTURED (not the joined DSlot literal) so the table emitter can pool the
-                                                distinct options — the columns are ~99.9% redundant across combinations. *)
+                                             (* dl (5th) = this combination's STRUCTURAL option-string LIST (one dressing-free
+                                                structStr per chain slot), kept STRUCTURED so the table emitter pools the distinct
+                                                structures; the numeric Cx folds into scal and the dress ids become dr (6th). *)
                                              Function[combo,
-                                                {"DiracNet{}", lsStr, scal, chain, combo}
+                                                {"DiracNet{}", lsStr,
+                                                 scal * (Times @@ (#[[2]]& /@ combo)),   (* fold ∏ numeric Cx into the scalar *)
+                                                 chain,
+                                                 #[[1]]& /@ combo,                        (* structural options (dressing-free) *)
+                                                 Sort[Catenate[#[[3]]& /@ combo]]}        (* ⋃ dress atom ids, sorted (Catenate[{}]={}) *)
                                              ] /@ If[slotOpts === {}, {{}}, Tuples[slotOpts]]
                                           ]
                                        ,
                                        StringMatchQ[nv, "DiracNet" ~~ ___],(* gamma branch: DiracNet + projector rest *)
-                                          {{nv, lsStr, scal, "std::vector<DChainTok>{}", {}}}
+                                          {{nv, lsStr, scal, "std::vector<DChainTok>{}", {}, {}}}
                                        ,
                                        True,(* gamma-free branch: whole net is the rest *)
-                                          {{"DiracNet{}", nv, scal, "std::vector<DChainTok>{}", {}}}
+                                          {{"DiracNet{}", nv, scal, "std::vector<DChainTok>{}", {}, {}}}
                                     ]
                                  ]
                               ]
@@ -2153,35 +2163,46 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    (generate twice, compare the kernels' VALUES; a byte-diff is meaningless because dedup changes
    GlobalEnv interning order and so renumbers every sN). *)
       ntNoDedup = (Environment["NT_GEN_NO_DEDUP"] =!= $Failed);
+(* LEVER (b): each sub-term carries a {traceKey, dressKey} PAIR. The traceKey is dressing-free
+   {ds, ls, chain, structural-options} — so combinations that share a concrete structure but differ only
+   in dressing collapse to ONE trace. The dressKey is the sorted dress-atom multiset; it becomes the
+   DPoly channel a net's fold routes this sub-term's (scaled) trace into. Sub-terms MERGE only when they
+   share BOTH the trace AND the dress channel (a merge across channels would corrupt the DPoly). For a
+   non-dressed flow every dressKey is {}, so the grouping reduces to the old traceKey grouping and the
+   emitted kernel is byte-identical. *)
       subKeys =
          MapThread[
-            Function[{ds, ls, dc, dl, ni},
+            Function[{ds, ls, dc, dl, dr, ni},
                Table[
-                  Join[
-                     {
-                        ds[[j]]
-                        ,
-                        ls[[j]]
-                        ,
-                        If[hasDressed,
-                           dc[[j]]
+                  {
+                     Join[
+                        {
+                           ds[[j]]
                            ,
-                           ""
-                        ]
-                        ,
-                        If[hasDressed,
-                           dl[[j]]
+                           ls[[j]]
                            ,
-                           ""
-                        ]
-                     }
-                     ,
-                     If[ntNoDedup,
-                        {ni, j}
+                           If[hasDressed,
+                              dc[[j]]
+                              ,
+                              ""
+                           ]
+                           ,
+                           If[hasDressed,
+                              dl[[j]]
+                              ,
+                              ""
+                           ]
+                        }
                         ,
-                        {}
+                        If[ntNoDedup,
+                           {ni, j}
+                           ,
+                           {}
+                        ]
                      ]
-                  ]
+                     ,(* dressKey: the dress-atom multiset ({} for a non-dressed sub-term) *)
+                     dr[[j]]
+                  }
                   ,(* unique per occurrence => nothing ever merges *)
                   {j, Length[ds]}
                ]
@@ -2204,17 +2225,23 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   dStr
                ]
                ,
+               ddr
+               ,
                Range[Length[dStr]]
             }
          ];
-(* Per net: merge the sub-terms that share a trace, summing scalars; drop the zero sums. Do this
-   BEFORE counting references — a trace occurring twice inside ONE net collapses to a single
-   reference here, so its raw occurrence count would overstate its reuse, and a trace whose scalars
-   cancel is not referenced at all and must not be contracted. *)
+(* Per net: merge the sub-terms that share a trace AND a dress channel, summing scalars; drop the zero
+   sums. Do this BEFORE counting references — a (trace, channel) occurring twice inside ONE net collapses
+   to a single reference here, so its raw occurrence count would overstate its reuse, and a channel whose
+   scalars cancel is not referenced at all and must not be contracted. *)
       netTerms =
          MapThread[
             Function[{keys, scs},
-               Select[({#[[1, 1]], Total[#[[All, 2]]]}&) /@ GatherBy[Transpose[{keys, scs}], First], #[[2]] =!= 0&]
+               (* GatherBy element = {{traceKey, dressKey}, sc}; g[[1,1]] is the {tk,dk} PAIR, so tk = g[[1,1,1]],
+                  dk = g[[1,1,2]]. The trace table keys on tk ALONE (refCount below), so dressing variants of one
+                  structure share the trace slot; only the fold entry carries dk. *)
+               Select[(Function[g, {g[[1, 1, 1]], g[[1, 1, 2]], Total[g[[All, 2]]]}]) /@ GatherBy[Transpose[{keys, scs}], First],
+                  #[[3]] =!= 0&]
             ]
             ,
             {subKeys, dscv}
@@ -2238,7 +2265,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
       netTerms =
          Map[
             Function[nt,
-                  {subIdxOf[nt[[1]]], nt[[2]]}
+                  {subIdxOf[nt[[1]]], nt[[2]], nt[[3]]}
                ] /@ #&
             ,
             netTerms
@@ -2439,8 +2466,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   "  std::vector<std::string> symNames = {" <> StringRiffle[("\"" <> # <> "\"")& /@ symNames, ","] <> "};\n"
                   ,
 (* the DISTINCT-trace tables (see the global sub-term dedup). Flat, indexed by trace id: a plain
-   trace has an empty chain (contract via sdn[k]), a dressed one uses sdch[k]/sdsl[k] via
-   numeric_value_dressed_netval. sdch/sdsl are emitted only when the kernel has dressed nets. *)
+   trace has an empty chain (contract via sdn[k]), a dressed (structural) one uses sdch[k]/sdsl[k] via
+   numeric_value_dressed_netval_mp. sdch/sdsl are emitted only when the kernel has dressed nets. *)
                   "  std::vector<DiracNet> sdn = sdn0();\n"
                   ,
                   "  std::vector<NetVal> sln = sln0();\n"
@@ -2476,17 +2503,22 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                         Function[nt,
                               nt[[All, 1]]
                            ] /@ netTerms
-                     ,
-                     scaRows =
+                     ,(* LEVER (b): the per-sub-term dressing monomials (position 2), row-deduped like sidx *)
+                     drRows =
                         Function[nt,
                               nt[[All, 2]]
                            ] /@ netTerms
+                     ,
+                     scaRows =
+                        Function[nt,
+                              nt[[All, 3]]
+                           ] /@ netTerms
                   },
-                     With[{uIdx = DeleteDuplicates[idxRows], uVal = DeleteDuplicates[Flatten[scaRows]]},
-                        With[{idxPos = AssociationThread[uIdx -> Range[Length[uIdx]] - 1], valPos = AssociationThread[uVal -> Range[Length[uVal]] - 1]},
-                           With[{scaIdxRows = Map[valPos, scaRows, {2}]},
-                              With[{uSca = DeleteDuplicates[scaIdxRows]},
-                                 With[{scaPos = AssociationThread[uSca -> Range[Length[uSca]] - 1]},
+                     With[{uIdx = DeleteDuplicates[idxRows], uVal = DeleteDuplicates[Flatten[scaRows]], uDrV = DeleteDuplicates[Flatten[drRows, 1]]},
+                        With[{idxPos = AssociationThread[uIdx -> Range[Length[uIdx]] - 1], valPos = AssociationThread[uVal -> Range[Length[uVal]] - 1], drValPos = AssociationThread[uDrV -> Range[Length[uDrV]] - 1]},
+                           With[{scaIdxRows = Map[valPos, scaRows, {2}], drIdxRows = Map[drValPos, drRows, {2}]},
+                              With[{uSca = DeleteDuplicates[scaIdxRows], uDrIdx = DeleteDuplicates[drIdxRows]},
+                                 With[{scaPos = AssociationThread[uSca -> Range[Length[uSca]] - 1], drRowPos = AssociationThread[uDrIdx -> Range[Length[uDrIdx]] - 1]},
                                     StringJoin[
                                        "  const size_t NNET = " <> bb[Length[netTerms]] <> ";\n"
                                        ,
@@ -2516,6 +2548,24 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                                        "  for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());\n"
                                        ,
                                        "    for(int k: r) dsc[i].push_back(dscV[k]); }\n"
+                                       ,
+(* LEVER (b): the per-sub-term dressing monomials sdr[i][j], deduped on BOTH levels exactly like dsc — a
+   dense dressed flow has thousands of sub-terms but only a handful of DISTINCT dressing monomials (sdrV)
+   and few distinct index-rows (sdrU), so a flat braced-init would be huge (measured: 115 KB single row on
+   za3_147, +37 s compile) while this stays a few KB. The dressed phase-B fold routes each sub-term's scaled
+   MPoly trace into its DPoly channel sdr[i][j] (empty monomial = undressed). Emitted only for dressed flows. *)
+                                       If[hasDressed,
+                                          "  std::vector<DMono> sdrV = {" <>
+                                             StringRiffle[("{" <> StringRiffle[bb /@ #, ","] <> "}")& /@ uDrV, ","] <> "};\n" <>
+                                          "  std::vector<std::vector<int>> sdrU = {" <>
+                                             StringRiffle[("{" <> StringRiffle[bb /@ #, ","] <> "}")& /@ uDrIdx, ","] <> "};\n" <>
+                                          "  std::vector<int> sdrR = {" <> StringRiffle[bb /@ (drRowPos /@ drIdxRows), ","] <> "};\n" <>
+                                          "  std::vector<std::vector<DMono>> sdr(NNET);\n" <>
+                                          "  for(size_t i=0;i<NNET;++i){ const auto& r=sdrU[sdrR[i]]; sdr[i].reserve(r.size());\n" <>
+                                          "    for(int k: r) sdr[i].push_back(sdrV[k]); }\n"
+                                          ,
+                                          ""
+                                       ]
                                     ]
                                  ]
                               ]
@@ -2548,12 +2598,11 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   "  unsigned hwB=hw; if(const char* mb=std::getenv(\"NT_GEN_MAXW_B\")){int v=std::atoi(mb); if(v>0)hwB=(unsigned)v;}\n"
                   ,
                   With[{
-                     PT =
-                        If[hasDressed,
-                           "DPoly"
-                           ,
-                           "MPoly"
-                        ]
+                     (* LEVER (b): the trace table is PLAIN MPoly for BOTH paths now — a dressed sub-term's
+                        structural trace is a plain MPoly (numeric_value_dressed_netval_mp) and its dressing
+                        rides the per-sub-term scalar (dsc) + monomial (sdr), assembled into a DPoly only in
+                        the phase-B fold. So phase A caches MPoly either way. *)
+                     PT = "MPoly"
                   },
                      StringJoin[
                         {
@@ -2565,14 +2614,12 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    when memory is tight (the RAM lever — the dense flows are memory-bound before they are
    compute-bound), raise it to NSUB to put the singletons in phase A too, which costs their RAM
    but gives phase A the whole work list to balance.
-   DRESSED (collected-slot) flows default to NSUB: expanding each structure×dressing COMBINATION into
-   its own single-option sub-term (Codegen.m) makes every combination a DISTINCT singleton (no
-   cross-net reuse), so nReused is ~0 and the reused-only default would leave ALL of them to phase B's
-   fold — which is parallel over NETS, not traces, so the one dominant net serialises thousands of
-   contractions (measured on za3_147: phase B 27 s). Each collected combination is individually SMALL
-   (za3_147: 12101 traces = 8 MB table), so caching them all is RAM-cheap and lets phase A contract
-   them over its flat W-parallel work list instead (phase B 27 s -> 0 s, run 27 s -> 2 s). Memory-bound
-   dressed flows (ZAAqbq) dial it back with NT_GEN_MEMO_MAX. *)
+   DRESSED (collected-slot) flows default to NSUB: even after lever (b) dedups the dressing variants of a
+   concrete trace (so nReused is no longer ~0), the plain-MPoly traces are individually SMALL and phase B
+   is parallel over NETS not traces — leaving the singletons to phase B lets the one dominant net serialise
+   thousands of contractions. Caching them all (nSub) is RAM-cheap now the trace table has no dressing
+   dimension, and lets phase A contract them over its flat W-parallel work list. Memory-bound dressed flows
+   (ZAAqbq) dial it back with NT_GEN_MEMO_MAX. *)
                            "  long nCache = " <> bb[If[hasDressed, nSub, nReused]] <> ";\n"
                            ,
                            "  if(const char* mm=std::getenv(\"NT_GEN_MEMO_MAX\")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }\n"
@@ -2580,7 +2627,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                            "  auto trace=[&](int k)->" <> PT <> "{\n"
                            ,
                            If[hasDressed,
-                              "    return sdch[k].empty()\n" <> "      ? env.fromMPoly(env.numeric_value_netval(sdn[k], sln[k], comp, atomDen))\n" <> "      : env.numeric_value_dressed_netval(sdch[k], sdsl[k], sln[k], comp, atomDen);\n"
+                              (* structural trace → plain MPoly: a non-slot sub-term contracts via sdn[k]/sln[k],
+                                 a collected one via the dressing-free _mp variant (dressing stripped at codegen). *)
+                              "    return sdch[k].empty()\n" <> "      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)\n" <> "      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);\n"
                               ,
                               "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"
                            ]
@@ -2686,15 +2735,19 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   ,
                   "  if(ntprof) numtracer::numeric::check_group_partition(groups, " <> bb[nNet] <> ");\n"
                   ,
+(* LEVER (b): the dressed fold reads a PLAIN-MPoly trace table T + the per-sub-term dressing monomials sdr,
+   building the per-net DPoly channel-by-channel (fold_groups_streaming_dressed). The colour scale (scaleCx)
+   and the sink are unchanged — only the per-net fold's trace type differs, so the group DPoly the sink
+   receives is value-identical to the pre-lever-(b) DPoly-trace-table path. *)
                   Which[
                      crossCSE && hasDressed,
-                        "  FusedStream fstream(g, realOnly);\n" <> "  env.fold_groups_streaming<DPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t, DPoly &&acc){ fstream.add(acc); });\n" <> "  std::vector<FusedProg> fused = fstream.finish();\n"
+                        "  FusedStream fstream(g, realOnly);\n" <> "  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, T, nCache, hwB, gwin, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t, DPoly &&acc){ fstream.add(acc); });\n" <> "  std::vector<FusedProg> fused = fstream.finish();\n"
                      ,
                      crossCSE,
                         "  FusedStream fstream(g, realOnly);\n" <> "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <> "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <> "    [&](size_t, MPoly &&acc){ fstream.add(acc); });\n" <> "  std::vector<FusedProg> fused = fstream.finish();\n"
                      ,
                      hasDressed,
-                        "  env.fold_groups_streaming<DPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); });\n"
+                        "  env.fold_groups_streaming_dressed(sidx, dsc, sdr, groups, T, nCache, hwB, gwin, trace,\n" <> "    [&](int d, DPoly &&m){ return scaleCx(m, colv[d]); },\n" <> "    [&](size_t gi, DPoly &&acc){ progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); });\n"
                      ,
                      True,
                         "  env.fold_groups_streaming<MPoly>(sidx, dsc, groups, T, nCache, hwB, gwin, trace,\n" <> "    [&](int d, MPoly &&m){ return m*env.constant(colv[d]); },\n" <> "    [&](size_t gi, MPoly &&acc){ progs.push_back(to_genprog(acc, g, realOnly[gi]!=0)); });\n"
@@ -2704,13 +2757,8 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   ,
 (* the trace table is dead once every group has folded; emission below only needs the lowered
    instruction streams, which are orders of magnitude smaller. *)
-                  (* NB: the `PT` With-binding above closes with phase A; spell the backend out again here. *)
-                  "  { std::vector<" <>
-                     If[hasDressed,
-                        "DPoly"
-                        ,
-                        "MPoly"
-                     ] <> "> dead; T.swap(dead); }\n"
+                  (* LEVER (b): the trace table T is plain MPoly for BOTH paths now. *)
+                  "  { std::vector<MPoly> dead; T.swap(dead); }\n"
                   ,
                   "  FillFormulas fm;\n"
                   ,

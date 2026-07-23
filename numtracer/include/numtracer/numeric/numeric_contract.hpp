@@ -981,6 +981,20 @@ namespace numtracer::numeric
                                                     const std::vector<std::array<MPoly, 4>> &comp,
                                                     const std::vector<MPoly> &atomDen,
                                                     const std::vector<std::vector<int>> &units = {});
+  /// @brief STRUCTURAL variant of @ref numeric_value_dressed_netval: contract the collected slots into a
+  ///        PLAIN @ref MPoly, DISCARDING the dressing dimension (the dressing monomial keys are summed
+  ///        away). This is lever (b): the generator strips each option's dressing (`coeff`→1, `dress`→{})
+  ///        into a per-sub-term scalar/monomial and feeds the dressing-free structure here, so the trace
+  ///        table dedups on structure alone (dressing variants of one concrete trace collapse) and each
+  ///        entry is a plain `MPoly` with no dressing dimension. The 4^(#collapsed loop) tr(1)=4 factor
+  ///        is STRUCTURAL (it depends only on the concrete chain) and is kept in the returned trace.
+  ///        Only meaningful when every option's `dress` is empty (the generator guarantees this); if fed
+  ///        genuine dressings it would silently sum them, which is why this is not the collection path.
+  NUMTRACER_FUNC MPoly numeric_value_dressed_netval_mp(int nsym, const std::vector<DChainTok> &chain,
+                                                       const std::vector<DSlot> &slots, const network::NetVal &lor,
+                                                       const std::vector<std::array<MPoly, 4>> &comp,
+                                                       const std::vector<MPoly> &atomDen,
+                                                       const std::vector<std::vector<int>> &units = {});
   NUMTRACER_FUNC DPoly numeric_value_dressed(int nsym, const std::vector<DChainTok> &chain,
                                              const std::vector<DSlot> &slots, const NNet &lorentz,
                                              const std::vector<std::array<MPoly, 4>> &comp,
@@ -998,11 +1012,15 @@ namespace numtracer::numeric
     /// concrete Dirac chain AND this combination's extra Lorentz-net factors (the chosen options'
     /// @ref DSlotOpt::netFacs — open legs on vectors/metrics/…); empty for every option whose structure
     /// is purely Dirac-side ⇒ the caller takes a byte-identical fast path.
-    template <class ContractFn>
-    inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
-                               ContractFn &&contract)
+    ///
+    /// The enumeration is factored out of @ref dress_collect so the two accumulation policies share it:
+    /// the DPoly collection (`emit(dmono, mp)` → `out.add(dmono, mp)`) and the STRUCTURAL MPoly reduction
+    /// (@ref dress_collect_mp: `emit(_, mp)` → `out += mp`, dropping the dressing key). @p emit is called
+    /// once per surviving combination with the sorted dressing monomial and the (coeff·trace) `MPoly`.
+    template <class ContractFn, class Emit>
+    inline void dress_enumerate(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
+                                ContractFn &&contract, Emit &&emit)
     {
-      DPoly out = DPolyFactory::zero(nsym);
       const int nSlots = static_cast<int>(slots.size());
       // The dressed chain is a quark line with ≥1 closed spinor loop ((LoopSep markers)+1). A combination
       // that collapses a WHOLE loop to the identity (every slot on it takes the δ option, no fixed γ) leaves
@@ -1045,7 +1063,7 @@ namespace numtracer::numeric
           MPoly mp = contract(concrete, extraNet);
           if (!mp.empty()) {
             mp = mp * MPolyFactory::constant(nsym, combCoeff);
-            out.add(dmono_sorted(std::move(dressMono)), mp);
+            emit(dmono_sorted(std::move(dressMono)), std::move(mp));
           }
         }
         // odometer over the slot choices: advance the lowest slot, carrying into the next on wrap.
@@ -1057,6 +1075,29 @@ namespace numtracer::numeric
         }
         if (k == nSlots) done = true;
       }
+    }
+
+    /// @brief The DPoly collection: accumulate each combination into its dressing-monomial channel.
+    template <class ContractFn>
+    inline DPoly dress_collect(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
+                               ContractFn &&contract)
+    {
+      DPoly out = DPolyFactory::zero(nsym);
+      dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
+                      [&](const DMono &d, MPoly &&mp) { out.add(d, mp); });
+      return out;
+    }
+
+    /// @brief The STRUCTURAL MPoly reduction (lever (b)): sum every combination into ONE plain MPoly,
+    ///        discarding the dressing monomial. Correct only when the slots carry no dressing (the
+    ///        generator strips it out first); see @ref numeric_value_dressed_netval_mp.
+    template <class ContractFn>
+    inline MPoly dress_collect_mp(int nsym, const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
+                                  ContractFn &&contract)
+    {
+      MPoly out = MPolyFactory::zero(nsym);
+      dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
+                      [&](const DMono &, MPoly &&mp) { out = out + mp; });
       return out;
     }
   } // namespace ndetail
@@ -1083,6 +1124,27 @@ namespace numtracer::numeric
                                       pt.e.insert(pt.e.end(), ev.begin(), ev.end());
                                     return numeric_value_netval(nsym, d, lor2, comp, atomDen, units);
                                   });
+  }
+
+  /// @brief STRUCTURAL MPoly reduction of a collected diagram (lever (b)). Same contraction machinery as
+  ///        @ref numeric_value_dressed_netval, but the dressing dimension is summed away, yielding a plain
+  ///        @ref MPoly. The generator feeds this dressing-free slots (each option's `coeff`=1, `dress`={})
+  ///        so the returned MPoly is the concrete structural trace (including its tr(1)=4 collapse
+  ///        factors); the dressing rides the sub-term scalar/monomial the generator carries alongside.
+  NUMTRACER_FUNC MPoly numeric_value_dressed_netval_mp(int nsym, const std::vector<DChainTok> &chain,
+                                                       const std::vector<DSlot> &slots, const network::NetVal &lor,
+                                                       const std::vector<std::array<MPoly, 4>> &comp,
+                                                       const std::vector<MPoly> &atomDen,
+                                                       const std::vector<std::vector<int>> &units)
+  {
+    return ndetail::dress_collect_mp(nsym, chain, slots,
+                                     [&](const network::DiracNet &d, const std::vector<network::Elem> &ev) {
+                                       if (ev.empty()) return numeric_value_netval(nsym, d, lor, comp, atomDen, units);
+                                       network::NetVal lor2 = lor;
+                                       for (network::PTerm &pt : lor2)
+                                         pt.e.insert(pt.e.end(), ev.begin(), ev.end());
+                                       return numeric_value_netval(nsym, d, lor2, comp, atomDen, units);
+                                     });
   }
 
   /// @brief Dressed analogue of @ref numeric_value (reading the numeric @ref NNet Lorentz network).

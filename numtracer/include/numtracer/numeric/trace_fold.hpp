@@ -171,6 +171,57 @@ namespace numtracer::numeric
     return acc;
   }
 
+  /// @brief PHASE B (lever (b), dressed) — fold one net whose traces are PLAIN @ref MPoly into a
+  ///        @ref DPoly: `Σ_j sc[j] · T[idx[j]] ⊗ dmono[j]`.
+  ///
+  /// This is the dressed analogue of @ref fold_net. The trace table is plain `MPoly` (the dressing
+  /// dimension was stripped at codegen time and lives in the per-sub-term `dmono`/`sc`), so the same net
+  /// can reference one concrete trace across MANY dressing channels without re-contracting it — the whole
+  /// point of lever (b). Each sub-term becomes a one-term `DPoly` (`dmono[j]` → `sc[j]·T`), and those are
+  /// summed by the SAME balanced binary-counter tree as @ref fold_net (so heavy nets stay O(n log n));
+  /// `DPoly::operator+` collects the channels. Traces at `idx[j] >= nCache` are recomputed here, exactly
+  /// as in @ref fold_net.
+  template <class TraceFn>
+  DPoly fold_net_dressed(int nsym, const std::vector<int> &idx, const std::vector<Cx> &sc,
+                         const std::vector<DMono> &dmono, const std::vector<MPoly> &T, long nCache,
+                         TraceFn &&trace)
+  {
+    std::vector<DPoly> st;
+    std::vector<std::size_t> rank;
+    MPoly recomputed;
+
+    for (std::size_t j = 0; j < idx.size(); ++j) {
+      const int k = idx[j];
+      const MPoly *src;
+      if (k < static_cast<int>(nCache)) {
+        src = &T[static_cast<std::size_t>(k)];
+      } else {
+        recomputed = trace(k);
+        src = &recomputed;
+      }
+
+      // one dressing channel for this sub-term: dmono[j] · (sc[j] · trace). Empty if the scaled trace
+      // cancels to nothing (DPoly::add drops an empty MPoly), matching fold_net's zero handling.
+      DPoly cur = DPolyFactory::zero(nsym);
+      cur.add(dmono[j], scale_trace(nsym, *src, sc[j]));
+      std::size_t c = 1;
+      while (!st.empty() && rank.back() == c) {
+        cur = st.back() + cur; // earlier + later: preserve the original left-fold term order
+        st.pop_back();
+        rank.pop_back();
+        c *= 2;
+      }
+      st.push_back(std::move(cur));
+      rank.push_back(c);
+    }
+
+    if (st.empty()) return zero_like<DPoly>(nsym);
+    DPoly acc = std::move(st.front());
+    for (std::size_t i = 1; i < st.size(); ++i)
+      acc = acc + st[i];
+    return acc;
+  }
+
   /// @brief PHASE B, driver — fold every net, in parallel over the nets.
   ///
   /// Still net-parallel (unlike phase A), but that is fine here: the contraction is done, so a net's
@@ -272,12 +323,60 @@ namespace numtracer::numeric
   ///        refactor that must not move a single ulp should not rest on "almost certainly", and a
   ///        lambda preserves each branch's exact expression while keeping `colv` out of this signature.
   /// @param trace as in @ref fold_net: pure and safe to call concurrently.
+  ///
+  // Forward declaration: the two drivers below are thin wrappers over this shared skeleton (defined
+  // just after them).
+  template <class P, class FoldScaledFn, class Sink>
+  void fold_groups_streaming_impl(int nsym, const std::vector<std::vector<int>> &groups, unsigned W,
+                                  long window, FoldScaledFn &&foldScaledNet, Sink &&sink);
+
+  /// The wave/streaming SKELETON is factored into @ref fold_groups_streaming_impl so the plain and the
+  /// dressed (lever (b)) drivers share it: the only thing that varies between them is how one net's
+  /// polynomial is produced (`fold_net<P>` + colour scale vs `fold_net_dressed` + colour scale), which
+  /// each passes as a `foldScaledNet(netId) -> P` callable. The wrapper below reproduces the previous
+  /// body's operations exactly, so the non-dressed emitted kernel is byte-identical.
   template <class P, class TraceFn, class ScaleFn, class Sink>
   void fold_groups_streaming(int nsym, const std::vector<std::vector<int>> &sidx,
                              const std::vector<std::vector<Cx>> &sc,
                              const std::vector<std::vector<int>> &groups, const std::vector<P> &T,
                              long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
                              Sink &&sink)
+  {
+    fold_groups_streaming_impl<P>(
+        nsym, groups, W, window,
+        [&](int d) { return scale(d, fold_net<P>(nsym, sidx[static_cast<std::size_t>(d)],
+                                                 sc[static_cast<std::size_t>(d)], T, nCache, trace)); },
+        std::forward<Sink>(sink));
+  }
+
+  /// @brief PHASE B, streaming driver — lever (b) dressed variant. Trace table is plain @ref MPoly; each
+  ///        net folds into a @ref DPoly via @ref fold_net_dressed (carrying the per-sub-term dressing
+  ///        monomials @p sdr), then the colour @p scale and @p sink run exactly as in the plain driver.
+  ///        Same bounded live set and ascending-group sink order, so `GlobalEnv` intern order / the CSE
+  ///        instruction stream are governed identically.
+  template <class TraceFn, class ScaleFn, class Sink>
+  void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &sidx,
+                                     const std::vector<std::vector<Cx>> &sc,
+                                     const std::vector<std::vector<DMono>> &sdr,
+                                     const std::vector<std::vector<int>> &groups, const std::vector<MPoly> &T,
+                                     long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                                     Sink &&sink)
+  {
+    fold_groups_streaming_impl<DPoly>(
+        nsym, groups, W, window,
+        [&](int d) {
+          const auto u = static_cast<std::size_t>(d);
+          return scale(d, fold_net_dressed(nsym, sidx[u], sc[u], sdr[u], T, nCache, trace));
+        },
+        std::forward<Sink>(sink));
+  }
+
+  /// @brief The shared wave/streaming skeleton of the phase-B drivers. @p foldScaledNet returns net
+  ///        `d`'s colour-scaled polynomial; @p sink absorbs each group's accumulator in ascending group
+  ///        order on the calling thread. Bounded live set: at most `window` net polynomials in flight.
+  template <class P, class FoldScaledFn, class Sink>
+  void fold_groups_streaming_impl(int nsym, const std::vector<std::vector<int>> &groups, unsigned W,
+                                  long window, FoldScaledFn &&foldScaledNet, Sink &&sink)
   {
     const long nG = static_cast<long>(groups.size());
     if (nG <= 0) return;
@@ -338,8 +437,7 @@ namespace numtracer::numeric
       const double rssPre = wprof ? rssMB() : 0.0;
       parallel_flat(static_cast<long>(flat.size()), W, [&](long i) {
         const auto j = static_cast<std::size_t>(i);
-        const auto u = static_cast<std::size_t>(flat[j]);
-        part[j] = scale(flat[j], fold_net<P>(nsym, sidx[u], sc[u], T, nCache, trace));
+        part[j] = foldScaledNet(flat[j]);
       });
       const double rssFold = wprof ? rssMB() : 0.0;
 

@@ -43,6 +43,13 @@ namespace numtracer::numeric
                              const std::vector<std::vector<int>> &groups, const std::vector<P> &T,
                              long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
                              Sink &&sink);
+  template <class TraceFn, class ScaleFn, class Sink>
+  void fold_groups_streaming_dressed(int nsym, const std::vector<std::vector<int>> &sidx,
+                                     const std::vector<std::vector<Cx>> &sc,
+                                     const std::vector<std::vector<DMono>> &sdr,
+                                     const std::vector<std::vector<int>> &groups, const std::vector<MPoly> &T,
+                                     long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                                     Sink &&sink);
 
   /// @brief Binds `nsym` (+ unit groups) once; the sole sanctioned construction path for @ref MPoly /
   ///        @ref DPoly and the env-aware form of the numeric backend's public entry points.
@@ -102,6 +109,12 @@ namespace numtracer::numeric
     {
       return ::numtracer::numeric::numeric_value_dressed_netval(nsym_, chain, slots, lor, comp, atomDen, units_);
     }
+    MPoly numeric_value_dressed_netval_mp(const std::vector<DChainTok> &chain, const std::vector<DSlot> &slots,
+                                          const network::NetVal &lor, const std::vector<std::array<MPoly, 4>> &comp,
+                                          const std::vector<MPoly> &atomDen) const
+    {
+      return ::numtracer::numeric::numeric_value_dressed_netval_mp(nsym_, chain, slots, lor, comp, atomDen, units_);
+    }
     std::vector<MPoly> collect_atom_denoms(const std::vector<network::NetVal> &lors,
                                            const std::vector<std::array<MPoly, 4>> &comp) const
     {
@@ -138,6 +151,20 @@ namespace numtracer::numeric
       ::numtracer::numeric::fold_groups_streaming<P>(nsym_, sidx, sc, groups, T, nCache, W, window,
                                                      std::forward<TraceFn>(trace), std::forward<ScaleFn>(scale),
                                                      std::forward<Sink>(sink));
+    }
+    /// Streaming phase B, lever (b) dressed variant: plain-MPoly trace table `T` + per-sub-term dressing
+    /// monomials `sdr` fold into a DPoly per net. See `trace_fold.hpp`'s `fold_groups_streaming_dressed`.
+    template <class TraceFn, class ScaleFn, class Sink>
+    void fold_groups_streaming_dressed(const std::vector<std::vector<int>> &sidx,
+                                       const std::vector<std::vector<Cx>> &sc,
+                                       const std::vector<std::vector<DMono>> &sdr,
+                                       const std::vector<std::vector<int>> &groups, const std::vector<MPoly> &T,
+                                       long nCache, unsigned W, long window, TraceFn &&trace, ScaleFn &&scale,
+                                       Sink &&sink) const
+    {
+      ::numtracer::numeric::fold_groups_streaming_dressed(nsym_, sidx, sc, sdr, groups, T, nCache, W, window,
+                                                          std::forward<TraceFn>(trace),
+                                                          std::forward<ScaleFn>(scale), std::forward<Sink>(sink));
     }
 
   private:

@@ -12,6 +12,7 @@
 //      evaluated at random points (≤1e-10), with the trace computed ONCE instead of per combination.
 #include "numtracer/numeric/env.hpp"
 #include "numtracer/numeric/numeric_contract.hpp"
+#include "numtracer/numeric/trace_fold.hpp" // fold_net_dressed (lever (b) assembly)
 
 #include <cstdio>
 #include <random>
@@ -546,6 +547,112 @@ int main()
     std::printf("  dp terms=%d worst=%.2e (%d/5000)  per-option |tr| max = {%.2f, %.2f, %.2f}  %s\n", dp.size(),
                 maxerr, worst, mag[0], mag[1], mag[2], worst == 0 ? "ok" : "FAIL");
     if (worst != 0) ++fails;
+  }
+
+  // ---- K) LEVER (b): structural MPoly traces + carried dressing assemble to numeric_value_dressed ----
+  // The generator no longer keys its trace table on the dressing: it strips each option's dressing
+  // (coeff→1, dress→{}) into a per-sub-term scalar (`sc`, the numeric part) and monomial (`dmono`, the
+  // dressing-atom ids), contracts each STRUCTURAL combination once into a plain MPoly
+  // (numeric_value_dressed_netval_mp), and folds the table back into a DPoly per net (fold_net_dressed:
+  // Σ_j sc[j]·T[k_j] ⊗ dmono[j]). This must reproduce the collected DPoly EXACTLY — a half-carried
+  // dressing would silently drop a channel. Validate the whole decomposition against the reference
+  // numeric_value_dressed_netval on the 147-like chain (multi-γ + σ + two dressed slots).
+  std::printf("\n== K: lever (b) structural-trace + carried-dressing assembly == numeric_value_dressed ==\n");
+  {
+    const int nsym = 8; // p:0..3, q:4..7
+    nm::LorentzEnv env(nsym);
+    std::vector<std::array<nm::MPoly, 4>> comp(2);
+    for (int mu = 0; mu < 4; ++mu) {
+      comp[0][mu] = env.var(mu);
+      comp[1][mu] = env.var(4 + mu);
+    }
+    // tr( γ^100 · S(p) · γ^101 · S(q) ), closed by metric δ_{100,101}. Both the δδ and the slash-slash
+    // combos survive (even parity), so ≥2 distinct dressing channels are assembled and compared.
+    // NetVal (the generator's Lorentz representation) rather than NNet, since _mp is the netval path.
+    auto met = [](int a, int b) { return network::Elem{network::Elem::Metric, a, b, -1, -1, {}}; };
+    network::NetVal lor = {network::PTerm{Cx{1, 0}, {met(100, 101)}}};
+    // Two dressed slots, each with a NON-trivial complex option coeff so the (coeff·dress) split is
+    // exercised (σ's −i lands in a slot coeff in the real flow); atoms 0/1 (p), 0/2 (q) as in case C.
+    nm::DSlot sP = {nm::DSlotOpt{Cx{2, 0}, {0}, {}, {}},
+                    nm::DSlotOpt{Cx{0, -1}, {1}, {network::dslash({{1.0, 0}})}, {}}};
+    nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, {}, {}},
+                    nm::DSlotOpt{Cx{3, 0}, {2}, {network::dslash({{1.0, 1}})}, {}}};
+    std::vector<nm::DSlot> slots = {sP, sQ};
+    std::vector<nm::DChainTok> chain = {nm::dtfix(network::dgamma(100)), nm::dtslot(0),
+                                        nm::dtfix(network::dgamma(101)), nm::dtslot(1)};
+
+    // reference: the collected DPoly.
+    nm::DPoly ref = env.numeric_value_dressed_netval(chain, slots, lor, comp, {});
+
+    // lever (b): enumerate the structural combinations, contract each to a PLAIN MPoly, and carry the
+    // dressing (coeff → sc, atoms → dmono) exactly as Codegen.m does. Then fold_net_dressed reassembles.
+    std::vector<nm::MPoly> T;
+    std::vector<int> sidx;
+    std::vector<Cx> sc;
+    std::vector<nm::DMono> dmono;
+    const int nSlots = static_cast<int>(slots.size());
+    std::vector<int> ch(nSlots, 0);
+    bool done = false;
+    while (!done) {
+      // structural slots (dressing stripped), and this combo's (dressCx, dressIds).
+      std::vector<nm::DSlot> ss(nSlots);
+      Cx dressCx{1, 0};
+      nm::DMono dressIds;
+      for (int s = 0; s < nSlots; ++s) {
+        const nm::DSlotOpt &o = slots[s][ch[s]];
+        dressCx = Cx{dressCx.re * o.coeff.re - dressCx.im * o.coeff.im,
+                     dressCx.re * o.coeff.im + dressCx.im * o.coeff.re};
+        dressIds.insert(dressIds.end(), o.dress.begin(), o.dress.end());
+        ss[s] = {nm::DSlotOpt{Cx{1, 0}, {}, o.toks, o.netFacs}}; // one structural option per slot
+      }
+      nm::MPoly tr = env.numeric_value_dressed_netval_mp(chain, ss, lor, comp, {});
+      sidx.push_back(static_cast<int>(T.size()));
+      T.push_back(std::move(tr));
+      sc.push_back(dressCx);
+      dmono.push_back(nm::dmono_sorted(std::move(dressIds)));
+      int k = 0;
+      for (; k < nSlots; ++k) {
+        if (++ch[k] < static_cast<int>(slots[k].size())) break;
+        ch[k] = 0;
+      }
+      if (k == nSlots) done = true;
+    }
+    // nCache == T.size() ⇒ every trace resident, the recompute lambda is never called.
+    auto never = [&](int) { return env.zero(); };
+    nm::DPoly asmb =
+        nm::fold_net_dressed(nsym, sidx, sc, dmono, T, static_cast<long>(T.size()), never);
+
+    // structural comparison: same dressing channels, coefficients equal (bit-exact where the only extra
+    // factor is a power of two — the tr(1)=4 collapse; a general dressCx keeps them within round-off).
+    bool sameKeys = (ref.size() == asmb.size());
+    double coeffErr = 0.0;
+    if (sameKeys)
+      for (std::size_t i = 0; i < ref.t.size(); ++i) {
+        if (ref.t[i].first != asmb.t[i].first) { sameKeys = false; break; }
+        const auto &ra = ref.t[i].second, &ab = asmb.t[i].second;
+        if (ra.t.size() != ab.t.size()) { sameKeys = false; break; }
+        for (std::size_t m = 0; m < ra.t.size(); ++m) {
+          if (!(ra.t[m].first == ab.t[m].first)) { sameKeys = false; break; }
+          coeffErr = std::max(coeffErr, cdiff(ra.t[m].second, ab.t[m].second));
+        }
+      }
+    // value comparison: eval both at random points (the hard gate — never trust a byte/structural check
+    // alone, per the codegen-test-gap note).
+    int worst = 0;
+    double maxerr = 0.0;
+    for (int it = 0; it < 5000; ++it) {
+      std::vector<double> x(nsym);
+      for (double &v : x)
+        v = U(rng);
+      std::vector<double> drVal = {U(rng), U(rng), U(rng)};
+      double e = cdiff(nm::eval(ref, x, {}, drVal), nm::eval(asmb, x, {}, drVal));
+      maxerr = std::max(maxerr, e);
+      if (e >= 1e-10) ++worst;
+    }
+    bool ok = sameKeys && worst == 0;
+    std::printf("  traces=%zu ref terms=%d asm terms=%d sameKeys=%d coeffErr=%.2e  value worst=%.2e (%d/5000)  %s\n",
+                T.size(), ref.size(), asmb.size(), sameKeys, coeffErr, maxerr, worst, ok ? "ok" : "FAIL");
+    if (!ok) ++fails;
   }
 
   std::printf("\n%s\n", fails == 0 ? "ALL TESTS PASSED" : "TESTS FAILED");

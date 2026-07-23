@@ -3177,7 +3177,7 @@ static inline double tr3([[maybe_unused]] const double *f) {
   const double s2690 = s2688+s2689;
   const double s2691 = s219+s935;
   const double s2692 = s118*s2691;
-  const double s2693 = -7.7942286340599001;
+  const double s2693 = -7.7942286340600004;
   const double s2694 = s9*s2693;
   const double s2695 = s409+s2694;
   const double s2696 = s104*s2695;
@@ -3832,7 +3832,7 @@ static inline double tr3([[maybe_unused]] const double *f) {
   const double s3345 = 85.736514974659002;
   const double s3346 = s76*s3345;
   const double s3347 = s418+s3346;
-  const double s3348 = -7.7942286340600004;
+  const double s3348 = -7.7942286340599001;
   const double s3349 = s2252+s3348;
   const double s3350 = s104*s3349;
   const double s3351 = s177*s3350;
