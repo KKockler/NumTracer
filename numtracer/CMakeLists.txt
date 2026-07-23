@@ -524,6 +524,10 @@ endif()
 # with tests/gen/gen_qcd_za{3,4}_gpu.wls), the CUDA toolkit and GSL (quadrature nodes/weights).
 # Configure with -DNUMTRACER_GPU_TESTS=ON; if the default host compiler is too new for nvcc,
 # add -DCMAKE_CUDA_HOST_COMPILER=g++-14. clang CUDA also works (-DCMAKE_CUDA_COMPILER=clang++).
+# Verified 2026-07-23 (CUDA 12.9, GSL 2.8, sm_89) with the default CXX at GCC 16, which nvcc rejects:
+#   cmake -S numtracer -B build -DNUMTRACER_GPU_TESTS=ON -DNUMTRACER_KOKKOS_TESTS=ON \
+#         -DCMAKE_CUDA_HOST_COMPILER=g++-14
+# (CMAKE_CUDA_ARCHITECTURES defaults to `native` below, so it needs no flag.)
 option(NUMTRACER_GPU_TESTS "Build the CUDA GPU loop-integral integration tests" OFF)
 # Same tests expressed in Kokkos (CUDA backend) instead of raw CUDA + cub, for a framework
 # overhead comparison. Uses the DiFfRG-bundled Kokkos install (override NT_KOKKOS_ROOT).
