@@ -133,7 +133,14 @@ Options[MakeNTKernelDiFfRG] =
     ,(* Automatic -> derived from Device *)
     "FlowDirectory" -> Automatic
     ,(* Automatic -> DiFfRG`CodeTools`flowDir *)
-    "GenDirectory" -> Automatic(* Automatic -> a "gen" sibling of the flow directory *)
+    "GenDirectory" -> Automatic
+    ,(* Automatic -> a "gen" sibling of the flow directory *)
+    (* Offline by default: emitting a flow writes the generator/probe sources and a numtrace.json
+       switch set to 0, and the `numtrace` CMake target (wired in by UpdateNTFlows) compiles and runs
+       them when the flows library is built — keeping the notebook out of the C++ build and giving the
+       generation `make -j` parallelism across every flow at once. Pass "Offline" -> False (or set
+       NT_OFFLINE=0) to generate inline as before. *)
+    "Offline" -> True
   };
 
 MakeNTKernelDiFfRG::noname = "\"Name\" is required (the flow name, e.g. \"ZA\").";
@@ -170,11 +177,14 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
     ];
     nsTag = OptionValue["Namespace"] /. Automatic :> ToLowerCase[name];
     device = OptionValue["Device"];
+    (* Kokkos, not raw CUDA: DiFfRG links Kokkos unconditionally and decorates its own kernels this
+       way, so the emitted code works on every backend it supports rather than only nvcc. NumTracer's
+       ntKokkosDecor normalises any raw __host__ __device__ spelling to the Kokkos macros regardless. *)
     decor =
       OptionValue["Decorator"] /.
         Automatic :>
           If[device === "GPU",
-            "static __host__ __device__ inline"
+            "static KOKKOS_INLINE_FUNCTION"
             ,
             "static inline"
           ];
@@ -234,11 +244,26 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
       ];
     (* resolve paths *)
     flowDir = ntFlowDir[OptionValue["FlowDirectory"]];
-    genDir = OptionValue["GenDirectory"] /. Automatic :> FileNameJoin[{ParentDirectory[flowDir], "gen"}];
+    (* create the flows/ directory up front if it does not exist yet. This must precede the gen dir
+       computation: WL14.3's ParentDirectory[dir] returns UNEVALUATED for a non-existent dir (rather
+       than doing pure-string path math), which used to poison genDir — and every genFile/tracesFile
+       derived from it — with a held expression, so the whole emission failed on a fresh checkout. We
+       sidestep ParentDirectory entirely (pure-string parent below), but still ensure flows/ exists so
+       the DiFfRG scaffold and the kernel/manifest writes below have somewhere to land. *)
+    If[!DirectoryQ[flowDir],
+      CreateDirectory[flowDir, CreateIntermediateDirectories -> True]
+    ];
+    (* gen/ as a sibling of flows/, computed by string surgery (no ParentDirectory — see above):
+       FileNameDrop[..,-1] drops the last path segment, tolerating a trailing slash and preserving the
+       filesystem root (a plain split+DeleteCases[""] would strip the leading root marker). *)
+    genDir = OptionValue["GenDirectory"] /. Automatic :> FileNameJoin[{FileNameDrop[flowDir, -1], "gen"}];
     If[!DirectoryQ[genDir],
       CreateDirectory[genDir, CreateIntermediateDirectories -> True]
     ];
     kernelDir = FileNameJoin[{flowDir, name}];
+    If[!DirectoryQ[kernelDir],
+      CreateDirectory[kernelDir, CreateIntermediateDirectories -> True]
+    ];
     genFile = FileNameJoin[{genDir, "gen_" <> nsTag <> "_num.cpp"}];
     kernelFile = FileNameJoin[{kernelDir, "kernel.hh"}];
     tracesFile = FileNameJoin[{kernelDir, "kernels.hh"}];
@@ -246,7 +271,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    Its per-file Prints are captured and replaced by one NumTracer line (see ntReportDiFfRG). *)
     ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"]]]];
     (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel *)
-    MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+    MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
     kernelFile
   ];
 
@@ -258,7 +283,7 @@ Options[UpdateNTFlows] = {"FlowDirectory" -> Automatic, "NumTracerHints" -> "~/.
 
 UpdateNTFlows::nocmake = "Expected the flows CMakeLists at `1` (generate a flow first).";
 
-UpdateNTFlows::patchfail = "Patched `1` but it does not reference NumTracer — the DiFfRG CMake template changed; the find_package / link strings in DiFfRG_compat.m need updating.";
+UpdateNTFlows::patchfail = "Patched `1` but it does not reference NumTracer / numtracer_add_numtrace — the DiFfRG CMake template changed; the find_package / link / numtrace strings in DiFfRG_compat.m need updating.";
 
 UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
   Module[{flowDir, f, txt},
@@ -280,9 +305,16 @@ UpdateNTFlows[name_String, opts : OptionsPattern[]] :=
     If[!TrueQ[OptionValue["UnityBuild"]],
       txt = StringReplace[txt, "UNITY_BUILD ON" -> "UNITY_BUILD OFF"]
     ];
+    (* (2b) the `numtrace` target: reads every flows/<Name>/numtrace.json, builds and runs the
+       generator (and probe) of each flow whose switch is still 0, and makes the flows library depend
+       on the lot. A no-op once every switch is 1. numtracer_add_numtrace comes from
+       NumTracerNumtrace.cmake, pulled in by the find_package(NumTracer) added above. *)
+    If[!StringContainsQ[txt, "numtracer_add_numtrace"],
+      txt = StringReplace[txt, "target_link_libraries(" <> name <> " DiFfRG::DiFfRG " <> name <> "_nowarn NumTracer::NumTracer)" -> "target_link_libraries(" <> name <> " DiFfRG::DiFfRG " <> name <> "_nowarn NumTracer::NumTracer)\n\n" <> "numtracer_add_numtrace(" <> name <> " ${CMAKE_CURRENT_SOURCE_DIR})"]
+    ];
     Export[f, txt, "Text"];
     (* (3) loud failure on template drift — StringReplace no-ops silently on a mismatch *)
-    If[!StringContainsQ[txt, "NumTracer::NumTracer"],
+    If[!StringContainsQ[txt, "NumTracer::NumTracer"] || !StringContainsQ[txt, "numtracer_add_numtrace"],
       Message[UpdateNTFlows::patchfail, f];
       Abort[]
     ];

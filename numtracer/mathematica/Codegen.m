@@ -95,6 +95,11 @@ ntExportCpp[file_, text_] := (
             Message[MakeNTKernel::cppleak, "ntExportCpp", StringTake[text, First[pos]], file <> "\n  context: ..." <> StringTake[text, {Max[1, pos[[1, 1]] - 150], Min[StringLength[text], pos[[1, 2]] + 150]}] <> "..."];
             Abort[]]]
       ] /@ $ntCppLeakPatterns;
+    (* ensure the target directory exists — a fresh checkout may have neither flows/<name>/ nor gen/
+       yet, and Export does not create parents (it errors instead). Cheap and idempotent. *)
+    Module[{dir = DirectoryName[file]},
+      If[StringQ[dir] && dir =!= "" && !DirectoryQ[dir],
+        CreateDirectory[dir, CreateIntermediateDirectories -> True]]];
     Export[file, text, "Text"]);
 
 (* ---- GlobalCollect: dressing-coefficient decomposition (the Route-B front-end) ----------------
@@ -2170,8 +2175,29 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
     {pre, units, decl, main}];
 
 (* ---- whole kernel (boilerplate delegated to FunKit) ------------------------- *)
+
+(* ---- decorator normalisation: raw CUDA qualifiers -> Kokkos spelling -----------------------
+   The device qualifiers are emitted verbatim onto every generated function (kernel/constant, the
+   regulator wrappers, and — via the generator's `-d` flag — fill/trN/powr in the traces header).
+   Spelling them `__host__ __device__` hard-codes the CUDA backend; the Kokkos macros expand to the
+   right thing for CUDA/HIP/SYCL/OpenMP and to plain `inline` on a host-only build. DiFfRG links
+   Kokkos unconditionally and decorates its own kernels this way. Applied to EVERY decorator (not just
+   the Automatic one), so call sites that still pass the CUDA spelling keep working. Longest match
+   first: the inline/__forceinline__ variants must be rewritten before the bare rule claims them. *)
+ntKokkosDecor[decor_String] := StringReplace[decor, {
+  "__host__ __device__ inline"          -> "KOKKOS_INLINE_FUNCTION",
+  "__host__ __device__ __forceinline__" -> "KOKKOS_FORCEINLINE_FUNCTION",
+  "__host__ __device__"                 -> "KOKKOS_FUNCTION"}];
+ntKokkosDecor[d_] := d;
+
+(* The Kokkos macros are NOT in scope in the standalone build-time programs (the probe compiles the
+   generated traces header with a bare g++ and no Kokkos headers), so those sources must neutralise
+   them. Emitted as the preamble of every such program. *)
+ntKokkosStubDefs = "#define KOKKOS_INLINE_FUNCTION inline\n#define KOKKOS_FORCEINLINE_FUNCTION \
+inline\n#define KOKKOS_FUNCTION\n#define __host__\n#define __device__\n";
+
 (* regulator wrappers, prefixed with the user-chosen decorator (default plain "static inline";
-   pass e.g. "Decorator" -> "static __host__ __device__ inline" for CUDA-callable kernels).
+   pass e.g. "Decorator" -> "static KOKKOS_INLINE_FUNCTION" for device-callable kernels).
    Emitted ONLY under "RegulatorTemplate" -> True (the fRG/DiFfRG shape); see ntKernelClass. *)
 
 privDefs[decor_] :=
@@ -2184,6 +2210,103 @@ privDefs[decor_] :=
 
 ntReImDefs[decor_] :=
   StringRiffle[{decor <> " double ntRe(double x) { return x; }", "template <class T> " <> decor <> " double ntRe(const T &z) { return z.real(); }", decor <> " double ntIm(double) { return 0.0; }", "template <class T> " <> decor <> " double ntIm(const T &z) { return z.imag(); }"}, "\n"];
+
+(* ---- the two REAL projections of a complex integrand ---------------------------------------
+   Both are emitted for every complex flow; the imaginary-part probe picks between them (and the
+   untouched complex form) with a preprocessor `#if` — see ntProbeSource. Which one is valid is a
+   numerical question about the generated traces, but BUILDING them is pure symbolic rewriting, so
+   both happen here, before any C++ exists.
+
+   "Pure": the projection Complex -> Re is exact, i.e. Σ Im(c)·tr ≈ 0. Wrap the trace tokens in ntRe
+   FIRST so the kernel is provably double-typed even when a trace function is complex-typed, then drop
+   the imaginary coefficients outright. This is the cheap body — the imaginary half never appears. *)
+ntPureIntegrand[integrand_] := (integrand /. s_String :> Global`ntRe[s]) /. Complex[a_, b_] :> a;
+
+(* "RePart": the value is real but a trace is itself complex, so only `.real()` of the full complex
+   result is correct: Re(Σ c·tr) = Σ[Re(c)·ntRe(tr) − Im(c)·ntIm(tr)]. The integrand is LINEAR in the
+   trace tokens (strings). The naive `(… /. s:>ntRe[s]+I ntIm[s]) /. Complex[a_,b_]:>a` is WRONG:
+   Mathematica keeps `i·X·(ntRe+I ntIm)` as an UNEXPANDED product, so `/. Complex:>a` zeroes the
+   leading `i` factor and DROPS the whole term — silently losing the real −X·ntIm(tr) contribution of
+   every complex trace. Instead split each token's coefficient into real / imaginary parts via an
+   `ii`-substitution (I → real symbol ii), which keeps the dressing coefficients FACTORED (unlike
+   ComplexExpand, which un-factors them and defeats COEN's CSE). *)
+ntRePartIntegrand[integrand_] := Module[{toks = Union[Cases[integrand, _String, Infinity]], tsym, lin, ii},
+  tsym = AssociationThread[toks -> Table[Unique["tr$"], {Length[toks]}]];
+  lin = integrand /. tsym;
+  Total[Function[t, Module[{cc = Coefficient[lin, tsym[t]] /. Complex[ar_, ai_] :> ar + ii*ai},
+     Coefficient[cc, ii, 0]*Global`ntRe[t] - Coefficient[cc, ii, 1]*Global`ntIm[t]]] /@ toks]
+    + ((lin /. Thread[Values[tsym] -> 0]) /. Complex[ar_, ai_] :> ar)];
+
+(* ---- offline generation: manifest + verdict plumbing --------------------------------------
+   The verdict macro for a flow's C++ namespace tag: za_qcd -> NT_ZA_QCD_VERDICT. *)
+ntVerdictMacro[ns_String] := "NT_" <> ToUpperCase[StringReplace[ns, Except[WordCharacter] -> "_"]] <> "_VERDICT";
+ntVerdictFile = "numtrace_verdict.hh";
+ntManifestFile = "numtrace.json";
+
+(* Canonicalise: resolve symlinks so two spellings of the SAME directory compare equal. Without this,
+   a project reached through a symlinked home (/home/me/Code -> /mnt/data/Code) yields a flow dir and a
+   gen dir that share no prefix, and the "relative" path becomes a deep ../../.. climb to the root and
+   back down — resolvable but machine-specific and unusable in a committed manifest.
+   AbsoluteFileName resolves links but requires the path to EXIST. Offline, the traces header does not
+   exist yet when the manifest is written, so a naive fallback to ExpandFileName left it spelled
+   /home/... while its (existing) parent directory resolved to /mnt/data/... — two spellings of the
+   same place with no common prefix, which made the "relative" path degenerate to an absolute one and
+   the build then joined it onto the flow dir again (…/flows/ZA3//home/…/flows/ZA3/kernels.hh). So
+   canonicalise the deepest ANCESTOR that does exist and re-append the segments below it. *)
+ntCanonicalDir[p_String] := Module[{a = Quiet@Check[AbsoluteFileName[p], $Failed], parent, base},
+  If[StringQ[a], Return[a]];
+  base = FileNameTake[p];
+  parent = FileNameDrop[p, -1];
+  (* no progress possible (root, or a bare relative name): fall back to plain expansion *)
+  If[parent === "" || parent === p || base === "", Return[ExpandFileName[p]]];
+  FileNameJoin[{ntCanonicalDir[parent], base}]];
+
+ntRelativePath[from_String, to_String] := Module[{f, t, common, rel},
+  f = DeleteCases[FileNameSplit[ntCanonicalDir[from]], ""];
+  t = DeleteCases[FileNameSplit[ntCanonicalDir[to]], ""];
+  common = LengthWhile[Range[Min[Length[f], Length[t]]], f[[#]] === t[[#]] &];
+  (* A path that still has to climb out to the root shares nothing meaningful with the target
+     (different mount, say). An absolute path is at least honest about that. *)
+  If[common <= 1 && Length[f] > 1, Return[ntCanonicalDir[to]]];
+  rel = FileNameJoin[Join[ConstantArray["..", Length[f] - common], Drop[t, common]]];
+  If[rel === "", ".", rel]];
+
+(* ---- per-flow numtrace manifest -------------------------------------------------------------
+   Written beside the kernel headers (mirroring DiFfRG's per-flow sources.m, aggregated the same way)
+   and COMMITTED with them. Two jobs: the "generated" 0|1 switch — emitting sets 0, the numtrace target
+   sets 1 once the kernels are actually built (a fresh clone has the committed kernels but no gen/, so
+   timestamps cannot express "already generated") — and the metadata the build needs (namespace, source
+   list, decorator, main-TU -O level, whether a probe is required). One writer per file, so parallel
+   numtrace jobs never race. Paths are basenames relative to "gen_dir", relative to the flow dir. *)
+ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFile_String,
+    unitFiles_List, decor_String, mainOpt_String, fullParallel_, complexQ_, probeFile_] := Module[
+  {genDir = DirectoryName[genFile], manifest},
+  manifest = <|
+    (* the flow's identity is its directory (flows/ZA4), not the kernel class name (ZA4_kernel) *)
+    "name"          -> FileNameTake[StringTrim[flowDir, "/"]],
+    "class"         -> name,
+    "namespace"     -> ns,
+    "generated"     -> 0,
+    "gen_dir"       -> ntRelativePath[flowDir, genDir],
+    "generator"     -> FileNameTake[genFile],
+    "units"         -> FileNameTake /@ unitFiles,
+    "decorator"     -> decor,
+    "main_opt"      -> mainOpt,
+    "full_parallel" -> TrueQ[fullParallel],
+    "complex"       -> TrueQ[complexQ],
+    "kernels"       -> ntRelativePath[flowDir, tracesFile]|>;
+  If[TrueQ[complexQ],
+    manifest = Join[manifest, <|
+      "probe"         -> FileNameTake[probeFile],
+      "verdict_macro" -> ntVerdictMacro[ns],
+      "verdict"       -> ntVerdictFile|>]];
+  Export[FileNameJoin[{flowDir, ntManifestFile}], manifest, "JSON"];
+  FileNameJoin[{flowDir, ntManifestFile}]];
+
+(* Flip a manifest's switch to 1 — the flow's kernels are built and committed. The offline twin of
+   this lives in NumTracerNumtraceRun.cmake, run by the build once the generator has succeeded. *)
+ntMarkGenerated[manifestFile_String] := Module[{m = Import[manifestFile, "RawJSON"]},
+  Export[manifestFile, Append[m, "generated" -> 1], "JSON"]];
 
 (* ---- the kernel CLASS. -----------------------------------------------------------------------
    Two shapes, one code path (it is emitted twice — once up front, once after the real probe
@@ -2292,7 +2415,11 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
     "RegulatorAlias" -> False,
     "RealProbe" -> True,
     "PruneRealTraces" -> False,
-    "Constant" -> 0.};
+    "Constant" -> 0.,
+    (* "Offline" -> True: emit the generator + probe sources and a per-flow numtrace.json switch set to
+       0, but do NOT compile or run anything — the `numtrace` CMake target does that as a build step,
+       with make's parallelism across all flows. NT_OFFLINE in the environment overrides. *)
+    "Offline" -> False};
 
 (* The dressing-collection path is driven by the `ntDressedNum` tokens NumTrace emits under
    "DressingCollection" -> True (no MakeNTKernel option needed): mkGenerateKernel auto-detects them and
@@ -2464,14 +2591,18 @@ resolveGenLib[incDir_] := Module[{env, base, cands, lib},
    "keep the complex kernel", and the flow silently loses the lossless RePart double-kernel emission.
    Empty for the per-trace path. *)
 
-Options[numericImagProbeRealQ] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -> ""};
+(* The verdict is applied by the PREPROCESSOR, not by Mathematica: `kernel.hh` carries all three bodies
+   under `#if <MACRO> == 2 / #elif == 1 / #else` and the probe writes `<MACRO>` into the verdict header.
+   That is what lets generation run offline — the probe is an ordinary build step, whereas the symbolic
+   re-emission it used to trigger needed a Wolfram kernel. `ntProbeSource` builds the probe program (the
+   verdict logic lives in its C++ `main`, which writes the header via `-o <file> -m <MACRO>`) and
+   `ntRunProbe` compiles and runs it. *)
+Options[ntProbeSource] = {"NPoints" -> 4000, "Tol" -> 1.*^-9, "TraceArrayDecl" -> ""};
 
-numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drTable_ : <||>, opts : OptionsPattern[]] :=
-  Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeParams, probePre, fnFull, fnProj, drDecls, drFillArgs, randDecls, callArgs, src, cppFile, bin, rc, out, np, tol, tracesDir, cxx, parsed, distOf},
+ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, headerFile_, drTable_ : <||>, opts : OptionsPattern[]] :=
+  Module[{keepHeads, keepSyms, seedOf, argComb, stub, probeFull, probeProj, probeParams, probePre, fnFull, fnProj, drDecls, drFillArgs, randDecls, callArgs, src, np, tol, distOf},
     np = OptionValue["NPoints"];
     tol = OptionValue["Tol"];
-    tracesDir = DirectoryName[headerFile];
-    cxx = resolveGenCxx[];
 (* GENERAL stubbing: replace EVERY external real-valued atom — any dressing (any arity), any
    regulator/support function, any named constant — with `ntStub(seed_head, hash(args))`, an
    INDEPENDENTLY-SEEDED pseudo-random real per head. "External" = head is not a structural math
@@ -2528,8 +2659,10 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
     callArgs = StringRiffle[SymbolName /@ args, ", "];
     src =
       StringJoin[
-        "#define __host__\n#define __device__\n",
-        "#include <complex>\n#include <cmath>\n#include <random>\n#include <cstdio>\n",
+        (* the traces header decorates every trN/fill with the kernel decorator; this program is
+           compiled standalone with a bare g++, so the device macros must be neutralised. *)
+        ntKokkosStubDefs,
+        "#include <complex>\n#include <cmath>\n#include <random>\n#include <cstdio>\n#include <cstring>\n",
         "#include \"" <> FileNameTake[headerFile] <> "\"\n",
         "template<int N> static inline double powr(double x){ double r=1.0; int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?1.0/r:r; }\n",
         "using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs;\n",
@@ -2542,7 +2675,11 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
         "\n",
         fnProj,
         "\n",
-        "int main(){ std::mt19937_64 rng(12345); std::uniform_real_distribution<double> U(0.25,3.0),Uc(-0.9,0.9),Uph(0.1,6.2);\n",
+        "int main(int argc, char** argv){\n",
+        "  const char* outf=nullptr; const char* macro=nullptr;\n",
+        "  for(int i=1;i<argc;++i){ if(!std::strcmp(argv[i],\"-o\") && i+1<argc) outf=argv[++i];\n",
+        "                           else if(!std::strcmp(argv[i],\"-m\") && i+1<argc) macro=argv[++i]; }\n",
+        "  std::mt19937_64 rng(12345); std::uniform_real_distribution<double> U(0.25,3.0),Uc(-0.9,0.9),Uph(0.1,6.2);\n",
         "  double mim=0,mdiff=0,mre=0,mrim=0,mrdiff=0; long ok=0;\n",
         "  for(int n=0;n<" <> ToString[np] <> ";++n){ " <> randDecls <> "\n",
         "    std::complex<double> f = probe_full(" <> callArgs <> "); std::complex<double> pj = probe_proj(" <> callArgs <> ");\n",
@@ -2553,39 +2690,57 @@ numericImagProbeRealQ[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsH
    these; the absolute trio is kept only for the log. *)
         "    if(std::isfinite(im)&&std::isfinite(re)&&std::isfinite(df)){ mim=std::max(mim,std::fabs(im)); mdiff=std::max(mdiff,df); mre=std::max(mre,std::fabs(re));\n",
         "      mrim=std::max(mrim, std::fabs(im)/(std::fabs(re)+1.0)); mrdiff=std::max(mrdiff, df/(std::abs(f)+1.0)); ++ok; } }\n",
-        "  std::printf(\"%.10e %.10e %.10e %.10e %.10e %ld\\n\", mim, mdiff, mre, mrim, mrdiff, ok); return 0; }\n"
+(* Three-way verdict, decided HERE (in the C++ that resolves every complex multiplication) so the whole
+   probe is one self-contained build step:
+     0 "Complex"  Im survives                          -> genuinely complex, keep it.
+     2 "Pure"     Im=0 AND Complex->Re projection exact -> drop imaginary coeffs (clean real arithmetic).
+     1 "RePart"   Im=0 but projection differs           -> a trace is itself complex; the value is real
+                                                           but only `.real()` of the full complex result
+                                                           is correct, so the re/im split applies.
+   Keyed on the PER-POINT relative measures (mrim, mrdiff): a global max|Im|/max|Re| can let a localized
+   imaginary part hide behind a large |Re| at some OTHER point (catastrophic cancellation). No usable
+   points is NOT a quiet "Complex" any more — it would bake the wrong branch into a committed header —
+   so it exits nonzero and the caller aborts. *)
+        "  if(ok < 1){ std::fprintf(stderr, \"[probe] no usable points\\n\"); return 2; }\n",
+        "  const int verdict = (mrim > " <> ToString[CForm[N[tol]]] <> ") ? 0 : ((mrdiff <= " <> ToString[CForm[N[tol]]] <> ") ? 2 : 1);\n",
+        (* the five measures + point count + verdict, on one line: the caller logs them. *)
+        "  std::printf(\"%.10e %.10e %.10e %.10e %.10e %ld %d\\n\", mim, mdiff, mre, mrim, mrdiff, ok, verdict);\n",
+        "  if(outf && macro){ std::FILE* f = std::fopen(outf, \"w\");\n",
+        "    if(!f){ std::fprintf(stderr, \"[probe] cannot write %s\\n\", outf); return 3; }\n",
+        "    std::fprintf(f, \"// GENERATED by the numtrace step — do not edit.\\n\");\n",
+        "    std::fprintf(f, \"// 2 = Pure (imaginary coefficients dropped), 1 = RePart (re/im split), 0 = complex.\\n\");\n",
+        "    std::fprintf(f, \"#pragma once\\n#define %s %d\\n\", macro, verdict);\n",
+        "    std::fclose(f); }\n",
+        "  return 0; }\n"
       ];
-    cppFile = FileNameJoin[{$TemporaryDirectory, "ntprobe_" <> StringReplace[nsHome, {":" -> "_"}] <> ".cpp"}];
-    bin = StringReplace[cppFile, ".cpp" -> ""];
-    ntExportCpp[cppFile, src];
-    rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> tracesDir <> "' '" <> cppFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
+    src];
+
+(* Compile + run the probe program. `verdictFile`/`macro` (both or neither) make it write the verdict
+   header. Any failure ABORTS: the verdict now selects a preprocessor branch in a committed header, so
+   the old conservative "assume Complex" fallback would silently swap the flow onto the complex body —
+   which does not bind to the real integrators the DiFfRG scaffold declares. Returns the verdict
+   string for the log. *)
+ntRunProbe::probefail = "Imaginary-part probe failed: `1`";
+ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None] :=
+  Module[{cxx = resolveGenCxx[], bin, rc, out, parsed, oflag},
+    (* the SOURCE is a committed build input in gen/; the binary and logs are scratch and stay out of
+       the source tree (offline, CMake builds the probe in the build dir instead). *)
+    bin = FileNameJoin[{$TemporaryDirectory, FileBaseName[srcFile]}];
+    rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> tracesDir <> "' '" <> srcFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
     If[rc =!= 0,
-      ntLog["[probe] compile failed (rc=", rc, ") — keeping complex kernel (conservative)"];
-      Return["Complex"]];
-    Run["'" <> bin <> "' > '" <> bin <> ".out'"];
-    out =
-      If[FileExistsQ[bin <> ".out"],
-        Import[bin <> ".out", "Text"],
-        ""];
+      Message[ntRunProbe::probefail, "compile rc=" <> ToString[rc] <> "\n" <> Quiet@Check[Import[bin <> ".cerr", "Text"], ""]]; Abort[]];
+    oflag = If[StringQ[verdictFile] && StringQ[macro], " -o '" <> verdictFile <> "' -m '" <> macro <> "'", ""];
+    rc = Run["'" <> bin <> "'" <> oflag <> " > '" <> bin <> ".out' 2> '" <> bin <> ".rerr'"];
+    If[rc =!= 0,
+      Message[ntRunProbe::probefail, "run rc=" <> ToString[rc] <> "\n" <> Quiet@Check[Import[bin <> ".rerr", "Text"], ""]]; Abort[]];
+    out = If[FileExistsQ[bin <> ".out"], Import[bin <> ".out", "Text"], ""];
     parsed = Quiet @ Check[ToExpression[StringReplace[#, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]]& /@ StringSplit[StringTrim[out]], $Failed];
-    If[!MatchQ[parsed, {_?NumericQ, _?NumericQ, _?NumericQ, _?NumericQ, _?NumericQ, _?NumericQ}] || parsed[[6]] < 1,
-      ntLog["[probe] run produced no usable points — keeping complex kernel"];
-      Return["Complex"]];
+    If[!MatchQ[parsed, {_?NumericQ ..}] || Length[parsed] =!= 7,
+      Message[ntRunProbe::probefail, "unparsable output: " <> ToString[out]]; Abort[]];
     ntLog["[probe] over ", Round[parsed[[6]]], " pts:  max|Im|=", ScientificForm[parsed[[1]], 3], "  max|full-proj|=", ScientificForm[parsed[[2]], 3], "  max|Re|=", ScientificForm[parsed[[3]], 3], "  rel|Im|=", ScientificForm[parsed[[4]], 3], "  rel|full-proj|=", ScientificForm[parsed[[5]], 3]];
-(* Three-way verdict from the C++ evaluation (which resolves every complex multiplication):
-     "Complex"  Im survives                          -> genuinely complex, keep it.
-     "Pure"     Im=0 AND Complex->Re projection exact -> drop imaginary coeffs (clean real arithmetic).
-     "RePart"   Im=0 but projection differs           -> a trace is itself complex; the value is real
-                                                         but only `.real()` of the full complex result
-                                                         is correct, so wrap the return in a C++ real part. *)
-    (* verdict on the PER-POINT relative measures (mrim, mrdiff): no global-scale inflation. *)
-    Which[
-      parsed[[4]] > tol,
-        "Complex",
-      parsed[[5]] <= tol,
-        "Pure",
-      True,
-        "RePart"]];
+    If[StringQ[verdictFile] && !FileExistsQ[verdictFile],
+      Message[ntRunProbe::probefail, "no verdict header written at " <> verdictFile]; Abort[]];
+    Switch[Round[parsed[[7]]], 2, "Pure", 1, "RePart", _, "Complex"]];
 
 (* ---- group-diagonal dressing fold: SUNPoly via the validated C++ engine ---------------------
    Each diag-dressed colour-net STRING (carrying sun<n>.diag{Fund,Adj}(...,{d0,…}) factors) is folded
@@ -2664,7 +2819,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
     Needs["FunKit`"];
 (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
    steps (the integrand Sum, COEN's expression lowering) recurse ~linearly in that count, so the
@@ -2697,7 +2852,18 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     crossCSE = OptionValue["CrossTraceCSE"];
     gc = OptionValue["GlobalCollect"];                                                              (* Route-B: fold the WHOLE integrand (all diagrams, dressings as
 inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE is subsumed by it. *)
-    decor = OptionValue["Decorator"];
+    (* normalise raw CUDA qualifiers to the Kokkos macros — see ntKokkosDecor. *)
+    decor = ntKokkosDecor[OptionValue["Decorator"]];
+    (* Offline: emit sources + the per-flow numtrace.json switch and let the `numtrace` build target do
+       the compiling/running. NT_OFFLINE overrides the option ("0"/"false" force online). *)
+    offline =
+      With[{e = Environment["NT_OFFLINE"]},
+        If[StringQ[e] && StringTrim[e] =!= "",
+          !MemberQ[{"0", "false", "no", "off"}, ToLowerCase[StringTrim[e]]],
+          TrueQ[OptionValue["Offline"]]]];
+    (* main-TU -O level, recorded in the manifest so the offline build matches the online generator.
+       Mirrors the RunGenerator block's own choice (env override, else -O1 — -O2 is dominated). *)
+    mainOptForManifest = With[{e = Environment["NT_GEN_MAIN_OPT"]}, If[StringQ[e] && e =!= "", e, "-O1"]];
     kns = OptionValue["KernelNamespace"];
     sns = OptionValue["SupportNamespace"];
     runInc = OptionValue["RuntimeInclude"];
@@ -2709,6 +2875,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
     interpTy = ntDressType[OptionValue["DressingType"]];
     ns = OptionValue["Namespace"] /. Automatic -> ToLowerCase[name];
     nsHome = kns <> "::" <> ns;(* where the generated trace fns / nenv / fill live *)
+    verdictMacro = ntVerdictMacro[ns];(* the #if macro selecting one of the 3 complex-kernel bodies *)
     args = k["Args"];
     frame = k["Frame"];
     env = k["Env"];
@@ -3133,14 +3300,34 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
       "[prof] FunKit kernel/class/header lowering: ",
       First @
         AbsoluteTiming[
-          kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
+(* the kernel body/bodies.
+   A real flow has exactly one. A COMPLEX one has three — the untouched complex form and the two real
+   projections (ntPureIntegrand / ntRePartIntegrand) — spliced under an `#if` on the verdict macro that
+   the imaginary-part probe writes into numtrace_verdict.hh. Which is valid depends on the numerical
+   values of the generated traces, so the choice cannot be made here; emitting all three and letting the
+   preprocessor pick is what lets the whole generation run offline, as a build step. Each body goes
+   through its own MakeCppFunction so COEN's CSE spans the whole expression, exactly as when Mathematica
+   used to re-lower the single chosen one after the probe. *)
+          mkKernelFn = Function[expr, FunKit`MakeCppFunction[expr, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble]];
+          kernelFn =
+            If[!complexQ,
+              mkKernelFn[integrand],
+              StringRiffle[{
+                "#if " <> verdictMacro <> " == 2   // Pure: the Complex -> Re projection is exact",
+                mkKernelFn[ntPureIntegrand[integrand]],
+                "#elif " <> verdictMacro <> " == 1   // RePart: real value via complex trace(s), re/im split",
+                mkKernelFn[ntRePartIntegrand[integrand]],
+                "#else                              // the imaginary part survives: genuinely complex",
+                mkKernelFn[integrand],
+                "#endif"}, "\n"]];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
-          classStr = ntKernelClass[name, {kernelFn, constFn}, decor, regTemplate, regAlias, {}];
+(* ntRe/ntIm are needed by both real branches, so a complex flow always carries them. *)
+          classStr = ntKernelClass[name, {kernelFn, constFn}, decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
             FunKit`MakeCppHeader[
 (* the numeric kernel is flat straight-line arithmetic: the generated trace functions (hdrInc) plus
-   the support runtime; no tensor-engine headers. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}], "Body" -> ntWrapBody[kns, classStr, name]
+   the support runtime; no tensor-engine headers. A complex flow also pulls the verdict header. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}, If[complexQ, {ntVerdictFile}, {}]], "Body" -> ntWrapBody[kns, classStr, name]
             ];],
       " s"];
     (* emit the generator source (the numeric matrix-product backend is the single generation path). *)
@@ -3169,8 +3356,11 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
 (* run the generator at codegen time -> the committed straight-line kernel header. The binary's
    stdout is redirected straight to the header FILE via the shell (Run), not captured in memory
    by RunProcess — the A4 kernel header is ~40k lines, and in-memory capture is fragile at that
-   size. *)
-    If[OptionValue["RunGenerator"],
+   size.
+   OFFLINE mode skips all of it: the sources are on disk and the `numtrace` CMake target compiles and
+   runs them as a build step, with `make -j` across every flow at once instead of this per-flow xargs.
+   The committed traces header is left untouched until then. *)
+    If[OptionValue["RunGenerator"] && !offline,
       incDir = OptionValue["IncludeDir"] /. Automatic :> resolveIncludeDir[];
       bin = FileNameJoin[{$TemporaryDirectory, "gen_" <> ns}];
 (* Time COMPILE and RUN separately — both count toward generation time, but the levers differ
@@ -3315,68 +3505,27 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
         CopyFile[tmp, headerFile, OverwriteTarget -> True];
         DeleteFile[tmp];
         Print["wrote header: ", headerFile, " (", sz, " bytes)"]]];
-(* semantic complexQ: with the real traces now generated, probe whether Im(integrand) actually
-   vanishes (the projector-i / colour-i factors usually cancel to a real flow). If so, re-emit a
-   REAL (double) kernel — losslessly, since Im≡0 — so the real DiFfRG integrators bind directly and
-   no std::complex survives into device code. Only meaningful once the traces exist (RunGenerator). *)
-    If[complexQ && TrueQ[OptionValue["RunGenerator"]] && TrueQ[OptionValue["RealProbe"]],
-      Module[{
-        verdict =
-          numericImagProbeRealQ[
-            integrand,
-            args,
-            fillArgs,
-            angleDefs,
-            angleDecls,
-            nsHome,
-            headerFile,
-            $drTable,
-            "TraceArrayDecl" ->
-              If[crossCSE,
-                tarrDecl,
-                ""]],
-        extraPriv = {}},
-        Switch[verdict,
-          "Pure", (* real value: project to Re. Wrap trace tokens in ntRe FIRST so the kernel is
-provably double-typed even if a trace function is complex-typed — the probe
-proved |full-proj|≈0, i.e. Σ Im(c)·tr ≈ 0, so dropping the ntIm terms is exact
-and ntRe(double)=passthrough / ntRe(complex)=.real() keeps it real arithmetic. *)ntLog["[probe] real & projection exact -> clean REAL (double) kernel"];
-            integrand = (integrand /. s_String :> Global`ntRe[s]) /. Complex[a_, b_] :> a;
-            complexQ = False;
-            extraPriv = {ntReImDefs[decor]},
-          "RePart", (* real value but a complex trace: re/im split -> Σ[Re(c)·tr.real() − Im(c)·tr.imag()] *)ntLog["[probe] real value via complex trace(s) -> double kernel (re/im split)"];
-(* The integrand is LINEAR in the trace tokens (strings). Re(Σ c·tr) = Σ[Re(c)·ntRe(tr) −
-   Im(c)·ntIm(tr)]. The naive `(… /. s:>ntRe[s]+I ntIm[s]) /. Complex[a_,b_]:>a` is WRONG:
-   Mathematica keeps `i·X·(ntRe+I ntIm)` as an UNEXPANDED product, so `/. Complex:>a` zeroes
-   the leading `i` factor and DROPS the whole term — silently losing the real −X·ntIm(tr)
-   contribution of every complex trace. Instead split each token's coefficient into real /
-   imaginary parts via an `ii`-substitution (I → real symbol ii), which keeps the dressing
-   coefficients FACTORED (unlike ComplexExpand, which un-factors them and defeats COEN's CSE). *)
-            integrand =
-              Module[{toks = Union[Cases[integrand, _String, Infinity]], tsym, lin, ii},
-                tsym = AssociationThread[toks -> Table[Unique["tr$"], {Length[toks]}]];
-                lin = integrand /. tsym;
-                Total[
-                    Function[t,
-                        Module[{cc = Coefficient[lin, tsym[t]] /. Complex[ar_, ai_] :> ar + ii * ai},
-                          Coefficient[cc, ii, 0] * Global`ntRe[t] - Coefficient[cc, ii, 1] * Global`ntIm[t]
-                        ]
-                      ] /@ toks
-                  ] + ((lin /. Thread[Values[tsym] -> 0]) /. Complex[ar_, ai_] :> ar)];
-            complexQ = False;
-            extraPriv = {ntReImDefs[decor]},
-          _,
-            ntLog["[probe] imaginary part survives -> keeping the complex kernel (consumer takes Re)"]];
-        If[verdict === "Pure" || verdict === "RePart",
-          kernelFn = FunKit`MakeCppFunction[integrand, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble];
-          classStr = ntKernelClass[name, {kernelFn, constFn}, decor, regTemplate, regAlias, extraPriv];
-          header = FunKit`MakeCppHeader["Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}], "Body" -> ntWrapBody[kns, classStr, name]]
-        ]]];
+(* semantic complexQ: the syntactic flag only says SOME coefficient carries an `i`; whether the
+   assembled flow is actually real depends on the trace VALUES. The probe settles it against the
+   generated traces and writes the verdict macro that selects one of the three bodies emitted above.
+   Offline the same probe source is compiled and run by the `numtrace` build target instead. *)
+    If[complexQ,
+      probeFile = FileNameJoin[{DirectoryName[genFile], "probe_" <> ns <> ".cpp"}];
+      ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, $drTable, "TraceArrayDecl" -> If[crossCSE, tarrDecl, ""]]];
+      Print["wrote probe: ", probeFile];
+      If[TrueQ[OptionValue["RunGenerator"]] && TrueQ[OptionValue["RealProbe"]] && !offline,
+        ntLog["[probe] verdict -> ", ntRunProbe[probeFile, DirectoryName[headerFile], FileNameJoin[{DirectoryName[headerFile], ntVerdictFile}], verdictMacro]]]];
     (* kernel header (write-if-changed). *)
     If[FileExistsQ[kernelFile] && Import[kernelFile, "Text"] === header,
       Print["unchanged: ", kernelFile],
       ntExportCpp[kernelFile, header];
       Print["wrote kernel: ", kernelFile]];
+    (* per-flow numtrace manifest + switch. Written LAST, so a flow that aborted part-way leaves no
+       manifest claiming to be buildable. Offline it says 0 (the numtrace target still owes the
+       kernels); online everything is already done, so it says 1 and the target skips the flow. *)
+    Module[{mf = ntWriteManifest[DirectoryName[kernelFile], name, ns, genFile, headerFile, unitFiles, decor, mainOptForManifest, OptionValue["FullParallel"], complexQ, probeFile]},
+      If[!offline, ntMarkGenerated[mf]];
+      Print["wrote manifest: ", mf, If[offline, " (generated: 0 — run `make numtrace`)", " (generated: 1)"]]];
     kernelFile];
 
 (* ---- MakeNTKernel: the public kernel emitter. --------------------------------------
@@ -3386,7 +3535,7 @@ and ntRe(double)=passthrough / ntRe(complex)=.real() keeps it real arithmetic. *
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0.};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False};
 
 MakeNTKernel::disconnectmix = "Diagram `1` disconnects into >= 2 Dirac/colour trace components (a product of independent Dirac traces, a genuine >=2-loop structure). The numeric backend handles a single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored), but does not yet multiply two or more independent Dirac traces.";
 

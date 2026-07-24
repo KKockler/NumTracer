@@ -340,8 +340,8 @@ namespace numtracer::network
   } // namespace edetail
 
   /// @brief Print a lowered program as a straight-line C++ function `name(const double* f)`.
-  ///        `decor` is the function decorator/prefix (e.g. `"static __host__ __device__ inline"`
-  ///        for a CUDA-callable kernel); the default keeps the emitted bytes unchanged.
+  ///        `decor` is the function decorator/prefix (e.g. `"static KOKKOS_INLINE_FUNCTION"`
+  ///        for a device-callable kernel); the default keeps the emitted bytes unchanged.
   NUMTRACER_FUNC void emit_cpp(std::ostream &out, const GenProg &p, const std::string &name,
                                const std::string &decor)
   {

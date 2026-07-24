@@ -104,6 +104,9 @@ write_basic_package_version_file(
   COMPATIBILITY SameMajorVersion ARCH_INDEPENDENT)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/NumTracerConfig.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/NumTracerConfigVersion.cmake
+              # offline kernel generation: the `numtrace` target + its cmake -P driver
+              ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NumTracerNumtrace.cmake
+              ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NumTracerNumtraceRun.cmake
         DESTINATION lib/cmake/NumTracer)
 
 # ##############################################################################

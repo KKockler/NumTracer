@@ -2,4 +2,9 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/NumTracerTargets.cmake")
 
+# Offline kernel generation (the `numtrace` target). NumTracer_NUMTRACE_DIR is where the driver
+# script sits, so numtracer_add_numtrace can find it from any consumer project.
+set(NumTracer_NUMTRACE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+include("${CMAKE_CURRENT_LIST_DIR}/NumTracerNumtrace.cmake")
+
 check_required_components(NumTracer)
