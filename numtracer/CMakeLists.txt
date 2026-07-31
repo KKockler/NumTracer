@@ -65,9 +65,19 @@ endif()
 # made every generation run pay a multi-second compile floor regardless of kernel size. The engine
 # functions are declared in the headers and defined once in src/numtracer.cpp (see core/export.hpp).
 # This affects only how the engine ships; the kernel it *emits* stays standalone header-only C++.
+
+# The generator's parallel net fold (numeric/trace_fold.hpp) spawns std::threads, and sun_net.hpp
+# takes a std::mutex, so every binary that links the engine needs the platform thread library. On
+# glibc >= 2.34 the pthread symbols are in libc and this is a no-op; on the older glibc that most
+# clusters still run, libstdc++'s std::thread anchor references pthread_create/pthread_join and the
+# link fails without -pthread. PUBLIC so tests, benchmarks and consumers all inherit it.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 add_library(NumTracer STATIC src/numtracer.cpp)
 add_library(NumTracer::NumTracer ALIAS NumTracer)
 target_compile_features(NumTracer PUBLIC cxx_std_20)
+target_link_libraries(NumTracer PUBLIC Threads::Threads)
 target_include_directories(NumTracer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -79,6 +89,7 @@ add_library(numtracer_headeronly INTERFACE)
 set_target_properties(numtracer_headeronly PROPERTIES EXPORT_NAME NumTracer_headeronly)
 add_library(NumTracer::NumTracer_headeronly ALIAS numtracer_headeronly)
 target_compile_features(numtracer_headeronly INTERFACE cxx_std_20)
+target_link_libraries(numtracer_headeronly INTERFACE Threads::Threads)
 target_compile_definitions(numtracer_headeronly INTERFACE NUMTRACER_HEADER_ONLY=1)
 target_include_directories(numtracer_headeronly INTERFACE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
