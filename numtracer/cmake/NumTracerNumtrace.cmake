@@ -14,9 +14,23 @@
 # at 1 contributes nothing here — if every flow is at 1, `numtrace` is an empty target and does
 # nothing, which is the normal state of a checked-out tree.
 #
-# Parallelism comes from CMake itself: each flow's generator is an ordinary executable target, so
-# `make -j8 numtrace` spreads eight compiles across all flows at once rather than running one
-# per-flow xargs after another, which is what the Wolfram path did.
+# Flows are generated ONE AT A TIME, and each gets the whole job budget. The generator binary sizes
+# its own thread pool from hardware_concurrency(), so it is not one job however make counts it: left
+# to itself, `make -j8` would start eight generators of 32 workers each, and a phase-A worker
+# transiently holds ~1 GB on the dense 4-point flows. Two halves fix that:
+#
+#   * flow i+1's generator TARGET depends on flow i's completion stamp, so nothing of flow i+1 —
+#     not even its compiles — starts until flow i has run, probed and marked. Within a flow the
+#     unit TUs still compile across all -j slots, and then the run has the machine to itself.
+#   * the driver resolves that same -jN (out of MAKEFLAGS, which GNU make exports to every recipe)
+#     and hands it to the generator as NT_GEN_MAXW / NT_GEN_MAXW_B, capped by the flow's own
+#     "maxw"/"maxw_b" if the notebook set SetNumTracerThreads around it.
+#
+# So `make -j8 numtrace` means eight compiler processes, then one generator with eight workers, per
+# flow, in sorted order. A consequence to know about: because the edge sits on the generator target,
+# asking for one flow (`make numtrace_<ns>`) also builds every pending flow ahead of it in that
+# order. Expressing "mutually exclusive if both are scheduled" needs Ninja job pools, which the
+# Makefile generator has no equivalent of.
 #
 # Per flow the chain is
 #
@@ -33,6 +47,20 @@ if(COMMAND numtracer_add_numtrace)
   return()
 endif()
 
+# Worker count for build tools that do not report their -j in the environment — Ninja above all.
+# Under `make` this is never consulted: the driver reads the real -jN out of MAKEFLAGS at build
+# time, which is the only place it exists (a configure-time value would be wrong the moment you
+# changed -j without reconfiguring).
+if(NOT DEFINED NUMTRACE_JOBS)
+  cmake_host_system_information(RESULT _nt_cores QUERY NUMBER_OF_PHYSICAL_CORES)
+  if(NOT _nt_cores OR _nt_cores LESS 1)
+    set(_nt_cores 4)
+  endif()
+  set(NUMTRACE_JOBS "${_nt_cores}" CACHE STRING
+      "numtrace: generator worker threads when the build tool does not report -jN (e.g. Ninja)")
+  unset(_nt_cores)
+endif()
+
 function(numtracer_add_numtrace flows_target flow_dir)
   set(_driver "${NumTracer_NUMTRACE_DIR}/NumTracerNumtraceRun.cmake")
   if(NOT EXISTS "${_driver}")
@@ -41,10 +69,27 @@ function(numtracer_add_numtrace flows_target flow_dir)
 
   file(GLOB _manifests "${flow_dir}/*/numtrace.json")
 
+  # Sorted, because the flows are now run in this order and a glob-order chain would shuffle a long
+  # sequential build from machine to machine.
+  list(SORT _manifests)
+
   # A re-emit from Wolfram rewrites the manifests (switch back to 0). Registering them here makes the
   # next build reconfigure by itself, so the new work is picked up without anyone remembering to
   # re-run cmake. The glob is registered too, so an entirely new flow directory also triggers it.
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_manifests})
+
+  # How many flows this call will generate, for the "[k/N] tracing <flow>" banner. Known only after
+  # a pass over the switches, and the banner is baked into the command line, so it needs its own
+  # cheap pre-pass rather than being counted as we go.
+  set(_total 0)
+  foreach(_manifest IN LISTS _manifests)
+    file(READ "${_manifest}" _json)
+    string(JSON _generated GET "${_json}" "generated")
+    if(NOT _generated)
+      math(EXPR _total "${_total} + 1")
+    endif()
+  endforeach()
+  set(_idx 0)
 
   set(_outputs "")
   set(_pending "")
@@ -67,6 +112,20 @@ function(numtracer_add_numtrace flows_target flow_dir)
     string(JSON _fullpar   GET "${_json}" "full_parallel")
     string(JSON _complex   GET "${_json}" "complex")
     string(JSON _kernels   GET "${_json}" "kernels")
+
+    math(EXPR _idx "${_idx} + 1")
+
+    # Per-flow worker caps, from whatever SetNumTracerThreads was in force when the flow was emitted
+    # (0 = unset = take the build's -jN). Absent from every manifest written before these fields
+    # existed, and string(JSON GET) is a hard error on a missing key — hence the ERROR_VARIABLE form.
+    string(JSON _maxw  ERROR_VARIABLE _jerr GET "${_json}" "maxw")
+    if(_jerr OR NOT _maxw)
+      set(_maxw 0)
+    endif()
+    string(JSON _maxwb ERROR_VARIABLE _jerr GET "${_json}" "maxw_b")
+    if(_jerr OR NOT _maxwb)
+      set(_maxwb 0)
+    endif()
 
     # Manifest paths are normally relative to the flow directory, but tolerate absolute ones: a path
     # that could not be made relative at emit time (e.g. a not-yet-created file whose symlinked parent
@@ -103,6 +162,17 @@ function(numtracer_add_numtrace flows_target flow_dir)
     # ---- the generator -------------------------------------------------------------------------
     set(_gentgt "numtrace_gen_${_ns}")
     add_executable(${_gentgt} EXCLUDE_FROM_ALL ${_sources})
+
+    # THE SERIALIZATION. A target-level edge onto the previous flow's completion target, so this
+    # flow's unit TUs cannot start compiling until that one has run, probed and marked. Both the
+    # Makefile and Ninja generators honour it, and it applies to EXCLUDE_FROM_ALL targets. The tail
+    # is a GLOBAL property, not a local: a project with several flow directories calls this function
+    # once per directory, and the chain has to continue across those calls rather than restart.
+    get_property(_prev GLOBAL PROPERTY NUMTRACE_CHAIN_TAIL)
+    if(_prev)
+      add_dependencies(${_gentgt} ${_prev})
+    endif()
+
     target_link_libraries(${_gentgt} PRIVATE NumTracer::NumTracer)
     target_compile_options(${_gentgt} PRIVATE -ftemplate-depth=4000)
     set_target_properties(${_gentgt} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
@@ -132,19 +202,30 @@ function(numtracer_add_numtrace flows_target flow_dir)
         "-DGEN=$<TARGET_FILE:${_gentgt}>"
         "-DOUT=${_kernels_hh}"
         "-DNS=${_ns}"
+        "-DFLOW=${_name}"
         "-DDECOR=${_decorator}"
         "-DFULLPAR=${_fullpar}"
+        "-DJOBS=${NUMTRACE_JOBS}"
+        "-DMAXW=${_maxw}"
+        "-DMAXWB=${_maxwb}"
+        "-DIDX=${_idx}"
+        "-DTOTAL=${_total}"
         -P "${_driver}")
 
-    if(_complex)
-      # kernels.hh first, then the probe that reads it; the switch flips at the end of the chain.
-      add_custom_command(
-        OUTPUT "${_kernels_hh}"
-        ${_run_cmd}
-        DEPENDS ${_gentgt}
-        COMMENT "NumTracer: tracing ${_name}"
-        VERBATIM)
+    # The traces header, for every flow. USES_TERMINAL: with the flows serialized, the build spends
+    # nearly all its wall clock inside one generator, so its NT_GEN_PROFILE phase lines have to
+    # stream rather than surface at the end. On Ninja it also lands the step in the depth-1 console
+    # pool, reinforcing the chain.
+    add_custom_command(
+      OUTPUT "${_kernels_hh}"
+      ${_run_cmd}
+      DEPENDS ${_gentgt}
+      COMMENT "NumTracer: [${_idx}/${_total}] tracing ${_name}"
+      USES_TERMINAL
+      VERBATIM)
 
+    if(_complex)
+      # then the probe that reads it; the switch flips at the end of the chain.
       string(JSON _probe   GET "${_json}" "probe")
       string(JSON _macro   GET "${_json}" "verdict_macro")
       string(JSON _verdict GET "${_json}" "verdict")
@@ -179,12 +260,6 @@ function(numtracer_add_numtrace flows_target flow_dir)
       set(_last "${_verdict_hh}")
       list(APPEND _outputs "${_kernels_hh}" "${_verdict_hh}")
     else()
-      add_custom_command(
-        OUTPUT "${_kernels_hh}"
-        ${_run_cmd}
-        DEPENDS ${_gentgt}
-        COMMENT "NumTracer: tracing ${_name}"
-        VERBATIM)
       set(_last "${_kernels_hh}")
       list(APPEND _outputs "${_kernels_hh}")
     endif()
@@ -205,6 +280,12 @@ function(numtracer_add_numtrace flows_target flow_dir)
       VERBATIM)
     list(APPEND _outputs "${_stamp}")
 
+    # The flow's completion as a nameable target: it is what the NEXT flow's generator hangs off,
+    # and it doubles as a hand-runnable `make numtrace_<ns>` (which, per the header note, drags in
+    # every pending flow ahead of it).
+    add_custom_target(numtrace_${_ns} DEPENDS "${_stamp}")
+    set_property(GLOBAL PROPERTY NUMTRACE_CHAIN_TAIL numtrace_${_ns})
+
     list(APPEND _pending "${_name}")
   endforeach()
 
@@ -224,7 +305,7 @@ function(numtracer_add_numtrace flows_target flow_dir)
   if(_pending)
     list(LENGTH _pending _n)
     string(REPLACE ";" " " _pretty "${_pending}")
-    message(STATUS "numtrace: ${_n} flow(s) to generate: ${_pretty}")
+    message(STATUS "numtrace: ${_n} flow(s) to generate, one at a time in this order: ${_pretty}")
   elseif(_manifests)
     message(STATUS "numtrace: all flows already generated")
   else()

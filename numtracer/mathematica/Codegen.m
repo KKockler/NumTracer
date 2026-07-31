@@ -2278,6 +2278,14 @@ ntRelativePath[from_String, to_String] := Module[{f, t, common, rel},
    timestamps cannot express "already generated") — and the metadata the build needs (namespace, source
    list, decorator, main-TU -O level, whether a probe is required). One writer per file, so parallel
    numtrace jobs never race. Paths are basenames relative to "gen_dir", relative to the flow dir. *)
+
+(* A positive-integer environment variable, or 0 for "unset / unusable". Only used for the thread
+   caps below, where 0 is the manifest's spelling of "no cap — take the build's -jN". *)
+ntEnvPosInt[nm_String] := With[{v = Environment[nm]},
+  If[StringQ[v],
+    With[{n = Quiet @ ToExpression[v]}, If[IntegerQ[n] && n > 0, n, 0]],
+    0]];
+
 ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFile_String,
     unitFiles_List, decor_String, mainOpt_String, fullParallel_, complexQ_, probeFile_] := Module[
   {genDir = DirectoryName[genFile], manifest},
@@ -2293,6 +2301,13 @@ ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFi
     "decorator"     -> decor,
     "main_opt"      -> mainOpt,
     "full_parallel" -> TrueQ[fullParallel],
+(* the per-flow thread caps, captured from whatever SetNumTracerThreads[nA, nB] was in force at emit
+   time — it sets exactly these two environment variables. Offline the generator runs from a cmake -P
+   build step, which inherits nothing of the emitting Wolfram kernel's environment, so a cap that is
+   not written down here is simply lost. The numtrace driver re-applies them, lowering (never raising)
+   the build's own -jN. 0 = unset. *)
+    "maxw"          -> ntEnvPosInt["NT_GEN_MAXW"],
+    "maxw_b"        -> ntEnvPosInt["NT_GEN_MAXW_B"],
     "complex"       -> TrueQ[complexQ],
     "kernels"       -> ntRelativePath[flowDir, tracesFile]|>;
   If[TrueQ[complexQ],

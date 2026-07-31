@@ -2,8 +2,10 @@
 #
 # Two modes, selected with -DMODE=:
 #
-#   run   run a flow's generator binary and commit its stdout as the straight-line traces header.
+#   run   run a flow's generator binary and commit its stdout as the straight-line traces header,
+#         with its thread pool sized to the build's own job budget (see "workers" below).
 #         -DGEN=<binary> -DOUT=<kernels.hh> -DNS=<namespace> -DDECOR=<decorator> [-DFULLPAR=ON]
+#         -DFLOW=<name> -DJOBS=<n> -DMAXW=<n|0> -DMAXWB=<n|0> -DIDX=<k> -DTOTAL=<n>
 #
 #   probe run a flow's imaginary-part probe, which writes the verdict header, and report the verdict
 #         in words. The probe's raw measurement line is captured rather than dumped into the build log.
@@ -15,6 +17,20 @@
 # `run` mirrors the safety checks the Wolfram path used to do inline: the generator writes to a temp
 # file, which is validated (exit code 0 AND non-trivial size) before replacing the committed header —
 # a crashed generator must never truncate a header that is checked into git.
+#
+# workers. The generator sizes its pool from hardware_concurrency() and only ever lets NT_GEN_MAXW
+# lower it (NT_GEN_MAXW_B can also raise it), so the whole thread count is ours to set here. It is
+# resolved fresh per flow, in this order:
+#
+#   1. an NT_GEN_MAXW / NT_GEN_MAXW_B already in the environment wins outright, so
+#      `NT_GEN_MAXW=2 make -j8 numtrace` still works for debugging;
+#   2. otherwise the build's own -jN, taken from MAKEFLAGS, which GNU make exports into every recipe
+#      (measured on make 4.4.1: " -j8 --jobserver-auth=fifo:/tmp/GMfifo666907"). This is the only
+#      place the number exists — it is chosen at build time, not at configure time;
+#   3. failing that -DJOBS=, the NUMTRACE_JOBS cache value, for tools that export nothing (Ninja);
+#   4. capped by -DMAXW=/-DMAXWB= when the flow's manifest carries one, i.e. when the notebook had
+#      SetNumTracerThreads in force while emitting it. A cap only ever lowers: a manifest asking for
+#      4 does not get 4 out of a `-j2` build.
 
 cmake_minimum_required(VERSION 3.19)
 
@@ -28,14 +44,68 @@ if(MODE STREQUAL "run")
   set(_tmp "${OUT}.tmp")
   set(_args -n "${NS}" -d "${DECOR}")
   if(FULLPAR)
-    # heavy nets are reduced/rebased concurrently: faster codegen, higher peak RAM
+    # Legacy: -p asked the old reduce/rebase generator to work heavy nets concurrently. The numeric
+    # generator's argument parser knows only -d and -n, so this is currently inert — kept because
+    # the "FullParallel" MakeNTKernel option and the manifest field are still public.
     list(APPEND _args -p)
   endif()
 
+  # ---- worker count (see the header note) -------------------------------------------------------
+  set(_jobs "${JOBS}")
+  if(DEFINED ENV{MAKEFLAGS})
+    set(_mf "$ENV{MAKEFLAGS}")
+    # --jobs= is tried first so that --jobserver-auth=fifo:/tmp/GMfifo665822 cannot be misread; -j
+    # then needs a digit right after it, which "-jobserver" does not have. A bare -j (unlimited)
+    # matches neither and falls through to JOBS.
+    if(_mf MATCHES "--jobs[= ]+([0-9]+)")
+      set(_jobs "${CMAKE_MATCH_1}")
+    elseif(_mf MATCHES "-j *([0-9]+)")
+      set(_jobs "${CMAKE_MATCH_1}")
+    endif()
+  endif()
+  if(NOT _jobs OR _jobs LESS 1)
+    set(_jobs 1)
+  endif()
+
+  set(_w "${_jobs}")
+  if(MAXW AND MAXW GREATER 0 AND MAXW LESS _w)
+    set(_w "${MAXW}")
+  endif()
+  set(_wb "${_jobs}")
+  if(MAXWB AND MAXWB GREATER 0 AND MAXWB LESS _wb)
+    set(_wb "${MAXWB}")
+  endif()
+
+  # set(ENV{}) here is inherited by execute_process's child, so no `cmake -E env` wrapper is needed.
+  if(DEFINED ENV{NT_GEN_MAXW})
+    set(_w "$ENV{NT_GEN_MAXW} (from the environment)")
+  else()
+    set(ENV{NT_GEN_MAXW} "${_w}")
+  endif()
+  if(DEFINED ENV{NT_GEN_MAXW_B})
+    set(_wb "$ENV{NT_GEN_MAXW_B} (from the environment)")
+  else()
+    set(ENV{NT_GEN_MAXW_B} "${_wb}")
+  endif()
+
+  # With the flows serialized this banner is the only thing saying which one the build is sitting on
+  # and how much of the machine it was given.
+  set(_which "")
+  if(TOTAL AND TOTAL GREATER 0)
+    set(_which "[${IDX}/${TOTAL}] ")
+  endif()
+  if(NOT DEFINED FLOW OR FLOW STREQUAL "")
+    set(FLOW "${NS}")
+  endif()
+  message(STATUS "NumTracer: ${_which}tracing ${FLOW} (W=${_w}, WB=${_wb})")
+
+  # ECHO_ERROR_VARIABLE tees the generator's stderr to the console as it arrives — the
+  # NT_GEN_PROFILE phase lines — while still capturing it for the failure message below.
   execute_process(
     COMMAND "${GEN}" ${_args}
     OUTPUT_FILE "${_tmp}"
     ERROR_VARIABLE _err
+    ECHO_ERROR_VARIABLE
     RESULT_VARIABLE _rc)
 
   set(_sz 0)
