@@ -27,6 +27,7 @@
 #pragma once
 
 #include "numtracer/core/cx.hpp"
+#include "numtracer/numeric/stats.hpp"
 #include "numtracer/third_party/gch/small_vector.hpp"
 
 #include <algorithm>
@@ -213,6 +214,17 @@ namespace numtracer::numeric
     MonoExpT operator[](int k) const { return get(k); }
     Ref operator[](int k) { return Ref{this, k}; }
 
+    /// Mask of every field's TOP bit (bit `shiftOf(k)+kExpBits-1`). A 64-bit add of two packed
+    /// words is the exact fieldwise sum IFF no field's sum carries out of its top bit; the classic
+    /// SWAR carry-out detect `(a&b) | ((a|b) & ~sum)` tested against this mask decides that. Both
+    /// inputs are ≤ 31 per field, so a field sum is ≤ 62 and at most one carry bit exists.
+    static constexpr std::uint64_t kFieldTop = [] {
+      std::uint64_t m = 0;
+      for (unsigned k = 0; k < kPerWord; ++k)
+        m |= 1ULL << (64u - (k + 1u) * kExpBits + (kExpBits - 1u));
+      return m;
+    }();
+
     bool operator<(const MonoExp &o) const
     {
       // fast path: both inline (symbols ≥ kInlineSyms are 0 in both)
@@ -308,6 +320,8 @@ namespace numtracer::numeric
     /// Build from an unsorted scratch list of (monomial, coeff): sort then combine adjacent equals.
     static MPoly from_scratch(int ns, MPolyScratch s)
     {
+      NT_STAT_ADD(fs_calls, 1);
+      NT_STAT_ADD(fs_terms_in, s.size());
       MPoly p(ns);
       std::sort(s.begin(), s.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
       p.t.reserve(s.size());
@@ -410,8 +424,15 @@ namespace numtracer::numeric
 
   inline MPoly operator+(const MPoly &a, const MPoly &b)
   {
-    if (a.t.empty()) return b;
-    if (b.t.empty()) return a;
+    if (a.t.empty()) {
+      NT_STAT_ADD(add_empty, 1); // this return COPY-constructs the surviving polynomial
+      return b;
+    }
+    if (b.t.empty()) {
+      NT_STAT_ADD(add_empty, 1);
+      return a;
+    }
+    NT_STAT_ADD(add_calls, 1);
     // Both operands carry terms, so their symbol spaces must agree: the merge below walks the two
     // exponent vectors slot-for-slot, and a mismatch would read out of bounds (a default-constructed
     // zero with nsym == 0 is allowed — it is caught by the empty checks above). Debug-only; compiles
@@ -439,6 +460,39 @@ namespace numtracer::numeric
       r.t.push_back(b.t[j++]);
     return r;
   }
+  /// Rvalue overloads of operator+: the hot paths add PRVALUE products (`x[0]*y[0] + x[1]*y[2]` in
+  /// the Weyl-block fold) where one side is very often the zero polynomial — a γ Weyl block is
+  /// diagonal-or-antidiagonal, so half its entry products are empty. The const& overload must COPY
+  /// the surviving side in that case (measured: 70-85% of ALL operator+ calls); these move it.
+  /// Value- and byte-identical: the merge path and term order are untouched.
+  inline MPoly operator+(MPoly &&a, MPoly &&b)
+  {
+    if (a.t.empty()) {
+      NT_STAT_ADD(add_moved, 1);
+      return std::move(b);
+    }
+    if (b.t.empty()) {
+      NT_STAT_ADD(add_moved, 1);
+      return std::move(a);
+    }
+    return static_cast<const MPoly &>(a) + static_cast<const MPoly &>(b);
+  }
+  inline MPoly operator+(MPoly &&a, const MPoly &b)
+  {
+    if (b.t.empty()) {
+      NT_STAT_ADD(add_moved, 1);
+      return std::move(a);
+    }
+    return static_cast<const MPoly &>(a) + b;
+  }
+  inline MPoly operator+(const MPoly &a, MPoly &&b)
+  {
+    if (a.t.empty()) {
+      NT_STAT_ADD(add_moved, 1);
+      return std::move(b);
+    }
+    return a + static_cast<const MPoly &>(b);
+  }
   inline MPoly operator-(const MPoly &a, const MPoly &b)
   {
     assert(a.t.empty() || b.t.empty() || a.nsym == b.nsym); // see operator+; debug-only
@@ -446,7 +500,7 @@ namespace numtracer::numeric
     nb.t.reserve(b.t.size());
     for (const auto &kv : b.t)
       nb.t.push_back({kv.first, Cx{-kv.second.re, -kv.second.im}});
-    return a + nb;
+    return a + std::move(nb); // rvalue overload: an empty `a` MOVES the negation instead of copying it
   }
   /// Above this many product terms (`|a|·|b|`), `operator*` materialises its scratch in CHUNKS of the
   /// outer operand and folds the chunks, so peak scratch is bounded by ~`kMulMaxScratch` instead of the
@@ -461,16 +515,40 @@ namespace numtracer::numeric
   inline MPoly operator*(const MPoly &a, const MPoly &b)
   {
     const int ns = a.nsym ? a.nsym : b.nsym;
-    if (a.t.empty() || b.t.empty()) return MPoly(ns);
+    if (a.t.empty() || b.t.empty()) {
+      NT_STAT_ADD(mul_empty, 1);
+      return MPoly(ns);
+    }
     assert(a.nsym == b.nsym); // both carry terms ⇒ symbol spaces must match; see operator+ (debug-only)
     const std::size_t na = a.t.size(), nb = b.t.size();
+    NT_STAT_ADD(mul_calls, 1);
+    NT_STAT_ADD(mul_prod_terms, na * nb);
 
     // Emit the product monomial ma·mb (coefficient ca·cb) into scratch `s`. Build IN PLACE (the old
     // code kept a scratch `e` and copied it in, an allocation per product term).
     auto emit = [ns](MPolyScratch &s, const Mono &ma, Cx ca, const Mono &mb, Cx cb) {
       auto &slot = s.emplace_back(Mono{}, ca * cb);
       Mono &m = slot.first;
-      for (int k = 0; k < ns; ++k) m.e[k] = ma.e[k] + mb.e[k]; // packed exponents: set each directly
+      // Fieldwise exponent add. Fast path: both operands inline ⇒ `packed[w] + packed[w]` IS the
+      // per-symbol sum whenever no 5-bit field carries out (SWAR carry-out test against the field
+      // top-bit mask) — two 64-bit adds replace the nsym unpack/shift/mask/repack round trips of
+      // the innermost loop of the innermost operation. Exact integer arithmetic: any carry (a
+      // field sum > 31) falls back to the per-symbol path, which spills to the heap exactly as
+      // before, so values and ordering are bit-identical in every case.
+      bool fast = !ma.e.overflow && !mb.e.overflow;
+      if (fast) {
+        for (int w = 0; w < 2; ++w) {
+          const std::uint64_t a = ma.e.packed[w], b = mb.e.packed[w], sum = a + b;
+          if (((a & b) | ((a | b) & ~sum)) & MonoExp::kFieldTop) {
+            fast = false;
+            m.e.packed = {0, 0};
+            break;
+          }
+          m.e.packed[w] = sum;
+        }
+      }
+      if (!fast)
+        for (int k = 0; k < ns; ++k) m.e[k] = ma.e[k] + mb.e[k]; // packed exponents: set each directly
       // Only ask for capacity when the merge would overflow the inline buffer — most monomials carry
       // NO atoms, and an unconditional reserve() here cost ~7% of the run.
       const std::size_t nat = ma.atoms.size() + mb.atoms.size();
@@ -492,6 +570,7 @@ namespace numtracer::numeric
 
     // Blocked: chunk the outer operand `a` so peak scratch is ~chunk·nb ≤ kMulMaxScratch, and fold the
     // per-chunk collapsed polynomials with operator+ (a linear merge that combines like terms again).
+    NT_STAT_ADD(mul_blocked, 1);
     const std::size_t chunk = std::max<std::size_t>(1, kMulMaxScratch / nb);
     MPoly acc(ns);
     for (std::size_t i0 = 0; i0 < na; i0 += chunk) {
@@ -518,6 +597,21 @@ namespace numtracer::numeric
   /// surviving both passes reaches the lowering as an `inv` env slot. Value-preserving, frame-agnostic.
   inline MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
+    NT_STAT_ADD(dma_calls, 1);
+    // Pass-through early-exit: with no atom on any term (the common state after cancellation)
+    // nothing can cancel and the rebuild below is the identity — skip the scratch + sort.
+    {
+      bool anyAtoms = false;
+      for (const auto &kv : p.t)
+        if (!kv.first.atoms.empty()) {
+          anyAtoms = true;
+          break;
+        }
+      if (!anyAtoms || atomDen.empty()) {
+        NT_STAT_ADD(dma_noop, 1);
+        return p;
+      }
+    }
     MPolyScratch out;
     out.reserve(p.t.size());
     for (const auto &[m, c] : p.t) {
@@ -566,15 +660,36 @@ namespace numtracer::numeric
   inline MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups)
   {
     if (groups.empty()) return p;
+    NT_STAT_ADD(ru_calls, 1);
     // every group entry is a symbol index, so it must address a valid component slot `e[idx]`
     for (const auto &g : groups)
       for ([[maybe_unused]] int idx : g)
         assert(idx >= 0 && idx < p.nsym);
+    // Pass-through early-exit: if no term carries any group's LAST component at power >= 2 there
+    // is nothing to rewrite and the work-stack rebuild below is the identity (p is already sorted
+    // and combined) — skip the scratch + sort. Fires constantly: the in-step reduction inside
+    // `eliminate` calls this on every intermediate, most of which are already reduced.
+    {
+      bool any = false;
+      for (const auto &kv : p.t) {
+        for (const auto &g : groups)
+          if (!g.empty() && kv.first.e[g.back()] >= 2) {
+            any = true;
+            break;
+          }
+        if (any) break;
+      }
+      if (!any) {
+        NT_STAT_ADD(ru_noop, 1);
+        return p;
+      }
+    }
     MPolyScratch out;
     std::vector<std::tuple<MonoExp, MonoAtoms, Cx>> work;
     for (const auto &[m, c] : p.t)
       work.push_back({m.e, m.atoms, c});
     while (!work.empty()) {
+      NT_STAT_ADD(ru_work, 1);
       auto [e, atoms, c] = std::move(work.back());
       work.pop_back();
       // find a unit group whose LAST component still has power >= 2 (the rewrite target)
@@ -628,6 +743,7 @@ namespace numtracer::numeric
 
   inline MPoly divThroughPolyAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
+    NT_STAT_ADD(dpa_calls, 1);
     using Grp = std::map<MonoExp, Cx>;
     std::map<MonoAtoms, Grp> byAtoms;
     for (const auto &[m, c] : p.t)
@@ -680,8 +796,38 @@ namespace numtracer::numeric
         for (std::size_t ai = 0; ai < atoms.size(); ++ai) {
           const int aid = atoms[ai];
           if (aid < 0 || aid >= (int)atomDen.size()) continue;
+          const MPoly &D = atomDen[(std::size_t)aid];
+          // Lead pre-filter: replicate EXACTLY the first check `divides` would make — its
+          // multi-term/atom-free guards, then divisibility of the first significant (above-tol)
+          // lead of G by D's lead — without paying the by-value map copy `divides` takes. A trial
+          // failing on its first leading monomial is the common case (measured: >= 2/3 of trials,
+          // and on some flows 100%). Trials that pass here still run `divides` unchanged, so the
+          // accepted-division set and the resulting values are identical.
+          if (D.t.size() < 2 || !D.t.back().first.atoms.empty()) {
+            NT_STAT_ADD(dpa_pref, 1);
+            continue;
+          }
+          {
+            bool feasible = true;
+            for (auto it = G.rbegin(); it != G.rend(); ++it) {
+              if (std::max(std::fabs(it->second.re), std::fabs(it->second.im)) < tol) continue;
+              const MonoExp &dl = D.t.back().first.e;
+              for (int k = 0; k < p.nsym; ++k)
+                if (it->first[k] < dl[k]) {
+                  feasible = false;
+                  break;
+                }
+              break; // the first significant lead decides, exactly as divides' own loop would
+            }
+            if (!feasible) {
+              NT_STAT_ADD(dpa_pref, 1);
+              continue;
+            }
+          }
           Grp Q;
-          if (divides(G, atomDen[(std::size_t)aid], Q, tol)) {
+          NT_STAT_ADD(dpa_trials, 1);
+          if (divides(G, D, Q, tol)) {
+            NT_STAT_ADD(dpa_exact, 1);
             G.swap(Q);
             atoms.erase(atoms.begin() + (long)ai);
             again = true;

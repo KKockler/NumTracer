@@ -112,13 +112,89 @@ namespace numtracer::numeric
   ///  - `NT_GEN_MEMO_MAX` trims it further when memory is tight (the RAM lever: the dense flows are
   ///    memory-bound before they are compute-bound).
   ///
+#if NT_PHASEA_STATS
+  /// Print the merged phase-A counter/timer report plus the per-trace wall-time distribution.
+  /// Stats builds only (see stats.hpp); called by contract_traces after the workers have joined, so
+  /// the counters hold exactly phase A. `NT_STATS_CSV=<path>` additionally dumps per-trace times.
+  inline void phasea_stats_report(const std::vector<double> &tsec, unsigned W)
+  {
+    const stats::PhaseACounters m = stats::merged();
+    double tot = 0, mx = 0;
+    std::size_t mxk = 0;
+    for (std::size_t k = 0; k < tsec.size(); ++k) {
+      tot += tsec[k];
+      if (tsec[k] > mx) { mx = tsec[k]; mxk = k; }
+    }
+    // log10 histogram of per-trace wall times, buckets 10^-6..10^2 s
+    int hist[9] = {0};
+    for (double t : tsec) {
+      int b = 0;
+      for (double edge = 1e-6; b < 8 && t >= edge; ++b, edge *= 10.0) {}
+      ++hist[b];
+    }
+    // top-10 traces by wall time
+    std::vector<std::size_t> idx(tsec.size());
+    for (std::size_t k = 0; k < idx.size(); ++k) idx[k] = k;
+    const std::size_t K = std::min<std::size_t>(10, idx.size());
+    std::partial_sort(idx.begin(), idx.begin() + K, idx.end(),
+                      [&](std::size_t a, std::size_t b) { return tsec[a] > tsec[b]; });
+    double topK = 0;
+    for (std::size_t i = 0; i < K; ++i) topK += tsec[idx[i]];
+
+    const double ts = 1e-9; // ns → s
+    const double sect = ts * (m.t_dirac + m.t_elem + m.t_contract + m.t_reduce + m.t_divmono + m.t_divpoly);
+    auto pct = [&](stats::nt_u64 ns_) { return sect > 0 ? 100.0 * ts * ns_ / sect : 0.0; };
+    std::fprintf(stderr, "[stats] traces %llu  cpu %.1f s  max %.3f s (trace %zu)  top%zu %.1f s (%.1f%%)  makespan_lb(W=%u) %.1f s\n",
+                 (unsigned long long)m.traces, tot, mx, mxk, K, topK, tot > 0 ? 100.0 * topK / tot : 0.0, W,
+                 std::max(mx, W ? tot / W : tot));
+    std::fprintf(stderr, "[stats] wall hist (log10 s): <1u %d  1-10u %d  10-100u %d  0.1-1m %d  1-10m %d  10-100m %d  0.1-1s %d  1-10s %d  >10s %d\n",
+                 hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7], hist[8]);
+    std::fprintf(stderr, "[stats] split: dirac %.1f s (%.1f%%)  elem %.1f s (%.1f%%)  contract %.1f s (%.1f%%)  reduce %.1f s (%.1f%%)  divmono %.1f s (%.1f%%)  divpoly %.1f s (%.1f%%)\n",
+                 ts * m.t_dirac, pct(m.t_dirac), ts * m.t_elem, pct(m.t_elem), ts * m.t_contract, pct(m.t_contract),
+                 ts * m.t_reduce, pct(m.t_reduce), ts * m.t_divmono, pct(m.t_divmono), ts * m.t_divpoly, pct(m.t_divpoly));
+    std::fprintf(stderr, "[stats] contract detail: score %.1f s (%.1f%%)  in-step reduce %.1f s (%.1f%%)  elim arith %.1f s (%.1f%%)  steps %llu\n",
+                 ts * m.t_cf_score, pct(m.t_cf_score), ts * m.t_cf_reduce, pct(m.t_cf_reduce),
+                 ts * (m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)),
+                 pct(m.t_contract - std::min(m.t_contract, m.t_cf_score + m.t_cf_reduce)), (unsigned long long)m.cf_steps);
+    std::fprintf(stderr, "[stats] mpoly: mul %llu (empty %llu, blocked %llu, prod-terms %llu)  add %llu (empty-copied %llu, empty-moved %llu)  from_scratch %llu (terms-in %llu)\n",
+                 (unsigned long long)m.mul_calls, (unsigned long long)m.mul_empty, (unsigned long long)m.mul_blocked,
+                 (unsigned long long)m.mul_prod_terms, (unsigned long long)m.add_calls, (unsigned long long)m.add_empty,
+                 (unsigned long long)m.add_moved, (unsigned long long)m.fs_calls, (unsigned long long)m.fs_terms_in);
+    std::fprintf(stderr, "[stats] reduce_units %llu calls (noop %llu) / %llu work-items  divmono %llu (noop %llu)  divpoly %llu (prefiltered %llu, trials %llu, exact %llu)\n",
+                 (unsigned long long)m.ru_calls, (unsigned long long)m.ru_noop, (unsigned long long)m.ru_work,
+                 (unsigned long long)m.dma_calls, (unsigned long long)m.dma_noop, (unsigned long long)m.dpa_calls,
+                 (unsigned long long)m.dpa_pref, (unsigned long long)m.dpa_trials, (unsigned long long)m.dpa_exact);
+    std::fprintf(stderr, "[stats] dirac: loops %llu (odd-skip %llu)  tokens %llu  4^f assignments %llu  mul2 %llu\n",
+                 (unsigned long long)m.nd_calls, (unsigned long long)m.nd_odd_skip, (unsigned long long)m.nd_tokens,
+                 (unsigned long long)m.nd_assign, (unsigned long long)m.mul2_calls);
+    if (const char *csv = std::getenv("NT_STATS_CSV")) {
+      if (std::FILE *fp = std::fopen(csv, "w")) {
+        std::fprintf(fp, "trace,seconds\n");
+        for (std::size_t k = 0; k < tsec.size(); ++k)
+          std::fprintf(fp, "%zu,%.9f\n", k, tsec[k]);
+        std::fclose(fp);
+      }
+    }
+  }
+#endif // NT_PHASEA_STATS
+
   /// @param trace `trace(k) -> P`, the contraction of distinct trace `k`. Must be pure and safe to
   ///        call concurrently (the numeric_value_* entry points take everything by const reference).
   template <class P, class TraceFn>
   std::vector<P> contract_traces(int nsym, long nCache, unsigned W, TraceFn &&trace)
   {
     std::vector<P> T(static_cast<std::size_t>(std::max(0L, nCache)), zero_like<P>(nsym));
+#if NT_PHASEA_STATS
+    std::vector<double> tsec(T.size(), 0.0);
+    parallel_flat(nCache, W, [&](long k) {
+      const auto t0 = std::chrono::steady_clock::now();
+      T[static_cast<std::size_t>(k)] = trace(static_cast<int>(k));
+      tsec[static_cast<std::size_t>(k)] = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    });
+    phasea_stats_report(tsec, W);
+#else
     parallel_flat(nCache, W, [&](long k) { T[static_cast<std::size_t>(k)] = trace(static_cast<int>(k)); });
+#endif
     return T;
   }
 

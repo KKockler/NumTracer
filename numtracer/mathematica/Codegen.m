@@ -1591,24 +1591,44 @@ polyFrameSpec[frame_] := Module[{defs = <||>, vals, rules = {}, polyFrame},
    polyFrameSpec). Exists for grading — the lambda3d_small control kernel is generated under it,
    so the lever is validated numerically against the pristine path — and as the rollback. *)
 
+(* SPATIAL unit loop (the finite-T case): the temporal component (slot 1 ↔ C++ component 0) is an
+   independent magSym-free coordinate (l0 / a Matsubara frequency), while the SPATIAL components
+   are all ∝ magSym with at least one nonzero direction. O(3) is intact at T > 0, so the spatial
+   direction is a polar-parametrized UNIT 3-vector — exactly the property the unit-group rewrite
+   Σ U² = 1 needs, now over the spatial components only. The bare-loop denominator then reduces to
+   the TWO-TERM l0² + l1² (divThroughPolyAtoms' case) instead of an angle-product polynomial.
+   Requires the frame to parametrize the spatial part polar-wise (dirs unit-norm), the same
+   assumption the full unit-loop branch makes about all four components. *)
+unitLoopSpatialQ[comps_, magSym_] := Module[{cc = PowerExpand[comps]},
+  FreeQ[cc[[1]], magSym] &&
+  AllTrue[Range[2, 4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&] &&
+  AnyTrue[Range[2, 4], (Coefficient[cc[[#]], magSym] =!= 0)&]];
+
 unitLoopMixedOkQ[frame_, magSym_] :=
   Environment["NT_NO_UNIT_GROUPS"] === $Failed &&
-    (* at least one momentum is a magSym-proportional loop, and NO momentum mixes magSym with
-       other coordinates (a finite-T l0 breaks the split, exactly as it breaks unitLoopOkQ) *)
-    Module[{cc = PowerExpand[Values[frame]]},
-      AnyTrue[cc, AllTrue[Range[4], Function[mu, Simplify[#[[mu]] - Coefficient[#[[mu]], magSym] magSym] === 0]]&] &&
-      AllTrue[cc, Function[comps,
-        AllTrue[Range[4], (Simplify[comps[[#]] - Coefficient[comps[[#]], magSym] magSym] === 0)&] ||
-        FreeQ[comps, magSym]]]];
+    (* at least one momentum is a magSym-proportional loop — either FULLY (all four components,
+       the vacuum case) or SPATIALLY (finite T: an independent temporal l0 rides along) — and NO
+       momentum mixes magSym with other coordinates inside a component *)
+    Module[{cc = PowerExpand[Values[frame]], fullQ},
+      fullQ = Function[comps,
+        AllTrue[Range[4], (Simplify[comps[[#]] - Coefficient[comps[[#]], magSym] magSym] === 0)&]];
+      AnyTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym])&] &&
+      AllTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym] || FreeQ[#, magSym])&]];
 
 unitLoopMixedFrameSpec[frame_, magSym_] := Module[
-    {loopQ, loopKeys, pf, defs, groups = {}, n = 0, nf},
+    {loopQ, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS},
     loopQ[comps_] := Module[{cc = PowerExpand[comps]},
       AllTrue[Range[4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&]];
     loopKeys = Select[Keys[frame], loopQ[frame[#]]&];
-    (* externals: polyFrameSpec's sin/cos/radical minting, verbatim *)
-    {pf, defs} = polyFrameSpec[KeyDrop[frame, loopKeys]];
-    (* loops: comp_μ = magSym · ntU$n, one unit group per loop — unitLoopFrameSpec's treatment *)
+    spatKeys = Select[Keys[frame], (!MemberQ[loopKeys, #] && unitLoopSpatialQ[frame[#], magSym])&];
+    (* externals — AND the spatial loops' temporal components — go through polyFrameSpec's
+       sin/cos/radical minting, verbatim: a spatial loop is handed in as {l0, 0, 0, 0} so its
+       temporal coordinate gets exactly the same treatment an external's would. *)
+    extFrame = Join[
+      KeyDrop[frame, Join[loopKeys, spatKeys]],
+      Association @ Map[# -> {PowerExpand[frame[#]][[1]], 0, 0, 0}&, spatKeys]];
+    {pf, defs} = polyFrameSpec[extFrame];
+    (* full loops: comp_μ = magSym · ntU$n, one unit group per loop — unitLoopFrameSpec's treatment *)
     nf =
       Association @
         Map[
@@ -1628,7 +1648,31 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
                 AppendTo[groups, grp];
                 ncomp]],
           loopKeys];
-    {Join[pf, nf], defs, groups}];
+    (* spatial loops (finite T): temporal component = polyFrameSpec's minted form, spatial
+       components = magSym · ntU$n with the unit group over the SPATIAL directions only
+       (Σ_{i=1..3} U_i² = 1 — O(3) polar parametrization). *)
+    nfS =
+      Association @
+        Map[
+          Function[q,
+            q ->
+              Module[{grp = {}, cc = PowerExpand[frame[q]], ncomp},
+                ncomp =
+                  Join[
+                    {pf[q][[1]]},
+                    Table[
+                      Module[{dir = Coefficient[cc[[mu]], magSym], s},
+                        If[dir === 0,
+                          0,
+                          s = Symbol["ntU$" <> ToString[n++]];
+                          defs[s] = dir;
+                          AppendTo[grp, s];
+                          magSym s]],
+                      {mu, 2, 4}]];
+                AppendTo[groups, grp];
+                ncomp]],
+          spatKeys];
+    {Join[KeyDrop[pf, spatKeys], nf, nfS], defs, groups}];
 
 (* Whether `frame` matches the unit-loop spec's assumption: every momentum is either an external
    depending only on `pSym`, or a loop whose every component is `dir·magSym` (proportional to the

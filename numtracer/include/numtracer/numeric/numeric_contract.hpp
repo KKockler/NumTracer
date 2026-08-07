@@ -197,6 +197,8 @@ namespace numtracer::numeric
       }
     }
     const int f = freeLegs.size();
+    NT_STAT_ADD(nd_calls, 1);
+    NT_STAT_ADD(nd_tokens, chain.size());
     // trace parity is set by the BLOCK-ANTIDIAGONAL factors only (γ^μ kind 0, slash kind 1); γ5 (kind 2)
     // and σ (kind 3) are block-DIAGONAL. An odd antidiagonal count → final product antidiagonal → tr=0.
     std::size_t ng = 0;
@@ -214,7 +216,11 @@ namespace numtracer::numeric
     for (int k = 0; k < f; ++k)
       total *= 4;
     F.v.assign(total, MPolyFactory::zero(nsym));
-    if (ng % 2 == 1) return F; // odd → all zero
+    if (ng % 2 == 1) {
+      NT_STAT_ADD(nd_odd_skip, 1);
+      return F; // odd → all zero
+    }
+    NT_STAT_ADD(nd_assign, total);
 
     // Precompute each factor's Weyl 2×2 blocks (P = upper-right, Q = lower-left) once. The fold carries
     // only these two blocks rather than the full 4×4 (4× fewer MPoly multiplies); see the algorithm note.
@@ -227,6 +233,7 @@ namespace numtracer::numeric
         }
     };
     auto mul2 = [&](const B2 &x, const B2 &y) {
+      NT_STAT_ADD(mul2_calls, 1);
       return B2{x[0] * y[0] + x[1] * y[2], x[0] * y[1] + x[1] * y[3], x[2] * y[0] + x[3] * y[2],
                 x[2] * y[1] + x[3] * y[3]};
     };
@@ -327,18 +334,100 @@ namespace numtracer::numeric
         antidiag = !antidiag;
       }
       // ng (γ-count, γ5 excluded) even → block-diagonal product → trace = tr(m0)+tr(m1).
-      return m0[0] + m0[3] + m1[0] + m1[3];
+      // m0/m1 are dead after this — move so empty summands don't force copies of the survivors.
+      return std::move(m0[0]) + std::move(m0[3]) + std::move(m1[0]) + std::move(m1[3]);
     };
 
-    std::vector<int> legComp(f, 0); // concrete index 0..3 assigned to each free leg
-    for (int flat = 0; flat < total; ++flat) {
-      int r = flat;
-      for (int k = f - 1; k >= 0; --k) {
-        legComp[k] = r % 4;
-        r /= 4;
+    // Escape hatch: NT_DIRAC_FLAT=1 restores the flat per-assignment re-fold below (the pre-DFS
+    // behaviour) for A/B and bisection. Kept while the DFS beds in; the two paths are bit-identical.
+    static const bool flatMode = [] {
+      const char *e = std::getenv("NT_DIRAC_FLAT");
+      return e && e[0] == '1';
+    }();
+    if (flatMode) {
+      std::vector<int> legComp(f, 0); // concrete index 0..3 assigned to each free leg
+      for (int flat = 0; flat < total; ++flat) {
+        int r = flat;
+        for (int k = f - 1; k >= 0; --k) {
+          legComp[k] = r % 4;
+          r /= 4;
+        }
+        F.v[flat] = foldChain(legComp);
       }
-      F.v[flat] = foldChain(legComp);
+      return F;
     }
+    // DFS over the free legs IN CHAIN ORDER, carrying the partial two-block product down the tree:
+    // assignments sharing a free-leg prefix share the identical prefix product, which the flat loop
+    // above recomputes 4^(remaining legs) times. The token→mul2 sequence per leaf is exactly
+    // foldChain's, so every tensor entry is bit-identical — only the redundant recomputation is
+    // gone (mul2 count drops from ~4^f·L toward the 4/3·4^f tree sum). Leaf visit order is
+    // ascending flat index: the first free leg in chain order is the most significant digit,
+    // matching both the flat decode above and the `idx = idx*4 + val` read convention. Live memory
+    // is one (m0,m1) pair per recursion level — chain-depth bounded, no cache, no eviction.
+    auto walk = [&](auto &&self, std::size_t i, int flat, const B2 &m0, const B2 &m1, bool started,
+                    bool antidiag) -> void {
+      if (i == chain.size()) {
+        F.v[static_cast<std::size_t>(flat)] = m0[0] + m0[3] + m1[0] + m1[3];
+        return;
+      }
+      const network::DFac &d = chain[i];
+      if (d.kind == network::DFac::Gamma5) { // block-diagonal: negate one block, parity unchanged
+        if (!started) {
+          self(self, i + 1, flat, id2, neg2(id2), true, false);
+          return;
+        }
+        if (antidiag)
+          self(self, i + 1, flat, neg2(m0), m1, started, antidiag);
+        else
+          self(self, i + 1, flat, m0, neg2(m1), started, antidiag);
+        return;
+      }
+      if (d.kind == network::DFac::Comm) { // block-diagonal diag(Su,Sl); free legs branch 4-way each
+        const bool aFree = !commAslash[i], bFree = !commBslash[i];
+        for (int ma = 0; ma < (aFree ? 4 : 1); ++ma)
+          for (int mb = 0; mb < (bFree ? 4 : 1); ++mb) {
+            const B2 &Pa = aFree ? gP[ma] : cAP[i];
+            const B2 &Qa = aFree ? gQ[ma] : cAQ[i];
+            const B2 &Pb = bFree ? gP[mb] : cBP[i];
+            const B2 &Qb = bFree ? gQ[mb] : cBQ[i];
+            B2 Su, Sl;
+            commBlocks(Pa, Qa, Pb, Qb, Su, Sl);
+            int nf = flat;
+            if (aFree) nf = nf * 4 + ma;
+            if (bFree) nf = nf * 4 + mb;
+            if (!started)
+              self(self, i + 1, nf, Su, Sl, true, false);
+            else if (antidiag)
+              self(self, i + 1, nf, mul2(m0, Sl), mul2(m1, Su), started, antidiag);
+            else
+              self(self, i + 1, nf, mul2(m0, Su), mul2(m1, Sl), started, antidiag);
+          }
+        return;
+      }
+      if (d.kind == network::DFac::Gamma) { // free leg: 4-way branch on the concrete component
+        for (int mu = 0; mu < 4; ++mu) {
+          const int nf = flat * 4 + mu;
+          if (!started)
+            self(self, i + 1, nf, gP[mu], gQ[mu], true, true);
+          else if (antidiag)
+            self(self, i + 1, nf, mul2(m0, gQ[mu]), mul2(m1, gP[mu]), started, !antidiag);
+          else
+            self(self, i + 1, nf, mul2(m0, gP[mu]), mul2(m1, gQ[mu]), started, !antidiag);
+        }
+        return;
+      }
+      // Slash: fixed antidiagonal factor
+      if (!started) {
+        self(self, i + 1, flat, sP[i], sQ[i], true, true);
+        return;
+      }
+      if (antidiag)
+        self(self, i + 1, flat, mul2(m0, sQ[i]), mul2(m1, sP[i]), started, !antidiag);
+      else
+        self(self, i + 1, flat, mul2(m0, sP[i]), mul2(m1, sQ[i]), started, !antidiag);
+    };
+    const B2 seed0{}, seed1{}; // pre-start state: empty blocks, exactly foldChain's uninitialised locals
+    walk(walk, 0, 0, seed0, seed1, false, true);
     return F;
   }
 #endif // NUMTRACER_DEFINE_BODIES
@@ -506,12 +595,15 @@ namespace numtracer::numeric
             }
             prod = prod * e;
           }
-          if (!zero) acc = acc + prod;
+          if (!zero) acc = std::move(acc) + std::move(prod); // rvalue +: first iteration MOVES prod
         }
         // Reduce the intermediate IN PLACE: cancel bare-loop atoms (sin²→1-cos² makes k²=l1² a monomial)
         // and collapse sin² powers, so projector `k⊗k·INV` factors don't bloat the running tensor across
         // a long pure-gauge chain (the ZA4 monster nets) — only cleaning at the end is too late.
-        if (!units.empty()) acc = divThroughMonomialAtoms(reduce_units(acc, units), atomDen);
+        if (!units.empty()) {
+          NT_STAT_TIMER(t_cf_reduce);
+          acc = divThroughMonomialAtoms(reduce_units(acc, units), atomDen);
+        }
         out.v[outFlat] = std::move(acc);
       }
       return out;
@@ -533,47 +625,51 @@ namespace numtracer::numeric
       //      over that id via `eliminate`, push the result back, repeat;
       //   4. once nothing is shared, the leftovers are scalars — multiply their single entries.
       for (;;) {
-        // distinct ids still live, and which factors carry each.
-        std::vector<int> ids;
-        for (const Factor &F : facs)
-          for (int id : F.ids) {
-            bool seen = false;
-            for (int u : ids)
-              if (u == id) {
-                seen = true;
-                break;
-              }
-            if (!seen) ids.push_back(id);
-          }
-        if (ids.empty()) break;
-        // choose the id with the smallest incident-factor union (min fill-in).
         int bestId = -1;
-        std::size_t bestUnionSize = SIZE_MAX;
-        for (int cand : ids) {
-          std::vector<int> unionIds;
-          for (const Factor &F : facs) {
-            bool incident = false;
-            for (int id : F.ids)
-              if (id == cand) {
-                incident = true;
-                break;
-              }
-            if (!incident) continue;
+        {
+          NT_STAT_TIMER(t_cf_score);
+          // distinct ids still live, and which factors carry each.
+          std::vector<int> ids;
+          for (const Factor &F : facs)
             for (int id : F.ids) {
               bool seen = false;
-              for (int u : unionIds)
+              for (int u : ids)
                 if (u == id) {
                   seen = true;
                   break;
                 }
-              if (!seen) unionIds.push_back(id);
+              if (!seen) ids.push_back(id);
+            }
+          if (ids.empty()) break;
+          // choose the id with the smallest incident-factor union (min fill-in).
+          std::size_t bestUnionSize = SIZE_MAX;
+          for (int cand : ids) {
+            std::vector<int> unionIds;
+            for (const Factor &F : facs) {
+              bool incident = false;
+              for (int id : F.ids)
+                if (id == cand) {
+                  incident = true;
+                  break;
+                }
+              if (!incident) continue;
+              for (int id : F.ids) {
+                bool seen = false;
+                for (int u : unionIds)
+                  if (u == id) {
+                    seen = true;
+                    break;
+                  }
+                if (!seen) unionIds.push_back(id);
+              }
+            }
+            if (unionIds.size() < bestUnionSize) {
+              bestUnionSize = unionIds.size();
+              bestId = cand;
             }
           }
-          if (unionIds.size() < bestUnionSize) {
-            bestUnionSize = unionIds.size();
-            bestId = cand;
-          }
         }
+        NT_STAT_ADD(cf_steps, 1);
         // partition: factors incident to bestId vs the rest.
         std::vector<Factor> group, rest;
         for (Factor &F : facs) {
@@ -838,7 +934,7 @@ namespace numtracer::numeric
       // factor list is built once, not copied again into the call.
       MPoly term = ndetail::contract_factors(nsym, std::move(facs));
       term = term * MPolyFactory::constant(nsym, co);
-      result = result + term;
+      result = std::move(result) + std::move(term);
     }
     if (lorentz.empty())
       result = ndetail::close_loops(nsym, loops, atomDen);
@@ -914,9 +1010,14 @@ namespace numtracer::numeric
                                             const std::vector<MPoly> &atomDen,
                                             const std::vector<std::vector<int>> &units)
   {
+    NT_STAT_ADD(traces, 1);
     // trace each independent spinor loop of the component (see numeric_value); the shared gluon legs
     // contract via the Lorentz net below.
-    std::vector<ndetail::Factor> loops = ndetail::dirac_loop_factors(nsym, dirac, comp);
+    std::vector<ndetail::Factor> loops;
+    {
+      NT_STAT_TIMER(t_dirac);
+      loops = ndetail::dirac_loop_factors(nsym, dirac, comp);
+    }
     // pre-reduce the atom denominators (idempotent if the caller already did) so monomial-cancellation
     // detection works during the per-step intermediate reduction inside contract_factors.
     std::vector<MPoly> aden = atomDen;
@@ -925,34 +1026,50 @@ namespace numtracer::numeric
     MPoly result = MPolyFactory::zero(nsym);
     for (const network::PTerm &pt : lor) {
       // build the numeric element list, then fold same-momentum projector chains before expansion.
-      std::vector<NElem> elems;
-      elems.reserve(pt.e.size());
-      for (const network::Elem &el : pt.e)
-        elems.push_back(elem_to_nelem(el));
       Cx co = pt.coeff;
-      ndetail::fuse_projectors(elems, co);
-      if (co.re == 0 && co.im == 0) continue;
-      std::vector<ndetail::Factor> facs = loops;
-      facs.reserve(loops.size() + elems.size());
-      for (const NElem &el : elems)
-        facs.push_back(ndetail::elem_factor(nsym, el, comp));
+      std::vector<ndetail::Factor> facs;
+      {
+        NT_STAT_TIMER(t_elem);
+        std::vector<NElem> elems;
+        elems.reserve(pt.e.size());
+        for (const network::Elem &el : pt.e)
+          elems.push_back(elem_to_nelem(el));
+        ndetail::fuse_projectors(elems, co);
+        if (co.re == 0 && co.im == 0) continue;
+        facs = loops;
+        facs.reserve(loops.size() + elems.size());
+        for (const NElem &el : elems)
+          facs.push_back(ndetail::elem_factor(nsym, el, comp));
+      }
       // move the per-term factor list into contract_factors (consumed by value) — avoids
       // a redundant deep copy of every Factor's MPoly entries.
-      MPoly term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
+      MPoly term;
+      {
+        NT_STAT_TIMER(t_contract);
+        term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
+      }
       term = term * MPolyFactory::constant(nsym, co);
-      result = result + term;
+      result = std::move(result) + std::move(term);
     }
     if (lor.empty())
       result = ndetail::close_loops(nsym, loops, aden, units);
     // sin^2 -> 1 - cos^2 BEFORE cancellation: collapses bare-loop k²=l1²(cos²+sin²) to the monomial l1²
     // (so its atom cancels) and shrinks the polynomial to the FORM angular basis.
-    result = reduce_units(result, units);
-    result = divThroughMonomialAtoms(result, aden);
+    {
+      NT_STAT_TIMER(t_reduce);
+      result = reduce_units(result, units);
+    }
+    {
+      NT_STAT_TIMER(t_divmono);
+      result = divThroughMonomialAtoms(result, aden);
+    }
     // Then cancel the MULTI-TERM (shifted-line) denominators by exact polynomial division — the case
     // divThroughMonomialAtoms structurally cannot reach. Off via NT_GEN_NO_POLYDIV=1 for A/B.
     // NOTE `aden`, not `atomDen`: the trial division must see the SAME unit-reduced denominators the
     // intermediate reductions used, or a numerator reduced mod ΣU²=1 will not divide by an unreduced D.
-    return polydiv_enabled() ? divThroughPolyAtoms(result, aden) : result;
+    if (!polydiv_enabled()) return result;
+    NT_STAT_TIMER(t_divpoly);
+    return divThroughPolyAtoms(result, aden);
   }
 #endif // NUMTRACER_DEFINE_BODIES
 
@@ -1140,7 +1257,7 @@ namespace numtracer::numeric
 #endif
       MPoly out = MPolyFactory::zero(nsym);
       dress_enumerate(nsym, chain, slots, std::forward<ContractFn>(contract),
-                      [&](const DMono &, MPoly &&mp) { out = out + mp; });
+                      [&](const DMono &, MPoly &&mp) { out = std::move(out) + std::move(mp); });
       return out;
     }
   } // namespace ndetail
