@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -396,6 +397,16 @@ namespace numtracer::numeric
       const char *e = std::getenv("NT_GEN_PROFILE");
       return e && e[0] == '2';
     }();
+    // Any-level profile: the phase-B wall is really three unlike costs — the parallel per-net fold,
+    // the serial group-sum drain, and the serial lowering hiding inside `sink`. One fused number
+    // cannot say which of them a slow flow is paying, so split them here.
+    const bool pprof = [] {
+      const char *e = std::getenv("NT_GEN_PROFILE");
+      return e && e[0] != '\0' && e[0] != '0';
+    }();
+    double foldSec = 0.0, drainSec = 0.0, sinkSec = 0.0;
+    using pclock = std::chrono::steady_clock;
+    auto secsSince = [](pclock::time_point t0) { return std::chrono::duration<double>(pclock::now() - t0).count(); };
     auto rssMB = [] {
       long tot = 0, res = 0;
       if (FILE *f = std::fopen("/proc/self/statm", "r")) {
@@ -440,22 +451,28 @@ namespace numtracer::numeric
       for (std::size_t i = 0; i < flat.size(); ++i)
         part.push_back(zero_like<P>(nsym));
       const double rssPre = wprof ? rssMB() : 0.0;
+      const auto tFold = pclock::now();
       parallel_flat(static_cast<long>(flat.size()), W, [&](long i) {
         const auto j = static_cast<std::size_t>(i);
         part[j] = foldScaledNet(flat[j]);
       });
+      foldSec += secsSince(tFold);
       const double rssFold = wprof ? rssMB() : 0.0;
 
       // Drain the wave in ascending group order, on THIS thread.
       for (long gi = g0; gi < g1; ++gi) {
         const long k = gi - g0;
+        const auto tDrain = pclock::now();
         P acc = zero_like<P>(nsym);
         for (long i = off[static_cast<std::size_t>(k)]; i < off[static_cast<std::size_t>(k + 1)]; ++i) {
           const auto j = static_cast<std::size_t>(i);
           acc = acc + part[j];
           part[j] = zero_like<P>(nsym); // release as absorbed
         }
+        drainSec += secsSince(tDrain);
+        const auto tSink = pclock::now();
         sink(static_cast<std::size_t>(gi), std::move(acc));
+        sinkSec += secsSince(tSink);
       }
 
       if (wprof) {
@@ -469,6 +486,13 @@ namespace numtracer::numeric
       ++waveNo;
 
       g0 = g1;
+    }
+
+    if (pprof) {
+      std::fprintf(stderr,
+                   "[num]   phase B split: net-fold %.1f s (W=%u), group-sum %.1f s (serial), lower %.1f s (serial)\n",
+                   foldSec, W, drainSec, sinkSec);
+      std::fflush(stderr);
     }
   }
 

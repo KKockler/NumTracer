@@ -1566,6 +1566,70 @@ polyFrameSpec[frame_] := Module[{defs = <||>, vals, rules = {}, polyFrame},
     polyFrame = Association @ Thread[Keys[frame] -> polyFrame];
     {polyFrame, defs}];
 
+(* MIXED unit-loop spec: loop momenta as magnitude × unit-direction, externals through the general
+   polynomialiser. The unit-loop fast path (unitLoopFrameSpec) requires every external to depend
+   only on `pSym`, so a frame whose externals carry shape coordinates — the (S0,S1,SPhi) two-
+   momentum frames of the with_mesons lambda1L3D class — used to fall ALL the way to polyFrameSpec:
+   the loop was expanded into cos1/sin1·cos2/… component products, every trace polynomial carried
+   those products at high degree, the bare-loop denominator Σ(l1·Uμ)² never collapsed to the
+   monomial l1² (so divThroughMonomialAtoms could not cancel the 1/l² atoms), and the emitted
+   traces blew up ~70x against the same derivative at fast-path kinematics.
+
+   But the LOOP is frame-independent — its components are ∝ l1 in every vacuum frame — so it can
+   keep the exact unit-direction treatment (opaque degree-1 ntU$ symbols + the ΣUμ²=1 group)
+   regardless of what the externals look like; only the externals need polyFrameSpec's
+   radical-minting. That is what this spec does, per momentum.
+
+   Measured warning (lambda3d_small fixture, 2026-08-07): the OTHER seemingly-obvious repair —
+   keeping the polyFrame cos/sin symbols and handing reduce_units the `{cos, ntSin$cos}` pair
+   groups — makes emitted traces 7.3x BIGGER, not smaller: sin²→1−cos² substitution expands
+   monomials binomially at high even powers, and the l1² collapse it buys back is worth far less.
+   The unit-direction form wins because the loop enters traces at degree 1 per component, not
+   because of the trig identity. Do not resurrect the pair-group variant.
+
+   NT_NO_UNIT_GROUPS: escape hatch back to the pre-2026-08-07 behaviour (whole frame through
+   polyFrameSpec). Exists for grading — the lambda3d_small control kernel is generated under it,
+   so the lever is validated numerically against the pristine path — and as the rollback. *)
+
+unitLoopMixedOkQ[frame_, magSym_] :=
+  Environment["NT_NO_UNIT_GROUPS"] === $Failed &&
+    (* at least one momentum is a magSym-proportional loop, and NO momentum mixes magSym with
+       other coordinates (a finite-T l0 breaks the split, exactly as it breaks unitLoopOkQ) *)
+    Module[{cc = PowerExpand[Values[frame]]},
+      AnyTrue[cc, AllTrue[Range[4], Function[mu, Simplify[#[[mu]] - Coefficient[#[[mu]], magSym] magSym] === 0]]&] &&
+      AllTrue[cc, Function[comps,
+        AllTrue[Range[4], (Simplify[comps[[#]] - Coefficient[comps[[#]], magSym] magSym] === 0)&] ||
+        FreeQ[comps, magSym]]]];
+
+unitLoopMixedFrameSpec[frame_, magSym_] := Module[
+    {loopQ, loopKeys, pf, defs, groups = {}, n = 0, nf},
+    loopQ[comps_] := Module[{cc = PowerExpand[comps]},
+      AllTrue[Range[4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&]];
+    loopKeys = Select[Keys[frame], loopQ[frame[#]]&];
+    (* externals: polyFrameSpec's sin/cos/radical minting, verbatim *)
+    {pf, defs} = polyFrameSpec[KeyDrop[frame, loopKeys]];
+    (* loops: comp_μ = magSym · ntU$n, one unit group per loop — unitLoopFrameSpec's treatment *)
+    nf =
+      Association @
+        Map[
+          Function[q,
+            q ->
+              Module[{grp = {}, cc = PowerExpand[frame[q]], ncomp},
+                ncomp =
+                  Table[
+                    Module[{dir = Coefficient[cc[[mu]], magSym], s},
+                      If[dir === 0,
+                        0,
+                        s = Symbol["ntU$" <> ToString[n++]];
+                        defs[s] = dir;
+                        AppendTo[grp, s];
+                        magSym s]],
+                    {mu, 1, 4}];
+                AppendTo[groups, grp];
+                ncomp]],
+          loopKeys];
+    {Join[pf, nf], defs, groups}];
+
 (* Whether `frame` matches the unit-loop spec's assumption: every momentum is either an external
    depending only on `pSym`, or a loop whose every component is `dir·magSym` (proportional to the
    single magnitude). A finite-T frame breaks this — the external carries an independent temporal
@@ -1634,7 +1698,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
 
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False] :=
   Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
-    chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds},
+    chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
     str[x_] := ToString[x];
 (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
    (a numerator structure-sum kept eager). LEVER (b): the trace table is PLAIN MPoly for both paths — a
@@ -1690,6 +1754,27 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                             {{"DiracNet{}", nv, scal, "std::vector<DChainTok>{}", {}, {}}}]]],
                     {cores, rss[[All, 1]], rss[[All, 2]]}]]]],
           {invNets, invRest}];
+(* ---- colour-net table: chunk DEFINITIONS on the parallel -O0 units, assembler in the main TU ----
+   The distinct colour nets are one `SUNNet{sun3.T(..), ..}` constructor-call literal each, and on a
+   flow with a large colour graph the table dwarfs everything else in the main TU (measured: 6.28 MB
+   of a 9.94 MB TU, 15226 distinct nets) — and the main TU is the ONE -O1 compile that cannot be
+   parallelised, so the table sat squarely on the compile critical path. The chunk functions have
+   exactly the net-builder shape, so they now ride the same LPT-packed -O0 units as every other
+   builder (colChunkDefs -> allDefs below); only forward decls + the tiny assembler stay in the main
+   TU. External (non-static) linkage is what makes the cross-TU split work. Chunking rationale and
+   history (clang -O1 >1h / -O0 stack overflow on the braced-init inside main) in git. Element order
+   is preserved, so the assembled vector is element-for-element what the braced-init produced. *)
+    {colMainDecls, colChunkDefs} =
+      With[{uCol = DeleteDuplicates[colourNets]},
+        If[uCol === {},
+          {"static std::vector<SUNNet> ntColNets(){ return {}; }\n", {}},
+          Module[{envDecl, chunks},
+            envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
+            chunks = SplitBy[Transpose[{uCol, Ceiling[Accumulate[(StringLength /@ uCol) + 2] / $ntDefChunk]}], Last][[All, All, 1]];
+            {StringJoin[
+               MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o);\n"&, chunks],
+               "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"],
+             MapIndexed["void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o){ " <> envDecl <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}\n"&, chunks]}]]];
     pre =
       StringJoin[
         "// GENERATED by MakeNTKernel — do not edit. Numeric matrix-product tensor traces.\n",
@@ -1714,27 +1799,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         tmpl,
         "}\n",
         "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n",
-(* ---- colour-net table, as TOP-LEVEL chunk functions rather than a braced-init inside main() ----
-   The distinct colour nets are one `SUNNet{sun3.T(..), ..}` constructor-call literal each, and on a
-   flow with a large colour graph the table dwarfs everything else in the main TU (measured: 6.28 MB
-   of a 9.94 MB TU, 15226 distinct nets). Left inside main() that made the ONE optimised TU
-   pathological — clang++ -O1 did not finish in an hour, and the -O0 fallback then overflowed the
-   8 MB stack on the same oversized frame, so the generator could be neither compiled nor run.
-   The optimiser's blowup is per-FUNCTION, so chunking the table into ordinary top-level functions
-   (the same shape ntChunkDef already uses for the net builders) keeps main() small and each chunk
-   well inside what -O1 handles. The SUNEnvs are function-local: they exist only to build these
-   literals, and per-chunk locals keep the units free of global constructors.
-   Element order is preserved, so the assembled vector is element-for-element what the braced-init
-   produced — and push_back moves each temporary instead of copying it. *)
-        With[{uCol = DeleteDuplicates[colourNets]},
-          If[uCol === {},
-            "static std::vector<SUNNet> ntColNets(){ return {}; }\n",
-            Module[{envDecl, chunks},
-              envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
-              chunks = SplitBy[Transpose[{uCol, Ceiling[Accumulate[(StringLength /@ uCol) + 2] / $ntDefChunk]}], Last][[All, All, 1]];
-              StringJoin[
-                MapIndexed["static void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o){ " <> envDecl <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}\n"&, chunks],
-                "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"]]]]];
+(* colour-net table: forward decls + assembler only — the chunk DEFINITIONS ride the -O0 units
+   (colChunkDefs, hoisted above), keeping the 6+ MB table off the serial -O1 main-TU compile. *)
+        colMainDecls];
     unitPre =
       "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <> "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
 (* dressed nets emit dch<i>()/dsl<i>() builders here (the big DChainTok/DSlot literals — moved OFF
@@ -1743,6 +1810,13 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    include it (stay byte-identical + fast). *)
         If[hasDressed,
           "#include \"numtracer/numeric/numeric_contract.hpp\"\n",
+          ""
+        ] <>
+(* colour-net chunk defs ride the units now (see colChunkDefs above); they build SUNNet literals
+   through function-local SUNEnvs, so those units need the SU(N) engine header the net builders
+   otherwise don't touch. Gated: colour-free flows keep their units byte-identical. *)
+        If[colChunkDefs =!= {},
+          "#include \"numtracer/network/sun_net.hpp\"\n",
           ""
         ] <> "using numtracer::Cx;\nnamespace numtracer::network {\n" <> tmpl <> "}\nusing namespace numtracer::network;\n" <>
         If[hasDressed,
@@ -1986,7 +2060,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
           {chainDefs, chainDecl, chainRefDefs, chainRefDecl, optDefs, optDecl, slotRefDefs, slotRefDecl}],
         {{}, "", {}, "", {}, "", {}, ""}];
     chunkDecls = sdnCDecl <> slnCDecl <> chpCDecl <> sdchrCDecl <> optpCDecl <> sdslrCDecl;
-    allDefs = Join[cseDefs, sdnDefs, slnDefs, chpDefs, sdchrDefs, optpDefs, sdslrDefs];
+    allDefs = Join[cseDefs, sdnDefs, slnDefs, chpDefs, sdchrDefs, optpDefs, sdslrDefs, colChunkDefs];
 (* Size-aware unit count (~$ntUnitChars per unit, 8..$ntUnitCap): the CSE accessors are many but
    small, so the old 12-defs/unit rule would emit hundreds of tiny TUs each re-parsing the shared
    decl header. Defs are packed into the units by GREEDY BIN-PACKING (largest def first, into the
@@ -2294,6 +2368,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    instruction streams, which are orders of magnitude smaller. *)
             (* LEVER (b): the trace table T is plain MPoly for BOTH paths now. *)
             "  { std::vector<MPoly> dead; T.swap(dead); }\n",
+(* Emission was the one untimed stage of the run: it renders, dedups and writes every trace body
+   serially, which on a multi-MB header is minutes, not noise. Time it so the [num] trail covers
+   the whole run. *)
+            "  const auto tEmit = std::chrono::steady_clock::now();\n",
             "  FillFormulas fm;\n",
             "  fm.var = [](int id)->std::string{\n",
             Table["    if(id==" <> str[i - 1] <> ") return \"" <> varFill[[i]] <> "\";\n", {i, 1, Length[varFill]}],
@@ -2330,7 +2408,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
               "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
               "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], \"tr\"+std::to_string(i), decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), \"tr\"+std::to_string(i)); std::cout << s; }\n" <> "      else { const char* rt = (s.find(\"std::complex<double> tr\")!=std::string::npos) ? \" std::complex<double> \" : \" double \";\n" <> "        std::cout << decor << rt << \"tr\" << i << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
             ],
-            "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n  return 0;\n}\n"}]];
+            "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n",
+            "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
+            "  return 0;\n}\n"}]];
 (* The table builders are collected DURING the StringJoin above (each With writes into tableDefs as
    its argument is evaluated), so they can only be prepended here — putting `tableDefs` inside that
    StringJoin would splice in an empty string, since Mathematica evaluates the arguments in order. *)
@@ -2597,7 +2677,10 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
     (* "Offline" -> True: emit the generator + probe sources and a per-flow numtrace.json switch set to
        0, but do NOT compile or run anything — the `numtrace` CMake target does that as a build step,
        with make's parallelism across all flows. NT_OFFLINE in the environment overrides. *)
-    "Offline" -> False};
+    "Offline" -> False,
+    (* coordinate argument NAMES of this flow's grid; see constArgQ *)
+    "CoordinateArgs" -> Automatic
+  };
 
 (* The dressing-collection path is driven by the `ntDressedNum` tokens NumTrace emits under
    "DressingCollection" -> True (no MakeNTKernel option needed): mkGenerateKernel auto-detects them and
@@ -2997,7 +3080,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
     Needs["FunKit`"];
 (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
    steps (the integrand Sum, COEN's expression lowering) recurse ~linearly in that count, so the
@@ -3051,6 +3134,14 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
     regAlias = TrueQ[OptionValue["RegulatorAlias"]];
     regTemplate = TrueQ[OptionValue["RegulatorTemplate"]] || regAlias;
     interpTy = ntDressType[OptionValue["DressingType"]];
+(* Which of `args` the loop-independent constant() receives. Automatic keeps the historical
+   p-and-k guess, correct for a 1-D grid; a caller that knows its grid passes the real coordinate
+   names via "CoordinateArgs". k is always included. *)
+    constArgQ =
+      With[{ca = OptionValue["CoordinateArgs"]},
+        If[ca === Automatic,
+          Function[a, a === Global`p || a === Global`k],
+          Function[a, a === Global`k || MemberQ[ca, If[StringQ[a], a, ToString[a]]]]]];
     ns = OptionValue["Namespace"] /. Automatic -> ToLowerCase[name];
     nsHome = kns <> "::" <> ns;(* where the generated trace fns / nenv / fill live *)
     verdictMacro = ntVerdictMacro[ns];(* the #if macro selecting one of the 3 complex-kernel bodies *)
@@ -3074,7 +3165,9 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
               Append[polyFrameSpec[uc], {}],
             (* explicit user Components *)unitLoopOkQ[frame, Global`p, Global`l1],
               unitLoopFrameSpec[frame, Global`p, Global`l1],
-            (* compact vacuum SP frame *)True,
+            (* compact vacuum SP frame *)unitLoopMixedOkQ[frame, Global`l1],
+              unitLoopMixedFrameSpec[frame, Global`l1],
+            (* general externals, l1-loop *)True,
               Append[polyFrameSpec[frame], {}]
           ];(* finite-T / general frame *)
         symDefs = Join[ad, ud];
@@ -3480,7 +3573,14 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
             Lookup[interpTy, If[StringQ[nm], nm, ToString[nm]], First[Values[interpTy]]],
             interpTy]]},
       kernelParams = Join[mkParam[#, "double"]& /@ args, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
-      constParams = Join[mkParam[#, "double"]& /@ Select[args, # === Global`p || # === Global`k&], mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
+(* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
+   where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds
+   full_args = tuple_cat(coordinates.forward(idx), m_args)). Matching only `p` and `k` by name works
+   for a 1-D grid whose coordinate happens to be called p; on a 3-D (S0,S1,SPhi) grid it silently
+   DROPS all three coordinates, and a constant body referring to them then fails to compile with
+   "identifier S0 is undefined". "CoordinateArgs" carries the real coordinate names; `args` already
+   lists coordinates before k, so filtering preserves the order DiFfRG passes them in. *)
+      constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
 (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes
    the atom's value (regulators / interpolators in scope there) and passes it. Matches fm.dress. *)
       If[!FreeQ[invNets, _ntDressedCore],
@@ -3741,7 +3841,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic};
 
 MakeNTKernel::disconnectmix = "Diagram `1` disconnects into >= 2 Dirac/colour trace components (a product of independent Dirac traces, a genuine >=2-loop structure). The numeric backend handles a single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored), but does not yet multiply two or more independent Dirac traces.";
 

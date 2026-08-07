@@ -1,0 +1,28 @@
+{
+	"name":"lambda3d_ref",
+	"class":"Lambda3DSmallRef_num_kernel",
+	"namespace":"lambda3d_small_ref",
+	"gen_dir":".",
+	"generator":"gen_lambda3d_small_ref.cpp",
+	"units":[
+		"gen_lambda3d_small_ref_u0.cpp",
+		"gen_lambda3d_small_ref_u1.cpp",
+		"gen_lambda3d_small_ref_u2.cpp",
+		"gen_lambda3d_small_ref_u3.cpp",
+		"gen_lambda3d_small_ref_u4.cpp",
+		"gen_lambda3d_small_ref_u5.cpp",
+		"gen_lambda3d_small_ref_u6.cpp",
+		"gen_lambda3d_small_ref_u7.cpp"
+	],
+	"decorator":"static inline",
+	"main_opt":"-O1",
+	"full_parallel":false,
+	"maxw":8,
+	"maxw_b":4,
+	"complex":true,
+	"kernels":"Lambda3DSmallRef_num_kernels.hh",
+	"probe":"probe_lambda3d_small_ref.cpp",
+	"verdict_macro":"NT_LAMBDA3D_SMALL_REF_VERDICT",
+	"verdict":"numtrace_verdict.hh",
+	"generated":1
+}

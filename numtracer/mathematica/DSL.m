@@ -666,6 +666,44 @@ expandFundEpsRec[e_Times] := Module[{fs, eps, rest, cand, pair, uu, vv, plusEps,
   Times @@ Join[rest, eps]];   (* a leftover odd epsilon rides along to the epsodd guard *)
 expandFundEpsRec[e_] := e;
 
+(* ---- momentum sign canonicalisation ----------------------------------------- *)
+
+(* buildEnv keys momentum Bases on the momentum EXPRESSION, so `q` and `-q` used to get separate
+   Bases and separate Inv slots — measured on with_mesons' lambda1L3D: 6 exact ± pairs among 16
+   bases, and 14 inv slots holding only 7 distinct values. Worse than the wasted slots, the sign
+   twins block the global sub-term dedup and the emitted-body dedup (both key on the emitted net
+   source, which names the base): the two-momentum flow deduped only 7% of its trace bodies vs 30%
+   for its fast-path sibling. Every momentum-carrying head is either LINEAR in its momentum (a
+   vector/slash leg: vec(-q) = -vec(q), the -1 surfacing as an ordinary scalar factor in the
+   diagram's Times/Plus tree) or EVEN (the projectors and their 1/q² inv atoms), so a canonical
+   sign representative is exact. The convention: flip iff the coefficient of the FIRST variable
+   (canonical Sort order) is numerically negative — deterministic, and maps each ± pair to one rep.
+
+   NT_NO_SIGN_CANON: escape hatch back to expression-keyed bases; exists for grading (the
+   lambda3d_small control kernel) and as the rollback. *)
+
+negMomQ[q_] := Module[{vars = Sort[Variables[q]], c},
+  vars =!= {} && (c = Coefficient[q, First[vars]]; NumericQ[c] && c < 0)];
+
+canonSlashPairs[vlc_List] :=
+  Replace[vlc, {c_, q_} /; negMomQ[q] :> {-c, Expand[-q]}, {1}];
+
+canonicalizeMomentumSigns[net_] :=
+  If[Environment["NT_NO_SIGN_CANON"] =!= $Failed,
+    net,
+    net /. {
+      ntVec[q_, l_] /; negMomQ[q] :> -ntVec[Expand[-q], l],
+      ntTransProj[q_, a_, b_] /; negMomQ[q] :> ntTransProj[Expand[-q], a, b],
+      ntLongProj[q_, a_, b_] /; negMomQ[q] :> ntLongProj[Expand[-q], a, b],
+      ntElectricProj[q_, a_, b_] /; negMomQ[q] :> ntElectricProj[Expand[-q], a, b],
+      ntMagneticProj[q_, a_, b_] /; negMomQ[q] :> ntMagneticProj[Expand[-q], a, b],
+      (* sigma slash legs carry {coeff, q} pairs directly (not ntVec factors) — linear likewise *)
+      ntSigma[{"slash", vlcA_List}, legB_, d1_, d2_] /; AnyTrue[vlcA, negMomQ[Last[#]]&] :>
+        ntSigma[{"slash", canonSlashPairs[vlcA]}, legB, d1, d2],
+      ntSigma[legA_, {"slash", vlcB_List}, d1_, d2_] /; AnyTrue[vlcB, negMomQ[Last[#]]&] :>
+        ntSigma[legA, {"slash", canonSlashPairs[vlcB]}, d1, d2]
+    }];
+
 (* ---- env-id layout ---------------------------------------------------------- *)
 
 (* Assign each distinct momentum a Base (4 consecutive Var ids) and, where a
@@ -733,7 +771,7 @@ NumTrace[net_, OptionsPattern[]] := Module[
      are rewritten into contractions with constant unit basis vectors FIRST, so that no integer
      Lorentz slot ever reaches the label machinery below. See expandFixedComponents. The unit
      vectors join the frame as ordinary momenta, so every existing frame builder stays untouched. *)
-  net2 = expandFundEps @ expandFixedComponents[net];
+  net2 = canonicalizeMomentumSigns @ expandFundEps @ expandFixedComponents[net];
   With[{bad = DeleteDuplicates @ Cases[net2, ntUnitVec[i_] :> i, {0, Infinity}]},
     If[! AllTrue[bad, IntegerQ[#] && 0 <= # <= 3 &],
       Message[NumTrace::fixcomp, Select[bad, ! (IntegerQ[#] && 0 <= # <= 3) &]]; Abort[]]];

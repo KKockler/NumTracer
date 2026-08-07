@@ -233,6 +233,17 @@ if(NUMTRACER_BUILD_TESTS)
   target_include_directories(compare_zaaqbq1_small PRIVATE tests/gen tests/refshim)
   target_link_libraries(compare_zaaqbq1_small PRIVATE NumTracer::NumTracer)
 
+  # THE GENERAL-FRAME (polyFrameSpec) GATE — the only flow off the unit-loop fast path: externals
+  # parametrised by (S0,S1,SPhi) shape coordinates (the with_mesons lambda1L3D class). Minted radical
+  # symbols, nsym 12, +/- duplicated momentum bases, dressed+complex traces — the mechanisms the
+  # frame/sign levers touch, covered nowhere else. The two kernels live in per-flow SUBDIRECTORIES of
+  # tests/gen because the imaginary-part probe writes one numtrace_verdict.hh per directory (fopen
+  # "w") and tests/gen's own verdict file belongs to zaqbq7_147.
+  add_executable(compare_lambda3d_small tests/refshim/compare_lambda3d_small.cpp)
+  target_include_directories(compare_lambda3d_small PRIVATE
+    tests/gen/lambda3d tests/gen/lambda3d_ref tests/refshim)
+  target_link_libraries(compare_lambda3d_small PRIVATE NumTracer::NumTracer)
+
   # Silent-corruption guards on paths no committed flow exercises: network::add refusing a complex
   # vector-sum coefficient (real-only Elem::vlc), and the empty colour net folding to the identity.
   add_executable(test_guards tests/test_guards.cpp)
@@ -463,6 +474,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME guards COMMAND test_guards)
   add_test(NAME trace_fold COMMAND test_trace_fold)
   add_test(NAME flow_zaaqbq1_small COMMAND compare_zaaqbq1_small)
+  add_test(NAME flow_lambda3d_small COMMAND compare_lambda3d_small)
   add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)
   add_test(NAME flow_aqbq147_int COMMAND compare_aqbq147_int)
   add_test(NAME flow_pion_quark COMMAND compare_pion_quark)

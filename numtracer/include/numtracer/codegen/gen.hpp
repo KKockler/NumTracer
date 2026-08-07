@@ -143,8 +143,12 @@ namespace numtracer::network
   {
     /// The deterministic monomial orderings the greedy (order-sensitive) Horner is tried on; the caller
     /// keeps the factorization with the fewest emitted ops — reproducible and never worse than any single
-    /// order.
-    inline std::vector<std::vector<LMono>> make_orderings(const std::vector<LMono> &monos)
+    /// order. Only the first @p maxOrders variants are BUILT (each is a full deep copy of the monomial
+    /// set, and best_into sweeps 3 or 1 for mid/large polynomials — building all 8 regardless was pure
+    /// waste). The variant SEQUENCE is frozen: reordering it would change which ordering wins a tie on
+    /// op count, and with it the emitted kernel bytes.
+    inline std::vector<std::vector<LMono>> make_orderings(const std::vector<LMono> &monos,
+                                                          std::size_t maxOrders = 8)
     {
       auto compareAscending = [](const LMono &x, const LMono &y) { return x.vp < y.vp; };
       auto degree = [](const LMono &m) {
@@ -154,19 +158,20 @@ namespace numtracer::network
         return d;
       };
       std::vector<std::vector<LMono>> orders;
-      orders.push_back(monos); // as-built (canonical)
-      {
+      auto want = [&] { return orders.size() < maxOrders; };
+      if (want()) orders.push_back(monos); // as-built (canonical)
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), compareAscending);
         orders.push_back(std::move(v));
       }
-      {
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), compareAscending);
         std::reverse(v.begin(), v.end());
         orders.push_back(std::move(v));
       }
-      {
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), [](const LMono &x, const LMono &y) {
           if (x.vp.size() != y.vp.size()) return x.vp.size() > y.vp.size(); // most-factors first
@@ -174,7 +179,7 @@ namespace numtracer::network
         });
         orders.push_back(std::move(v));
       }
-      {
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), [](const LMono &x, const LMono &y) {
           if (x.vp.size() != y.vp.size()) return x.vp.size() < y.vp.size(); // fewest-factors first
@@ -182,7 +187,7 @@ namespace numtracer::network
         });
         orders.push_back(std::move(v));
       }
-      {
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), [&](const LMono &x, const LMono &y) {
           const int dx = degree(x), dy = degree(y);
@@ -191,7 +196,7 @@ namespace numtracer::network
         });
         orders.push_back(std::move(v));
       }
-      {
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), [&](const LMono &x, const LMono &y) {
           const int dx = degree(x), dy = degree(y);
@@ -200,7 +205,7 @@ namespace numtracer::network
         });
         orders.push_back(std::move(v));
       }
-      {
+      if (want()) {
         auto v = monos;
         std::sort(v.begin(), v.end(), [](const LMono &x, const LMono &y) { return x.vp > y.vp; });
         orders.push_back(std::move(v));
@@ -213,8 +218,9 @@ namespace numtracer::network
   {
     /// Pick the cheapest Horner ordering of @p monos (costed on scratch builders), then replay it into
     /// @p w (so several parts — e.g. a trace's real and imaginary halves — share one CSE stream). Returns
-    /// the result slot in @p w.
-    inline int best_into(const std::vector<LMono> &monos, rdetail::RBuilder &w)
+    /// the result slot in @p w. Takes the monomials by value so the no-sweep path (numOrderings <= 1,
+    /// i.e. every >2000-monomial trace) hands them straight to horner without a deep copy.
+    inline int best_into(std::vector<LMono> monos, rdetail::RBuilder &w)
     {
       // The greedy Horner is order-sensitive, so we cost several deterministic orderings and keep the
       // cheapest. But each trial is a FULL horner pass: for the dense 1/4/7 traces (tens of thousands of
@@ -229,8 +235,8 @@ namespace numtracer::network
         numOrderings = 1;
       else if (monos.size() > 500)
         numOrderings = 3;
-      if (numOrderings <= 1) return horner(w, monos); // canonical (as-built) order only — no sweep
-      auto orders = make_orderings(monos);
+      if (numOrderings <= 1) return horner(w, std::move(monos)); // canonical (as-built) order only — no sweep
+      auto orders = make_orderings(monos, numOrderings);
       if (numOrderings > orders.size()) numOrderings = orders.size();
       std::size_t bestIdx = 0, bestOps = 0;
       bool have = false;

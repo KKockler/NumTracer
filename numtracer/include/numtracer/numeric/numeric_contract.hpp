@@ -1371,9 +1371,16 @@ namespace numtracer::numeric
           cplx = true;
           break;
         }
-    auto build = [&](bool imag) {
-      std::vector<network::LMono> monos;
-      monos.reserve(p.t.size());
+    // ONE walk builds BOTH halves of a complex trace. The old shape — a `build(imag)` lambda called
+    // once for re and again for im — re-derived and re-sorted every monomial's vp (env interning,
+    // atom run-lengths, snap) twice for complex traces, doubling the flatten. The im list must
+    // contain an entry for EVERY kept monomial (with snap(c.im), possibly 0.0), exactly as the
+    // second pass produced; and the env ids intern in the same first-seen sequence as the old re
+    // pass, so the emitted kernel is byte-identical.
+    std::vector<network::LMono> monosRe, monosIm;
+    {
+      monosRe.reserve(p.t.size());
+      if (cplx) monosIm.reserve(p.t.size());
       for (const auto &[m, c] : p.t) {
         if (!keep(c)) continue;
         std::vector<std::pair<int, int>> vp;
@@ -1387,11 +1394,20 @@ namespace numtracer::numeric
           i = j;
         }
         std::sort(vp.begin(), vp.end());
+        if (cplx) {
+          network::LMono lmIm;
+          lmIm.c = snap_coeff(c.im);
+          lmIm.vp = vp; // copy — the re half moves it below
+          monosIm.push_back(std::move(lmIm));
+        }
         network::LMono lm;
-        lm.c = snap_coeff(imag ? c.im : c.re);
+        lm.c = snap_coeff(c.re);
         lm.vp = std::move(vp);
-        monos.push_back(std::move(lm));
+        monosRe.push_back(std::move(lm));
       }
+    }
+    {
+      const auto &monos = monosRe;
       // NT_GEN_POLYSTATS=1: report the MONOMIAL count handed to the Horner lowering. Monomial count
       // is canonical (independent of any factorisation strategy), so comparing it against the
       // emitted multiply count says whether a large op count comes from the ALGEBRA (many monomials)
@@ -1414,11 +1430,10 @@ namespace numtracer::numeric
             std::fprintf(stderr, "[mono] %s\n", key.c_str());
           }
       }
-      return monos;
-    };
-    const int reRoot = network::gdetail::best_into(build(false), w);
+    }
+    const int reRoot = network::gdetail::best_into(std::move(monosRe), w);
     if (!cplx) return {reRoot, network::kRealProgram};
-    return {reRoot, network::gdetail::best_into(build(true), w)};
+    return {reRoot, network::gdetail::best_into(std::move(monosIm), w)};
   }
 
   NUMTRACER_FUNC network::GenProg to_genprog(const MPoly &p, network::GlobalEnv &g, bool realOnly)
@@ -1467,8 +1482,12 @@ namespace numtracer::numeric
           }
         if (cplx) break;
       }
-    auto build = [&](bool imag) {
-      std::vector<network::LMono> monos;
+    // ONE walk builds BOTH halves — see the MPoly overload: the old build(imag) lambda re-derived
+    // every monomial's vp (dress/var/inv interning + sort) twice for complex traces. Interning
+    // order and im-list contents (an entry per kept monomial, snap(c.im), possibly 0.0) reproduce
+    // the old two-pass shape exactly, so the emitted kernel is byte-identical.
+    std::vector<network::LMono> monosRe, monosIm;
+    {
       for (const auto &[d, mp] : p.t) {
         const double tol = dmonoTol(mp);
         // the dressing monomial's atoms become kind-2 `dress` env leaves shared by every monomial of mp
@@ -1493,33 +1512,38 @@ namespace numtracer::numeric
             i = j;
           }
           std::sort(vp.begin(), vp.end());
+          if (cplx) {
+            network::LMono lmIm;
+            lmIm.c = snap_coeff(c.im);
+            lmIm.vp = vp; // copy — the re half moves it below
+            monosIm.push_back(std::move(lmIm));
+          }
           network::LMono lm;
-          lm.c = snap_coeff(imag ? c.im : c.re);
+          lm.c = snap_coeff(c.re);
           lm.vp = std::move(vp);
-          monos.push_back(std::move(lm));
+          monosRe.push_back(std::move(lm));
         }
       }
       // see the MPoly overload: monomial count is the optimizer-independent baseline against which
       // the emitted instruction count is judged.
       if (const char *e = std::getenv("NT_GEN_POLYSTATS")) {
-        if (e[0] == '1') std::fprintf(stderr, "[polystats] dpoly monos=%zu\n", monos.size());
+        if (e[0] == '1') std::fprintf(stderr, "[polystats] dpoly monos=%zu\n", monosRe.size());
         if (e[0] == '2')
-          for (const auto &lm : monos) {
+          for (const auto &lm : monosRe) {
             std::string key;
             for (const auto &[id, pw] : lm.vp)
               key += std::to_string(id) + "^" + std::to_string(pw) + " ";
             std::fprintf(stderr, "[mono] %s\n", key.c_str());
           }
       }
-      return monos;
-    };
-    const int reRoot = network::gdetail::best_into(build(false), w);
+    }
+    const int reRoot = network::gdetail::best_into(std::move(monosRe), w);
     if (!cplx) {
       if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
         if (e[0] == '1') std::fprintf(stderr, "[polystats] ssa instrs=%zu\n", w.ins.size());
       return {reRoot, network::kRealProgram};
     }
-    const int imRoot = network::gdetail::best_into(build(true), w);
+    const int imRoot = network::gdetail::best_into(std::move(monosIm), w);
     if (const char *e = std::getenv("NT_GEN_POLYSTATS"))
       if (e[0] == '1') std::fprintf(stderr, "[polystats] ssa instrs=%zu (re+im)\n", w.ins.size());
     return {reRoot, imRoot};
