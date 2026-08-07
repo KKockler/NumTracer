@@ -3470,9 +3470,15 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
 (* every dressing — including the named per-component diagonal dressings (ntSUNDiag{Fund,Adj}) —
    is an ordinary scalar interpolator kernel parameter. *)
     With[{
+(* interpTy is normally one type string shared by every dressing. It may instead be an Association
+   name -> type, for a flow that mixes 1-D momentum-grid interpolators with a 3-D vertex grid; a
+   name not in the map (e.g. a NumTracer-internal ntSUNDiag dressing) falls back to the first
+   declared type, which is what collapsing to a single type used to do for everything. *)
       dressTy =
         Function[nm,
-          interpTy]},
+          If[AssociationQ[interpTy],
+            Lookup[interpTy, If[StringQ[nm], nm, ToString[nm]], First[Values[interpTy]]],
+            interpTy]]},
       kernelParams = Join[mkParam[#, "double"]& /@ args, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
       constParams = Join[mkParam[#, "double"]& /@ Select[args, # === Global`p || # === Global`k&], mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
 (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes

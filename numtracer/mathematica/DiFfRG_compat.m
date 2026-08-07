@@ -202,10 +202,18 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
         ,
         _,
 (* Mixed interpolator types are legitimate: a flow may read most dressings off 1-D momentum grids
-   and one or two off a 3-D vertex grid (S0,S1,SPhi). Automatic emits `const auto&`, which binds all
-   of them; taking the first would declare the 3-D grid as a 1-D spline and the kernel would fail to
-   compile at the first three-argument call. *)
-          Automatic
+   and one or two off a 3-D vertex grid (S0,S1,SPhi). Taking the first would declare the 3-D grid as
+   a 1-D spline and the kernel would fail to compile at the first three-argument call.
+
+   Pass the types through PER PARAMETER rather than collapsing them. `const auto&` would also bind
+   all of them, but it turns every kernel into an abbreviated function template, and nvcc's front end
+   cannot handle that inside a class template -- it dies with
+       internal error: assertion failed at: "symbol_ref.c", line 1629
+       in check_name_hiding_by_template_parameters
+   (reproducible in ~20 lines: a class template whose static member takes `const auto&` params).
+   The parameter list already carries each declared type, so there is nothing to infer. *)
+          Association[Cases[params, a_?AssociationQ /; a["Type"] =!= "double" :>
+            (If[StringQ[a["Name"]], a["Name"], SymbolName[a["Name"]]] -> a["Type"])]]
       ];
 (* scalar "double" params (etaPiL, d1V, rhoL, ...) beyond k/p: these are forwarded by DiFfRG's
    integrator between k and the interpolators, so NumTracer must declare them in the kernel /
