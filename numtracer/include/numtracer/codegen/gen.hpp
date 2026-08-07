@@ -266,10 +266,105 @@ namespace numtracer::network
 #if NUMTRACER_DEFINE_BODIES
   namespace edetail
   {
-    /// Emit one instruction's right-hand side (`s<i> = <rhs>`). The opcode set lives here so the
-    /// single-output (@ref emit_cpp) and fused multi-output (@ref emit_cpp_fused) writers cannot drift.
-    inline void emit_rhs(std::ostream &out, const RInstr &in)
+    /// Per-program statement-emission plan, shared by the single-output (@ref emit_cpp) and fused
+    /// (@ref emit_cpp_fused) writers so their statement forms cannot drift. Two statement-level
+    /// rewrites, both pure emission (the SSA program itself is untouched, slot numbering included):
+    ///
+    ///  - fmaFold: a MUL whose ONLY use is one ADD/SUB is emitted inside that consumer as
+    ///    `fma(a,b,c)` instead of its own `const double` line. gcc/nvcc contract these pairs anyway
+    ///    (-ffp-contract=fast / -fmad=true), so the value is (a) the line count — the pair collapses
+    ///    to one statement — and (b) making contraction GUARANTEED where the default doesn't reach:
+    ///    clang's -ffp-contract=on stops at statement boundaries, and the pair spans two statements.
+    ///    Ported from FunKit COEN's fmaRestructure (the consumer kernels already emit fma()).
+    ///  - cInline: an RCONST used exactly once is emitted as a (parenthesised) literal at its use
+    ///    site instead of occupying its own declaration line.
+    ///
+    /// Opt-outs, read once per process (emission must be uniform across a run, same contract as
+    /// NT_GEN_NOINLINE_MIN): NT_GEN_NO_FMA=1 and NT_GEN_NO_CONST_INLINE=1 — the A/B controls.
+    struct EmitPlan
     {
+      std::vector<int> use;       ///< total references: instruction operands + result roots
+      std::vector<int> consumer;  ///< single consuming instruction, or -2 (root / >1 consumers)
+      std::vector<char> fmaFold;  ///< MUL folded into its single ADD/SUB consumer
+      std::vector<char> cInline;  ///< RCONST inlined at its single use site
+    };
+
+    inline EmitPlan make_plan(const std::vector<RInstr> &ins, const int *roots, std::size_t nroots)
+    {
+      static const bool fmaOn = std::getenv("NT_GEN_NO_FMA") == nullptr;
+      static const bool ciOn = std::getenv("NT_GEN_NO_CONST_INLINE") == nullptr;
+      const int n = static_cast<int>(ins.size());
+      EmitPlan pl;
+      pl.use.assign(ins.size(), 0);
+      pl.consumer.assign(ins.size(), -2);
+      pl.fmaFold.assign(ins.size(), 0);
+      pl.cInline.assign(ins.size(), 0);
+      auto touch = [&](int r, int c) {
+        if (r < 0 || r >= n) return; // kRealProgram / -1 roots
+        pl.consumer[r] = (++pl.use[r] == 1) ? c : -2;
+      };
+      for (int i = 0; i < n; ++i) {
+        const RInstr &in = ins[i];
+        if (in.op == RADD || in.op == RSUB || in.op == RMUL) {
+          touch(in.a, i);
+          touch(in.b, i);
+        } else if (in.op == RNEG)
+          touch(in.a, i);
+      }
+      for (std::size_t r = 0; r < nroots; ++r) touch(roots[r], -2);
+      if (fmaOn) {
+        // At most ONE folded MUL per consumer (an fma has one addend); prefer operand `a`.
+        auto foldable = [&](int r, int c) {
+          return r >= 0 && r < n && ins[r].op == RMUL && pl.use[r] == 1 && pl.consumer[r] == c;
+        };
+        for (int i = 0; i < n; ++i) {
+          if (ins[i].op != RADD && ins[i].op != RSUB) continue;
+          if (foldable(ins[i].a, i))
+            pl.fmaFold[ins[i].a] = 1;
+          else if (foldable(ins[i].b, i))
+            pl.fmaFold[ins[i].b] = 1;
+        }
+      }
+      if (ciOn)
+        for (int i = 0; i < n; ++i)
+          if (ins[i].op == RCONST && pl.use[i] == 1) pl.cInline[i] = 1;
+      return pl;
+    }
+
+    /// Print one operand: an inlined single-use constant as a parenthesised literal (parentheses are
+    /// load-bearing: `s5--46.7` would lex as a decrement), anything else as its slot name.
+    inline void emit_operand(std::ostream &out, const std::vector<RInstr> &ins, const EmitPlan &pl, int r)
+    {
+      if (r < 0) {
+        out << "0.0";
+        return;
+      }
+      if (pl.cInline[static_cast<std::size_t>(r)])
+        out << "(" << ins[static_cast<std::size_t>(r)].k << ")";
+      else
+        out << "s" << r;
+    }
+
+    /// Emit instruction @p i as a full `const double s<i> = <rhs>;` statement — or nothing, when the
+    /// plan folded it into its consumer. The opcode set lives here so the two writers cannot drift.
+    inline void emit_stmt(std::ostream &out, const std::vector<RInstr> &ins, std::size_t i, const EmitPlan &pl)
+    {
+      if (pl.fmaFold[i] || pl.cInline[i]) return;
+      const RInstr &in = ins[i];
+      auto opnd = [&](int r) { emit_operand(out, ins, pl, r); };
+      auto fma3 = [&](int mul, char sign, int addend) {
+        // sign applies to the whole fma pattern: '+' -> a*b + c, '-' -> a*b - c, 'n' -> c - a*b.
+        out << "fma(";
+        if (sign == 'n') out << "-";
+        opnd(ins[static_cast<std::size_t>(mul)].a);
+        out << ", ";
+        opnd(ins[static_cast<std::size_t>(mul)].b);
+        out << ", ";
+        if (sign == '-') out << "-";
+        opnd(addend);
+        out << ")";
+      };
+      out << (pl.use[i] ? "  const double s" : "  [[maybe_unused]] const double s") << i << " = ";
       switch (in.op) {
       case RCONST:
         out << in.k;
@@ -278,18 +373,38 @@ namespace numtracer::network
         out << "f[" << in.a << "]";
         break;
       case RADD:
-        out << "s" << in.a << "+s" << in.b;
+        if (in.a >= 0 && pl.fmaFold[static_cast<std::size_t>(in.a)])
+          fma3(in.a, '+', in.b);
+        else if (in.b >= 0 && pl.fmaFold[static_cast<std::size_t>(in.b)])
+          fma3(in.b, '+', in.a);
+        else {
+          opnd(in.a);
+          out << "+";
+          opnd(in.b);
+        }
         break;
       case RSUB:
-        out << "s" << in.a << "-s" << in.b;
+        if (in.a >= 0 && pl.fmaFold[static_cast<std::size_t>(in.a)])
+          fma3(in.a, '-', in.b); // (a*b) - c
+        else if (in.b >= 0 && pl.fmaFold[static_cast<std::size_t>(in.b)])
+          fma3(in.b, 'n', in.a); // c - (a*b) = fma(-a, b, c)
+        else {
+          opnd(in.a);
+          out << "-";
+          opnd(in.b);
+        }
         break;
       case RMUL:
-        out << "s" << in.a << "*s" << in.b;
+        opnd(in.a);
+        out << "*";
+        opnd(in.b);
         break;
-      default:
-        out << "-s" << in.a;
-        break; // RNEG
+      default: // RNEG
+        out << "-";
+        opnd(in.a);
+        break;
       }
+      out << ";\n";
     }
 
     /// @brief Decide the effective decorator for one emitted trace/chunk function of @p nInstr SSA
@@ -357,38 +472,24 @@ namespace numtracer::network
     // NT_GEN_NOINLINE_TRACES forces out-of-line everywhere; `__attribute__((noinline))` is honoured by both
     // g++ and nvcc; fill()/powr stay inline.
     const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
-    auto emitRhs = [&out](const RInstr &in) { edetail::emit_rhs(out, in); };
-    // Liveness of the SSA slots: a slot that feeds neither a result root nor another slot's operand is
-    // dead (greedy Horner + CSE occasionally leaves one). Tag exactly those `const double sN` with
-    // `[[maybe_unused]]` so the flat kernel is -Wunused-variable clean without decorating every line.
-    std::vector<char> used(p.ins.size(), 0);
-    auto markUse = [&](int r) {
-      if (r >= 0 && r < static_cast<int>(p.ins.size())) used[r] = 1;
-    };
-    for (const RInstr &in : p.ins) {
-      if (in.op == RADD || in.op == RSUB || in.op == RMUL) {
-        markUse(in.a);
-        markUse(in.b);
-      } else if (in.op == RNEG)
-        markUse(in.a);
-    }
-    markUse(p.root);
-    markUse(p.rootIm); // kRealProgram (INT_MIN) and -1 are filtered by the r>=0 guard
-    auto slotDecl = [&](std::size_t i) { return used[i] ? "  const double s" : "  [[maybe_unused]] const double s"; };
+    // Statement plan: liveness ([[maybe_unused]] tagging of dead slots), single-use-constant
+    // inlining, and MUL->ADD/SUB fma folding — shared with the fused writer via edetail.
+    const int roots[2] = {p.root, p.rootIm}; // kRealProgram (INT_MIN) and -1 are filtered inside
+    const edetail::EmitPlan pl = edetail::make_plan(p.ins, roots, 2);
+    auto opnd = [&](int r) { edetail::emit_operand(out, p.ins, pl, r); };
 
     // COMPLEX trace (folded imaginary colour): real + imaginary halves share the instruction stream;
     // return std::complex<double>{re, im}. The kernel multiplies it by the (complex) dressing
     // coefficient and the consumer takes std::real — so the imaginary part reaches the kernel.
     if (p.rootIm != kRealProgram) {
-      auto slot = [](int r) { return r < 0 ? std::string("0.0") : "s" + std::to_string(r); };
       out << effDecor << " std::complex<double> " << name << "([[maybe_unused]] const double *f) {\n";
       out << std::setprecision(17);
-      for (std::size_t i = 0; i < p.ins.size(); ++i) {
-        out << slotDecl(i) << i << " = ";
-        emitRhs(p.ins[i]);
-        out << ";\n";
-      }
-      out << "  return std::complex<double>{" << slot(p.root) << ", " << slot(p.rootIm) << "};\n}\n";
+      for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
+      out << "  return std::complex<double>{";
+      opnd(p.root);
+      out << ", ";
+      opnd(p.rootIm);
+      out << "};\n}\n";
       return;
     }
     out << effDecor << " double " << name << "([[maybe_unused]] const double *f) {\n";
@@ -397,12 +498,10 @@ namespace numtracer::network
       return;
     }
     out << std::setprecision(17);
-    for (std::size_t i = 0; i < p.ins.size(); ++i) {
-      out << slotDecl(i) << i << " = ";
-      emitRhs(p.ins[i]);
-      out << ";\n";
-    }
-    out << "  return s" << p.root << ";\n}\n";
+    for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
+    out << "  return ";
+    opnd(p.root);
+    out << ";\n}\n";
   }
 
   /// @brief Print a FUSED multi-output program as `void name(const double* f, <T>* t)`.
@@ -425,31 +524,30 @@ namespace numtracer::network
     const std::string effDecor = edetail::eff_decor(decor, p.ins.size());
     const std::size_t n = p.root.size();
 
-    std::vector<char> used(p.ins.size(), 0);
-    auto markUse = [&](int r) {
-      if (r >= 0 && r < static_cast<int>(p.ins.size())) used[r] = 1;
-    };
-    for (const RInstr &in : p.ins) {
-      if (in.op == RADD || in.op == RSUB || in.op == RMUL) {
-        markUse(in.a);
-        markUse(in.b);
-      } else if (in.op == RNEG)
-        markUse(in.a);
-    }
-    for (std::size_t i = 0; i < n; ++i) {
-      markUse(p.root[i]);
-      markUse(p.rootIm[i]); // kRealProgram (INT_MIN) and -1 are filtered by the r>=0 guard
-    }
+    // Statement plan seeded from EVERY root (a slot feeding only trace 7's result is live even though
+    // it feeds no other instruction); kRealProgram (INT_MIN) and -1 are filtered inside.
+    std::vector<int> roots;
+    roots.reserve(2 * n);
+    roots.insert(roots.end(), p.root.begin(), p.root.end());
+    roots.insert(roots.end(), p.rootIm.begin(), p.rootIm.end());
+    const edetail::EmitPlan pl = edetail::make_plan(p.ins, roots.data(), roots.size());
 
-    auto slot = [](int r) { return r < 0 ? std::string("0.0") : "s" + std::to_string(r); };
+    auto opnd = [&](int r) { edetail::emit_operand(out, p.ins, pl, r); };
     auto emitStore = [&](std::size_t i) {
       out << "  t[" << (static_cast<std::size_t>(p.offset) + i) << "] = ";
       if (!anyComplex)
-        out << slot(p.root[i]);
-      else if (p.rootIm[i] == kRealProgram)
-        out << "std::complex<double>{" << slot(p.root[i]) << ", 0.0}";
-      else
-        out << "std::complex<double>{" << slot(p.root[i]) << ", " << slot(p.rootIm[i]) << "}";
+        opnd(p.root[i]);
+      else if (p.rootIm[i] == kRealProgram) {
+        out << "std::complex<double>{";
+        opnd(p.root[i]);
+        out << ", 0.0}";
+      } else {
+        out << "std::complex<double>{";
+        opnd(p.root[i]);
+        out << ", ";
+        opnd(p.rootIm[i]);
+        out << "}";
+      }
       out << ";\n";
     };
 
@@ -463,11 +561,7 @@ namespace numtracer::network
     // ranges buy back.
     out << effDecor << " void " << name << "([[maybe_unused]] const double *f, " << elemT << " *t) {\n";
     out << std::setprecision(17);
-    for (std::size_t i = 0; i < p.ins.size(); ++i) {
-      out << (used[i] ? "  const double s" : "  [[maybe_unused]] const double s") << i << " = ";
-      edetail::emit_rhs(out, p.ins[i]);
-      out << ";\n";
-    }
+    for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
     for (std::size_t i = 0; i < n; ++i)
       emitStore(i);
     out << "}\n";

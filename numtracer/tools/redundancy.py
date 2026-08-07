@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """How redundant are the generator's sub-term contractions?
 
+STALE (2026-08-08): this parser predates the Stage-4 pooled emission — dressed generators now
+emit a chain POOL (`chp0()`) plus per-sub-term index arrays (`sdchR0()`/`sdslR0()`), so the
+inline `dch<i>`/`dsl<i>` builders this script looks for no longer exist and it reports nothing
+on regenerated sources. Its question (the dedup ceiling) was answered and the dedup LANDED
+(see NUMTRACER_LEVER_B_BRIEF.md), so the parser was not ported. For kernel-side statistics use
+tools/dagstat.py; if the redundancy question ever reopens, port load() to resolve the pools.
+
 The generated main contracts one Dirac trace per (net i, sub-term j). The same trace recurs across
 nets, so most of those contractions recompute something already computed. This counts how many
 DISTINCT traces there are — the ceiling on what the sub-term dedup can save — and how often each is

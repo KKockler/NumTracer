@@ -586,6 +586,20 @@ resolveGenCxx[] := Module[{env = Environment["NT_GEN_CXX"], path, comps, clangPi
       full,
       exe]];
 
+(* tcmalloc preload for the generator RUN: the trace engine's phase A/B does heavy tiny-alloc
+   churn and a tcmalloc_minimal LD_PRELOAD is a measured -7% on the run (it also lowers the
+   glibc-arena fragmentation floor, see PHASE-A residue notes). Env prefix on the Run[] shell
+   command, so it needs no code in the generator itself. NT_GEN_NO_TCMALLOC=1 opts out; silently
+   empty when the library is absent, so nothing changes on machines without gperftools. *)
+ntTcmallocPrefix[] :=
+  If[StringQ[Environment["NT_GEN_NO_TCMALLOC"]] && Environment["NT_GEN_NO_TCMALLOC"] =!= "",
+    "",
+    With[{lib = SelectFirst[
+        {"/usr/lib/libtcmalloc_minimal.so", "/usr/lib64/libtcmalloc_minimal.so",
+         "/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4", "/usr/lib/libtcmalloc_minimal.so.4"},
+        FileExistsQ, None]},
+      If[lib === None, "", "LD_PRELOAD='" <> lib <> "' "]]];
+
 chunkLorInv[lorExpr_, ids_, env_, mask_, nc_] := Which[
     lorExpr === 0,
       {},
@@ -2798,6 +2812,7 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
    (faster codegen, higher peak RAM) instead of one-at-a-time. The emitted kernel is identical. *)
 
 mkGenerateKernel::genfail = "Generator compile/run failed: `1`";
+mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run in this mode (Offline or RunGenerator->False), so pruned traces could not be probe-validated. Emitting all-complex traces; set RealProbe->False to assert the flow is safe to prune without a probe.";
 
 (* (mkGenerateKernel::crosscseComplex was removed 2026-07-19: CrossTraceCSE now types tarr[] from the
    emitted `trace_all_t`, so a complex flow is no longer truncated and needs no guard.) *)
@@ -3124,7 +3139,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
     Needs["FunKit`"];
 (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
    steps (the integrand Sum, COEN's expression lowering) recurse ~linearly in that count, so the
@@ -3540,10 +3555,33 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    Im(trace) into the real part). Flag it so the generator emits a `double` trace and never
    computes the dead imaginary half. Empty list (default) => generator emits all-complex traces,
    which the probe needs to verify cancellation — see the "PruneRealTraces" note. *)
-    realOnlyG =
+    pruneG =
       If[TrueQ[OptionValue["PruneRealTraces"]],
         (FreeQ[diagData[[#[[1]] + 1]], Complex])& /@ g,
         {}];
+(* ORDERING (the probe/prune interaction, the bug this replaces): the probe verifies
+   Im(integrand)~0 against the GENERATED traces, so it must see the UNPRUNED all-complex set —
+   probing pruned traces artificially removes the residual it needs and can misclassify the
+   flow, and a wrong verdict is an O(1) kernel error. So when the probe is going to run, pass 1
+   generates unpruned, the verdict is taken, and only then is the generation re-run with the
+   prune applied (see the post-probe block below; generation is seconds, correctness is not).
+   Without a probe: a syntactically real flow prunes directly (no `i` anywhere — trivially
+   safe), RealProbe->False prunes on the caller's assertion, and offline/no-generator cannot
+   validate in-session so the prune request is dropped with a warning. *)
+    probeWillRun = complexQ && TrueQ[OptionValue["RealProbe"]] && TrueQ[OptionValue["RunGenerator"]] && !offline;
+    realOnlyG =
+      Which[
+        !TrueQ[OptionValue["PruneRealTraces"]],
+          {},
+        !complexQ,
+          pruneG,
+        probeWillRun,
+          {},
+        TrueQ[OptionValue["RealProbe"]],
+          Message[mkGenerateKernel::pruneoff];
+          {},
+        True,
+          pruneG];
     nGrp = Length[g];
 (* The tarr declaration+fill, used by BOTH the kernel's coreBlock and the RealProbe TU (which
    evaluates the same integrand, so it needs the same tokens in scope). `trace_all_t` is emitted by
@@ -3680,7 +3718,10 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    the support runtime; no tensor-engine headers. A complex flow also pulls the verdict header. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}, If[complexQ, {ntVerdictFile}, {}]], "Body" -> ntWrapBody[kns, classStr, name]
             ];],
       " s"];
-    (* emit the generator source (the numeric matrix-product backend is the single generation path). *)
+    (* emit the generator source (the numeric matrix-product backend is the single generation path).
+       The whole emit->write->compile->run pipeline is a local closure so the deferred
+       PruneRealTraces pass (post-probe, below) can re-run it with realOnlyG updated. *)
+    genPass[] := (
     ntLog["[prof] emitNumericGenerator: ", First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain} = emitNumericGenerator[invNets, invRest, colourNets, g, ncomp, ns, fillArgSig, kns, complexQ, realOnlyG, crossCSE];], " s"];
 (* Split generator: a main TU + N net-builder unit TUs + a decl header (all in the tests/gen/ dir), so the
    net-builder codegen compiles in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
@@ -3800,11 +3841,36 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    template below, `catch(const std::system_error&)`), which is ill-formed under -fno-exceptions. *)
         pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"")& /@ Join[{"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"}, Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> "-I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')", {u, 1, Length[unitFiles]}]], " "] <> " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD > '" <> clog <> "' 2>&1";
         lcmd = cxx <> " -pthread '" <> mainObj <> "' " <> StringRiffle[("'" <> # <> "'")& /@ unitObjs, " "] <> libArg <> " -o '" <> bin <> "' >> '" <> clog <> "' 2>&1";
-        {tcc, cc} =
-          AbsoluteTiming[
-            Run[pcmd];
-            Run[lcmd]];
-        Print["[time]   generator compile (", cxx, ", ", Length[unitFiles], " parallel units + main): ", tcc, " s"];
+(* Content-addressed compile cache: the generator source is a deterministic function of the flow,
+   and the compile dominates the run ~11:1 on medium flows (measured 2026-08-08 across za3_147 /
+   aqbq147 / zaaqbq1_small), so a re-generation whose sources and engine are unchanged should not
+   pay it again. The key covers the emitted sources, the linked libNumTracer.a, every installed
+   engine header (the sources #include them), the compiler and the main-TU -O level — anything that
+   can change the binary. Same pattern as FunKit's funkit-source.hash. NT_GEN_NO_COMPILE_CACHE=1
+   opts out. CAVEAT (documented, not speculative): if phase-B parallel lowering ever lands, sN
+   interning makes the source non-deterministic and this key must move to the generator INPUTS. *)
+        Module[{srcKey, keyFile = bin <> ".srckey", cacheOff, hit},
+          cacheOff = StringQ[Environment["NT_GEN_NO_COMPILE_CACHE"]] && Environment["NT_GEN_NO_COMPILE_CACHE"] =!= "";
+          srcKey =
+            ToString @ Hash[
+              {FileHash[#, "SHA256"]& /@ Join[{genFile, declFile}, unitFiles],
+               If[useLib, FileHash[libPath, "SHA256"], "header-only"],
+               FileHash[#, "SHA256"]& /@ Sort[FileNames["*.hpp", incDir, Infinity]],
+               pcmd, lcmd}, (* the command lines carry cxx, -O levels and every other flag *)
+              "SHA256"];
+          hit = !cacheOff && FileExistsQ[bin] && FileExistsQ[keyFile] &&
+            StringTrim[Quiet @ Check[ReadString[keyFile], ""]] === srcKey;
+          If[hit,
+            tcc = 0.;
+            cc = 0;
+            Print["[time]   generator compile: 0 s (cache hit: sources+engine unchanged, reusing ", bin, ")"],
+            {tcc, cc} =
+              AbsoluteTiming[
+                Run[pcmd];
+                Run[lcmd]];
+            If[cc === 0 && !cacheOff,
+              Quiet @ Export[keyFile, srcKey, "Text"]];
+            Print["[time]   generator compile (", cxx, ", ", Length[unitFiles], " parallel units + main): ", tcc, " s"]]];
         If[cc =!= 0,
           Module[{
             lines =
@@ -3837,7 +3903,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
         {trun, rc} =
           AbsoluteTiming[
             Run[
-              "'" <> bin <> "' -n '" <> ns <> "' -d '" <> decor <> "'" <>
+              ntTcmallocPrefix[] <> "'" <> bin <> "' -n '" <> ns <> "' -d '" <> decor <> "'" <>
                 If[OptionValue["FullParallel"],
                   " -p",
                   ""
@@ -3855,6 +3921,8 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
         CopyFile[tmp, headerFile, OverwriteTarget -> True];
         DeleteFile[tmp];
         Print["wrote header: ", headerFile, " (", sz, " bytes)"]]];
+    ); (* end genPass *)
+    genPass[];
 (* semantic complexQ: the syntactic flag only says SOME coefficient carries an `i`; whether the
    assembled flow is actually real depends on the trace VALUES. The probe settles it against the
    generated traces and writes the verdict macro that selects one of the three bodies emitted above.
@@ -3864,7 +3932,16 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
       ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, $drTable, "TraceArrayDecl" -> If[crossCSE, tarrDecl, ""]]];
       Print["wrote probe: ", probeFile];
       If[TrueQ[OptionValue["RunGenerator"]] && TrueQ[OptionValue["RealProbe"]] && !offline,
-        ntLog["[probe] verdict -> ", ntRunProbe[probeFile, DirectoryName[headerFile], FileNameJoin[{DirectoryName[headerFile], ntVerdictFile}], verdictMacro]]]];
+        probeVerdict = ntRunProbe[probeFile, DirectoryName[headerFile], FileNameJoin[{DirectoryName[headerFile], ntVerdictFile}], verdictMacro];
+        ntLog["[probe] verdict -> ", probeVerdict];
+(* Deferred PruneRealTraces (pass 2): the verdict above was taken on the UNPRUNED traces, so a
+   real verdict (Pure/RePart) certifies the imaginary residual cancels and the pruned
+   re-generation is lossless for the consumer. A Complex verdict keeps all-complex traces. *)
+        If[TrueQ[OptionValue["PruneRealTraces"]] && MemberQ[{"Pure", "RePart"}, probeVerdict] && MemberQ[pruneG, True],
+          ntLog["[prune] PruneRealTraces: regenerating with ", Count[pruneG, True], "/", Length[pruneG],
+            " real-coeff groups pruned (probe verdict '", probeVerdict, "' was taken on the unpruned traces)"];
+          realOnlyG = pruneG;
+          genPass[]]]];
     (* kernel header (write-if-changed). *)
     If[FileExistsQ[kernelFile] && Import[kernelFile, "Text"] === header,
       Print["unchanged: ", kernelFile],
