@@ -1,4 +1,4 @@
-// Tutorial 3 — Lorentz networks contract to a scalar polynomial.
+// step-04 — Lorentz networks contract to a scalar polynomial.
 //
 // A network of metrics, momentum vectors and transverse projectors has no "components" once you
 // contract it: the numeric engine sums the shared Lorentz indices away over the loop frame and
@@ -27,19 +27,24 @@ int main() {
   // keep only its NON-ZERO components symbolic (one scalar variable each), so numeric_value contracts
   // the network into the polynomial in exactly those frame scalars:
   //   p_0 = var 0,   l_0 = var 1,   l_1 = var 2.
+  // @snip begin: frame
   const int nsym = 3;
   nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
   comp[0][0] = env.var(0); // p = (p_0, 0, 0, 0)
   comp[1][0] = env.var(1); // l = (l_0, l_1, 0, 0)
   comp[1][1] = env.var(2);
+  // @snip end: frame
 
+  // @snip begin: atom
   // The transverse projector P(l)_{mu nu} = delta_{mu nu} - l_mu l_nu / l^2 carries its 1/l^2 as
   // "atom" id 0; numeric_value needs that atom's denominator l^2 = sum_i comp[1][i]^2.
   nm::MPoly l2 = env.zero();
   for (int i = 0; i < 4; ++i) l2 = l2 + comp[1][i] * comp[1][i];
   std::vector<nm::MPoly> atomDen = {l2};
+  // @snip end: atom
 
+  // @snip begin: net
   // The Lorentz network as one product term (coefficient 1) of three factors:
   //   nvec(Lbl, vlc)           : a 4-vector on Lorentz index Lbl, momentum = sum coeff*comp(vid).
   //   nprojT(Mu, Nu, vlc, atom) : P_{Mu Nu}(l) = delta_{Mu Nu} - l_Mu l_Nu / l^2, l = sum coeff*comp(vid).
@@ -53,6 +58,7 @@ int main() {
   // p.P(l).p = sp(p,p) - sp(p,l)^2 / l^2 = p_0^2 - p_0^2 l_0^2 / l^2 — two monomials in this frame
   // (the second carries the 1/l^2 atom).
   nm::MPoly poly = env.numeric_value(net::DiracNet{}, lor, comp, atomDen);
+  // @snip end: net
 
   // Evaluate the contracted polynomial at concrete values: p along axis 0, l at angle theta.
   const double Pm = 1.3, l0 = 0.5, l1 = 0.7;
@@ -62,7 +68,7 @@ int main() {
   const double val = nm::eval(poly, x, atomVal).re;
 
   const double cth = l0 / std::sqrt(l2v); // cos theta
-  std::printf("contracted monomials = %zu   (p.P.p = sp(p,p) - sp(p,l)^2 / l^2)\n", poly.size());
+  std::printf("contracted monomials = %d   (p.P.p = sp(p,p) - sp(p,l)^2 / l^2)\n", poly.size());
   std::printf("p.P(l).p             = %g   (= p^2 (1 - cos^2) = %g)\n", val, Pm * Pm * (1 - cth * cth));
   std::printf("p.P(l).p / p^2       = %g   (= 1 - cos^2 theta = %g)\n", val / (Pm * Pm), 1 - cth * cth);
 

@@ -32,7 +32,16 @@ extensions = [
     "myst_parser",
     "sphinx.ext.mathjax",
     "sphinx_design",
+    # The tutorial dependency graph (tutorials/index.md), in the style of the
+    # deal.II tutorial's "connections between tutorial programs". Uses the
+    # graphviz `dot` binary, which the Doxygen half of the build already needs —
+    # so this adds no pip dependency and no CDN fetch.
+    "sphinx.ext.graphviz",
 ]
+
+# SVG (not PNG) so the graph stays sharp, scales with the page, and — crucially —
+# keeps the per-node URL="..." attributes clickable.
+graphviz_output_format = "svg"
 
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 root_doc = "index"

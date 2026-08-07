@@ -1,6 +1,6 @@
-// Tutorial 2b — The same Dirac trace, via the engine's token API.
+// step-03b — The same Dirac trace, via the engine's token API.
 //
-// Tutorial 2a built the gamma matrices by hand. Usually you instead DESCRIBE
+// step-03a built the gamma matrices by hand. Usually you instead DESCRIBE
 // the closed chain as a list of tokens and let numeric_value contract it — this
 // is how the code generator builds every diagram. A token is one factor of the
 // trace-ordered chain:
@@ -26,6 +26,7 @@ enum { mu, nu }; // Lorentz indices
 int main() {
   // Momentum components as symbols: p -> 0..3, q -> 4..7. comp[vid][m] is the
   // m-th component of momentum vid, here just the symbol itself.
+  // @snip begin: comp
   const int nsym = 8;
   nm::LorentzEnv env(nsym);
   std::vector<std::array<nm::MPoly, 4>> comp(2);
@@ -33,13 +34,17 @@ int main() {
     comp[0][static_cast<std::size_t>(m)] = env.var(m);
     comp[1][static_cast<std::size_t>(m)] = env.var(4 + m);
   }
+  // @snip end: comp
 
+  // @snip begin: chain-pq
   // (1) tr(p/ q/): a closed chain of two slashed momenta (no free legs, no
   // Lorentz network).
   net::DiracNet chainPQ = {net::dslash({{1.0, 0}}), net::dslash({{1.0, 1}})};
   nm::MPoly trPQ =
       env.numeric_value(chainPQ, /*lorentz*/ {}, comp, /*atomDen*/ {});
+  // @snip end: chain-pq
 
+  // @snip begin: chain-g
   // (2) tr(gamma^mu p/ gamma_mu q/): two FREE gamma legs whose Lorentz indices
   // mu, nu are tied together by a metric. A Lorentz network (NNet) is a sum of
   // terms; here one term, coefficient 1, with a single factor nmet(mu, nu) =
@@ -48,6 +53,7 @@ int main() {
                           net::dgamma(nu), net::dslash({{1.0, 1}})};
   nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(mu, nu)}}};
   nm::MPoly trG = env.numeric_value(chainG, lor, comp, {});
+  // @snip end: chain-g
 
   // Evaluate both at one point.
   std::vector<double> x = {1.0, 0.5, -0.3, 0.2, 0.8, -0.4, 1.2, 0.1};
@@ -57,7 +63,7 @@ int main() {
   Cx vPQ = nm::eval(trPQ, x, {});
   Cx vG = nm::eval(trG, x, {});
 
-  std::printf("tr(p/ q/)           = %g   (= 4 p.q = %g, %zu monomials)\n",
+  std::printf("tr(p/ q/)           = %g   (= 4 p.q = %g, %d monomials)\n",
               vPQ.re, 4.0 * pq, trPQ.size());
   std::printf("tr(g^mu p/ g_mu q/) = %g   (= -2 tr(p/ q/) = %g)\n", vG.re,
               -8.0 * pq);

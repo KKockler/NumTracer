@@ -83,7 +83,7 @@ Fundamental / adjoint
 Transverse / longitudinal / electric / magnetic projector
 : Lorentz projectors onto subspaces relative to a momentum: transverse
   $P^T = \delta - kk/k^2$, longitudinal $P^L = kk/k^2$, and (at finite $T$) the electric/magnetic
-  split of $P^T$. See [finite temperature](../tutorials/finite-temperature.md).
+  split of $P^T$. See [step-16](../tutorials/step-16.md).
 
 Spinor / Dirac trace / Clifford algebra
 : The spin-½ index space (dimension 4), a closed loop of gamma matrices over it, and the relation
@@ -95,4 +95,4 @@ Matsubara / finite temperature / heat bath
 
 Condensate
 : A field acquiring a direction-selective background — modelled here by dressing selected SU($N$)
-  components differently (see [per-component dressings](../tutorials/dressed-flavour.md)).
+  components differently (see [step-17](../tutorials/step-17.md)).

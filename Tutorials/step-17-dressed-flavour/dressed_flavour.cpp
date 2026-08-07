@@ -1,4 +1,4 @@
-// Tutorial 6 — Per-flavour and per-component dressings: the group-diagonal fold.
+// step-17 — Per-flavour and per-component dressings: the group-diagonal fold.
 //
 // The flows so far dress every quark the same way (one propagator dressing for the whole
 // colour/flavour multiplet). Physics often needs more: the u and d quarks dressed differently
@@ -32,7 +32,7 @@
 #include <vector>
 
 using namespace numtracer;          // Cx, approx
-namespace net = numtracer::network; // SUNPoly / SUNTerm / sun_value_dressed / SUN — as in the other tutorials
+namespace net = numtracer::network; // SUNPoly / SUNTerm / sun_value_dressed / SUN — as in the other steps
 
 // Name the loop's SU(N) index labels. A single unscoped enum keeps every label distinct
 // (auto-numbered), so axes contract iff their labels are equal.
@@ -61,6 +61,7 @@ int main() {
   // A closed flavour delta-loop over the doublet, its delta made flavour-DIAGONAL: component 0 (u)
   // carries dressing-id 0, component 1 (d) carries id 1. diagFund(N, i, j, comp2dr) is that delta;
   // deltaFund(N, j, i) closes the loop. The fold gives the SUNPoly  D_u + D_d.
+  // @snip begin: fund
   const net::SUNPoly ud = net::sun_value_dressed(
       {sun2.diagFund(i, j, {0, 1}), sun2.deltaFund(j, i)});
 
@@ -74,6 +75,7 @@ int main() {
   const net::SUNPoly u_only = net::sun_value_dressed(
       {sun2.diagFund(i, j, {0, -1}), sun2.deltaFund(j, i)});
   const Cx u_drop = eval_poly(u_only, broken); // D_u = 2
+  // @snip end: fund
 
   std::printf("A. fundamental u/d doublet (SU(2) flavour)\n");
   std::printf("   D_u + D_d           = %g   (D_u=2, D_d=5 -> 7)\n", ud_broken.re);
@@ -86,6 +88,7 @@ int main() {
   // The adjoint has N^2-1 = 8 components. diagAdj(N, i, j, comp2dr) dresses them individually. A
   // condensate lives in the CARTAN directions -- lambda_3, lambda_8 for SU(3), i.e. components 3
   // and 8 (0-based indices 2 and 7). We dress those two and DROP the other six.
+  // @snip begin: adj
   std::vector<int> cartan(8, -1); // start with everything dropped
   cartan[2] = 0;                  // lambda_3 -> dressing-id 0  (Z_3)
   cartan[7] = 1;                  // lambda_8 -> dressing-id 1  (Z_8)
@@ -105,6 +108,7 @@ int main() {
   // set to zero. Here: full evaluated with D(id)=1 only for the Cartan ids {2,7}, else 0 -> 2.
   auto cartan_mask = [](int id) { return (id == 2 || id == 7) ? 1.0 : 0.0; };
   const Cx full_masked = eval_poly(full, cartan_mask); // 2, matching cond_blind
+  // @snip end: adj
 
   std::printf("B. adjoint gluon condensate on the Cartan (SU(3) colour)\n");
   std::printf("   full loop, all Z=1  = %g   (-> N^2-1 = 8)\n", full_blind.re);

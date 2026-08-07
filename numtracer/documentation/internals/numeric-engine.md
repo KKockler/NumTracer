@@ -98,7 +98,7 @@ that must stay symbolic to the end of the trace rather than cancel:
   **dressing-atom multiset** (`DMono`) to the kinematic `MPoly` it multiplies. The coefficient
   *is* an `MPoly`, so `DPoly` reuses `MPoly::operator*`/`+` verbatim and undressed flows are
   byte-identical (their `DPoly` is a single empty-dressing term). Walked through in the
-  [dressed-numerators tutorial](../tutorials/dressed-numerators.md).
+  [step-18](../tutorials/step-18.md).
 
   **Where the `DPoly` is assembled matters.** The generator's *trace table* is plain `MPoly` even
   for dressed flows: at codegen time each structure×dressing combination is stripped to its bare

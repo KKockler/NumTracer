@@ -1,4 +1,4 @@
-// Tutorial 2a — A Dirac trace, hand-coded as a matrix product.
+// step-03a — A Dirac trace, hand-coded as a matrix product.
 //
 // A trace tr(p-slash q-slash) is literally the trace of a product of 4x4 gamma matrices. The
 // numeric engine builds each slashed momentum as a 4x4 matrix whose entries are POLYNOMIALS in
@@ -18,6 +18,7 @@ using numtracer::Cx;
 int main() {
   // We treat the 8 components of two momenta p, q as symbols 0..7:
   //   env.var(i) is "the i-th symbol". p_mu = symbol mu, q_mu = symbol 4+mu.
+  // @snip begin: symbols
   const int nsym = 8;
   nm::LorentzEnv env(nsym);
   std::array<nm::MPoly, 4> p, q;
@@ -25,13 +26,16 @@ int main() {
     p[static_cast<std::size_t>(mu)] = env.var(mu);
     q[static_cast<std::size_t>(mu)] = env.var(4 + mu);
   }
+  // @snip end: symbols
 
+  // @snip begin: slash
   // env.slashC(comp) = sum_mu comp[mu] * gamma^mu : the slashed momentum as a 4x4 of MPoly.
   nm::Mat4 ps = env.slashC(p);
   nm::Mat4 qs = env.slashC(q);
 
   // tr(p/ q/) is the trace of the matrix product. The result is a polynomial in the 8 symbols.
   nm::MPoly tr = nm::mtrace(nm::matmul(ps, qs));
+  // @snip end: slash
 
   // Evaluate at one concrete point and compare to the closed form 4 p.q.
   std::vector<double> x = {1.0, 0.5, -0.3, 0.2, 0.8, -0.4, 1.2, 0.1};
@@ -40,7 +44,7 @@ int main() {
   double pq = 0;
   for (int mu = 0; mu < 4; ++mu) pq += x[static_cast<std::size_t>(mu)] * x[static_cast<std::size_t>(4 + mu)];
 
-  std::printf("tr(p/ q/)  = %g + %gi   (%zu monomials in the polynomial)\n", got.re, got.im, tr.size());
+  std::printf("tr(p/ q/)  = %g + %gi   (%d monomials in the polynomial)\n", got.re, got.im, tr.size());
   std::printf("4 (p.q)    = %g\n", 4.0 * pq);
 
   const bool ok = std::fabs(got.re - 4.0 * pq) < 1e-12 && std::fabs(got.im) < 1e-12;

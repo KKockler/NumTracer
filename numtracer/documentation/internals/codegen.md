@@ -69,7 +69,7 @@ indices → distinctly-named scalar dressings; unnamed components collapse to `D
 and fold (via `sun_value_dressed`) to $\sum_a c_a Z_a(s)$ over those named runtime scalar
 dressings — dressing selected colour/flavour components differently *without* splitting into one
 diagram per component; the Dirac trace is still computed once. See the
-[dressed-flavour tutorial](../tutorials/dressed-flavour.md).
+[step-17](../tutorials/step-17.md).
 
 A contraction is a product of heads with repeated index labels summed (Einstein); the top-level
 sum is the linear sum of diagrams.
@@ -106,7 +106,7 @@ surrounding net must close. The `ntDiracSlot` token generalises `ntDressedNum` t
 coefficient-weighted sum of structures sharing both the spinor in/out pair **and** the same set of
 $k \ge 1$ open Lorentz legs. ($k=0$ is the propagator numerator above; a two-gluon vertex is
 $k=2$, and so on.) Each option is split into a Dirac-token chain plus any Lorentz-net factors —
-see the [dressed-numerators tutorial](../tutorials/dressed-numerators.md) for the data model.
+see the [step-18](../tutorials/step-18.md) for the data model.
 
 **This path is OFF by default and must be enabled per flow.** Collection replaces $3^n$ diagrams
 with one, which is a large win where the combination count stays bounded — `za3_147` generates in

@@ -1,4 +1,4 @@
-// Tutorial 1 — Colour factors fold to a number.
+// step-02 — Colour factors fold to a number.
 //
 // The quark self-energy exchanges one gluon, so its colour structure is T^a_{ij} T^a_{jk} =
 // C_F delta_ik with C_F = (N^2-1)/2N = 4/3 for SU(3). A colour network with no free indices is
@@ -24,16 +24,20 @@ int main() {
   // factors for SU(3); a flavour SU(2) sector would use a separate `SUNEnv sun2(2)`.
   net::SUNEnv sun3(3);
 
+  // @snip begin: cf
   // sun3.T(a, A, B) = (T^a)_{AB} in SU(3): adjoint index a, fundamental row A, column B.
   // Sharing the gluon index a sums it; the fundamental labels A -> B -> A close the
   // quark line into a loop. The closed trace is tr(T^a T^a) = (N^2-1)/2 = C_F * N.
   net::SUNNet trTT = {sun3.T(a, A, B), sun3.T(a, B, A)};
   const Cx t = net::sun_value_cx(trTT); // = 4 for SU(3)
   const double CF = t.re / 3.0;        // C_F = tr / N = 4 / 3
+  // @snip end: cf
 
+  // @snip begin: ff
   // A second classic, fully closed: f^{abc} f^{abc} = N(N^2-1) = 24 for SU(3).
   // sun3.f(a, b, c) = f^{abc}; the two copies share all three adjoint indices a, b, c.
   const Cx ff = net::sun_value_cx({sun3.f(a, b, c), sun3.f(a, b, c)});
+  // @snip end: ff
 
   std::printf("tr(T^a T^a)      = %g   (expect 4)\n", t.re);
   std::printf("C_F = tr / N     = %g   (expect 4/3 = %g)\n", CF, 4.0 / 3.0);

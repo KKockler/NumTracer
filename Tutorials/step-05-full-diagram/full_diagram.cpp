@@ -1,4 +1,4 @@
-// Tutorial 4 — Hand-coding a full diagram, end to end.
+// step-05 — Hand-coding a full diagram, end to end.
 //
 // This is the capstone: the quark self-energy's Dirac-trace numerator,
 //   T_num = tr[ p/ gamma^mu q/ gamma^nu ] P_{mu nu}(l),   q = l - p,
@@ -34,11 +34,13 @@ enum {
 int main() {
   // One-angle frame: p along axis 0, l at angle theta in the 0-1 plane, q = l -
   // p.
+  // @snip begin: frame
   const double p = 1.3, l0 = 0.5, l1y = 0.7; // |p|, and l = (l0, l1y, 0, 0)
   const double pvec[4] = {p, 0, 0, 0};
   const double lvec[4] = {l0, l1y, 0, 0};
   const double qvec[4] = {l0 - p, l1y, 0, 0}; // q = l - p
   const double l2 = l0 * l0 + l1y * l1y;      // l^2
+  // @snip end: frame
 
   // ---- (1) the numeric path
   // ---------------------------------------------------------------- Momenta
@@ -57,6 +59,7 @@ int main() {
   setv(1, qvec);
   setv(2, lvec);
 
+  // @snip begin: tokens
   // The closed chain p/ gamma^mu q/ gamma^nu, with the two free gammas on
   // Lorentz legs mu, nu.
   net::DiracNet chain = {net::dslash({{1.0, 0}}), net::dgamma(mu),
@@ -75,6 +78,7 @@ int main() {
   nm::MPoly tr = env.numeric_value(chain, lor, comp, atomDen);
   Cx num = nm::eval(tr, /*symbols*/ {}, /*atom values*/ {1.0 / l2});
   const double numeric_val = num.re;
+  // @snip end: tokens
 
   // ---- (2) the closed form
   // -----------------------------------------------------------------
@@ -94,6 +98,7 @@ int main() {
   // to momentum ids, not values) then contract to a polynomial in those symbols. `to_genprog`
   // Horner-factors + CSEs it into a straight-line real program over a shared symbol env `g`, and
   // `emit_cpp` prints the exact `double T_num(const double* f)` a generated kernel would carry.
+  // @snip begin: lower
   const int ns = 3;
   nm::LorentzEnv envs(ns);
   auto V = [&](int i) { return envs.var(i); };            // the i-th symbol
@@ -110,6 +115,7 @@ int main() {
   std::printf("\nlowered kernel (symbolic components |p|, l0, l1y):\n");
   net::emit_env_layout(std::cout, g);   // which f[i] holds which symbol / 1/l^2
   net::emit_cpp(std::cout, prog, "T_num"); // -> double T_num(const double* f) { ... }
+  // @snip end: lower
 
   // The lowered polynomial is directly runnable in-process too: eval it at the tutorial's frame
   // point and check it still equals the closed form (this keeps section (3) gated by the test).

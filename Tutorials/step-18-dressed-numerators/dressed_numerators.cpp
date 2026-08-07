@@ -1,4 +1,4 @@
-// Tutorial 7 — Dressed propagator numerators: one trace instead of 2^D diagrams.
+// step-18 — Dressed propagator numerators: one trace instead of 2^D diagrams.
 //
 // A dressed quark propagator numerator is a SUM of Dirac structures whose coefficients are
 // *runtime* dressings, e.g.
@@ -13,7 +13,7 @@
 // dressings ride along as opaque atom-ids and never enter the trace arithmetic — so the Dirac /
 // Lorentz work is done a single time no matter how many structures each numerator carries.
 //
-// This is the Dirac-side analogue of tutorial 6's colour/flavour fold (there a group-diagonal δ
+// This is the Dirac-side analogue of step-17's colour/flavour fold (there a group-diagonal δ
 // folds to a SUNPoly; here a dressed numerator folds to a DPoly). See dpoly.hpp for the type and
 // internals/numeric-engine.md for how DPoly wraps MPoly.
 //
@@ -45,19 +45,25 @@ int main() {
     comp[1][mu] = env.var(4 + mu); // q_mu
   }
 
+  // @snip begin: slots
   // The Lorentz half: the two free gluon legs (ids 100, 101) meet through one metric δ_{100,101}.
   nm::NNet lor = {nm::NTerm{Cx{1, 0}, {nm::nmet(100, 101)}}};
 
   // The dressed numerators. A DSlot is the list of a numerator's structure options; a DSlotOpt is
-  //   { coeff , dressing-atom ids , slash? , slash-momentum } .
+  //   { coeff , dressing-atom ids , Dirac tokens , extra Lorentz-net factors } .
+  // The identity structure 𝟙 is the EMPTY token list — a slot option contributes nothing to the
+  // chain but its dressing. A slash is one `dslash` token. (The `toks`/`netFacs` pair is general
+  // enough to hold an open-leg vertex structure too, e.g. `{dgamma(mu)}`; see step-18's discussion.)
   //   S(p): option 0 = identity 𝟙 dressed by atom 0 ("Mq");   option 1 = p̸ dressed by atom 1 ("Z(p)").
   //   S(q): option 0 = identity 𝟙 dressed by atom 0 ("Mq");   option 1 = q̸ dressed by atom 2 ("Z(q)").
   // (Atom 0 is shared: both mass terms are the SAME runtime Mq. Atoms 1,2 are the per-leg Z's.)
-  nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, /*slash*/ false, {}},
-                  nm::DSlotOpt{Cx{1, 0}, {1}, /*slash*/ true, {{1.0, 0}}}}; // p̸ = 1·comp[0]
-  nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, /*slash*/ false, {}},
-                  nm::DSlotOpt{Cx{1, 0}, {2}, /*slash*/ true, {{1.0, 1}}}}; // q̸ = 1·comp[1]
+  nm::DSlot sP = {nm::DSlotOpt{Cx{1, 0}, {0}, /*𝟙*/ {}, {}},
+                  nm::DSlotOpt{Cx{1, 0}, {1}, {net::dslash({{1.0, 0}})}, {}}}; // p̸ = 1·comp[0]
+  nm::DSlot sQ = {nm::DSlotOpt{Cx{1, 0}, {0}, /*𝟙*/ {}, {}},
+                  nm::DSlotOpt{Cx{1, 0}, {2}, {net::dslash({{1.0, 1}})}, {}}}; // q̸ = 1·comp[1]
+  // @snip end: slots
 
+  // @snip begin: collect
   // The dressed Dirac chain, in trace order: a token is either a FIXED factor (dtfix) or a SLOT
   // reference (dtslot i -> the i-th entry of the slot list below).  γ^100 · S(p) · γ^101 · S(q).
   std::vector<nm::DChainTok> dchain = {nm::dtfix(net::dgamma(100)), nm::dtslot(0),
@@ -65,6 +71,7 @@ int main() {
 
   // Collect: ONE contraction, no 2^D blowup. dp is the DPoly.
   nm::DPoly dp = env.numeric_value_dressed(dchain, {sP, sQ}, lor, comp, /*atomDen*/ {});
+  // @snip end: collect
 
   // Distributed reference: enumerate the 2×2 structure choices, contract each concrete (undressed)
   // chain with the ORDINARY numeric_value, and weight by the product of that choice's dressings.

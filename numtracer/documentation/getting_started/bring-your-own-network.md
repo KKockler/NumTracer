@@ -19,47 +19,19 @@ a\cdot P(k)\cdot a = a^2 - \frac{(a\cdot k)^2}{k^2},
 \quad P(k)_{\mu\nu} = \delta_{\mu\nu} - \frac{k_\mu k_\nu}{k^2}.
 $$
 
-`Tutorials/00-hello-network/hello_network.cpp`:
+The program is `Tutorials/step-01-hello-network/hello_network.cpp`, walked through line by line in
+[**step-01**](../tutorials/step-01.md). Its core is these two networks:
 
-```cpp
-#include <numtracer.hpp> // the whole NumTracer API — here: nvec / nmet / nprojT (NNet) + numeric_value
+```{literalinclude} ../../../Tutorials/step-01-hello-network/hello_network.cpp
+:language: cpp
+:start-after: "@snip begin: dot"
+:end-before: "@snip end: dot"
+```
 
-namespace nm  = numtracer::numeric;
-namespace net = numtracer::network;
-using numtracer::Cx;
-
-// One unscoped enum names every index label — auto-numbered, hence distinct, so two factors
-// contract ONLY where you deliberately reuse a label (Einstein summation, purely by label).
-enum { mu, nu };
-
-static constexpr double a[4] = {1.0, 0.5, -0.3, 0.2};
-static constexpr double b[4] = {0.8, -0.4, 1.2, 0.1};
-static constexpr double k[4] = {0.5, 0.7, 0.0, 0.0};
-
-int main() {
-  // A "frame" fixes each vector's four components. Here they are numbers, so each component is a
-  // CONSTANT polynomial (nsym = 0, an empty symbol space). comp[vid][c] = component c of vector vid.
-  const int nsym = 0;
-  nm::LorentzEnv env(nsym); // bind the (empty) symbol space once; env.constant/numeric_value use it
-  auto vec4 = [&env](const double v[4]) {
-    return std::array<nm::MPoly, 4>{env.constant({v[0], 0}), env.constant({v[1], 0}),
-                                    env.constant({v[2], 0}), env.constant({v[3], 0})};
-  };
-  std::vector<std::array<nm::MPoly, 4>> comp = {vec4(a), vec4(b), vec4(k)}; // vids 0, 1, 2
-
-  // (1) a . b : a metric delta_{mu nu} ties a (leg mu) to b (leg nu). Sharing mu and nu sums both.
-  nm::NNet dot = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}), nm::nmet(mu, nu), nm::nvec(nu, {{1.0, 1}})}}};
-  const double ab = nm::eval(env.numeric_value(net::DiracNet{}, dot, comp, {}), {}, {}).re;
-
-  // (2) a . P(k) . a : the transverse projector on k. P(k) carries its 1/k^2 as inverse "atom" 0,
-  // so we hand the engine that atom's denominator k^2, and supply 1/k^2 at eval time.
-  nm::MPoly k2 = env.constant({0, 0});
-  for (int c = 0; c < 4; ++c) k2 = k2 + comp[2][c] * comp[2][c];
-  nm::NNet proj = {nm::NTerm{Cx{1, 0}, {nm::nvec(mu, {{1.0, 0}}), nm::nprojT(mu, nu, {{1.0, 2}}, 0), nm::nvec(nu, {{1.0, 0}})}}};
-  double k2v = 0; for (int c = 0; c < 4; ++c) k2v += k[c] * k[c];
-  const double apa = nm::eval(env.numeric_value(net::DiracNet{}, proj, comp, {k2}), {}, {1.0 / k2v}).re;
-  // ... compare ab, apa to their closed forms; print ALL TESTS PASSED / TESTS FAILED ...
-}
+```{literalinclude} ../../../Tutorials/step-01-hello-network/hello_network.cpp
+:language: cpp
+:start-after: "@snip begin: proj"
+:end-before: "@snip end: proj"
 ```
 
 ```bash
@@ -89,7 +61,7 @@ Two things are worth stating plainly, because it is easy to assume otherwise:
 - **FunKit is optional.** `FromFunKit` is a convenience importer for flows *already derived* in the
   FunKit/DiFfRG toolchain. You do **not** need it: derive your equations however you like and hand
   the DSL network to `NumTrace` directly — the minimal driver in
-  [Generating kernels](../tutorials/generating-kernels.md) does exactly that.
+  [step-06](../tutorials/step-06.md) does exactly that.
 - **FORM is not needed** to use NumTracer or to generate your own kernels. It appears only when
   *regenerating the project's own reference-test oracles*, never on your path.
 
@@ -112,7 +84,7 @@ The two front-ends describe the *same* engine, so every DSL head has a C++ build
 
 (The `vid` is a vector id into your component table; the `atom` is the id of a projector's
 $1/q^2$. Colour networks are built as a `SUNNet` and folded with `network::sun_value_cx` — see the
-[colour tutorial](../tutorials/color-contraction.md).)
+[step-02](../tutorials/step-02.md).)
 
 ## Mapping your own theory
 
@@ -127,7 +99,7 @@ $1/q^2$. Colour networks are built as a `SUNNet` and folded with `network::sun_v
    (`NNet`), and any colour network, then call `env.numeric_value` (Lorentz+Dirac) and `sun_value_cx`
    (colour). You get back a scalar `MPoly` in your frame symbols.
 4. **Read it or lower it.** `eval` the polynomial at a point, or hand it to the codegen to emit a
-   flat C++ kernel ([full diagram](../tutorials/full-diagram.md#lowering-to-an-optimized-kernel)).
+   flat C++ kernel ([step-05](../tutorials/step-05.md)).
 
 If any object or convention above does not match your problem, check
 [Scope & conventions](scope-and-conventions.md) — that page is the exact boundary of what the

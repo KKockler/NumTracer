@@ -18,7 +18,7 @@ hand it; the engine only contracts indices and folds the result. The numeric pat
 Lorentz, Dirac, and SU($N$) colour *and* flavour structure, dresses individual flavours or
 colour/flavour components differently (per-flavour split and group-diagonal dressings), and factors
 a diagram that disconnects into several closed traces into a product — see
-[Key concepts](concepts.md) and the [dressed-flavour tutorial](../tutorials/dressed-flavour.md).
+[Key concepts](concepts.md) and the [step-17](../tutorials/step-17.md).
 
 ```{admonition} Is this for me?
 :class: tip
