@@ -84,7 +84,15 @@ $ntCppLeakPatterns =
     "DirectedInfinity",
     "ComplexInfinity",
     "$Failed",
-    "Missing["};
+    "Missing[",
+(* A CForm'd Mathematica List. This is the generic signature of a CONSUMER-side symbolic head that
+   no rule ever resolved — the head itself is arbitrary (a FunKit `dressing[...]`, a `GammaN[...]`,
+   anything the flow file forgot to map), so it cannot be enumerated, but any such head printed by
+   CForm carries its argument lists as `List(...)`. Catching it here turns a leak that otherwise
+   costs a full emission plus a failed compile into an immediate, named failure.
+   `List(` cannot arise from legitimately lowered code: the emitted C++ builds every aggregate with
+   braces, and no runtime/support identifier is spelled `List`. *)
+    RegularExpression["(?<![A-Za-z0-9_])List\\("]};
 
 ntExportCpp[file_, text_] := (
     Function[patt,
@@ -207,13 +215,35 @@ MakeNTKernel::colpow = "compileColG: a colour/flavour SUM raised to the integer 
 
 MakeNTKernel::cppleak = "`1`: the generated source still contains un-lowered Mathematica — the text `2` appears in it. Writing it would produce a file that either fails to compile or, worse, compiles into a silently wrong kernel. This means some expression reached the emitter without being turned into C++; the fragment above should identify which. Offending file:\n`3`";
 
+(* ---- memo keys for the net builders ----------------------------------------------------------
+   These caches are keyed on the builders' TRUE argument, which is not the argument tuple as written.
+
+   `env`, `mask` and `nc` are fixed for a whole generation and the caches are cleared per generation,
+   so they belong in a single per-generation stamp rather than in every key: hashing three whole
+   associations on every (recursive) call is pure overhead.
+
+   `ids` is the subtler half. The emitted string never contains an index LABEL — builderInv resolves
+   every label through `ids[mu]` to an axis integer — so the builder's real argument is `e` with its
+   labels already resolved. Keying on the raw {e, ids} pair instead made structurally identical calls
+   miss: `ids` is the WHOLE diagram's label map, so two diagrams computing the same structure differ
+   in the key merely by carrying different labels elsewhere. On a dense flow that degraded the cache
+   to near-useless — 70507 stored entries producing 258 distinct nets — and the net-build, which
+   should track the number of DISTINCT structures, tracked the call count instead.
+
+   Momenta are dropped from the label substitution (KeyDrop against the frame's momentum symbols):
+   a momentum must stay symbolic in the key, since two momenta resolve through `env`/`mask`, not
+   `ids`, and collapsing them onto an integer could conflate two genuinely different nets. *)
+
+$ctCtx = 0;(* per-generation stamp of {env, mask, nc}; set in mkGenerateKernel *)
+
+ntCanonIds[e_, ids_, env_] := e /. Normal[KeyDrop[ids, Keys[env]]];
+
 (* MEMOIZED: the projector/Lorentz net builder is called with mostly repeated inputs — the same
    transverse-projector structures recur across every diagram/branch, so a dense flow makes orders of
-   magnitude more calls than it has distinct arguments. Cache by a hash of the args; $ctCache is cleared
-   per generation in mkGenerateKernel. Output-preserving (a pure function of its inputs); the recursion
-   is memoised too. *)
+   magnitude more calls than it has distinct arguments. $ctCache is cleared per generation in
+   mkGenerateKernel. Output-preserving (a pure function of its inputs); the recursion is memoised too. *)
 
-compileTInv[e_, ids_, env_, mask_, nc_] := With[{h = Hash[{e, ids, env, mask, nc}]},
+compileTInv[e_, ids_, env_, mask_, nc_] := With[{h = Hash[{ntCanonIds[e, ids, env], $ctCtx}]},
     Lookup[$ctCache, h, $ctCache[h] = compileTInvBody[e, ids, env, mask, nc]]];
 
 compileTInvBody[e_, ids_, env_, mask_, nc_] := Which[
@@ -471,6 +501,39 @@ ntChunkDef[name_String, ret_String, elems_List] :=
       defs = MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}"&, chunks];
       {Append[defs, ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> "); " <> StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nc}]] <> "return o; }"], StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nc}]]}
     ]];
+
+(* ---- big literal tables as TOP-LEVEL functions, not braced-inits inside main() ---------------
+   One oversized main() is a compiler hazard in three separate ways, all measured on a dense flow
+   (hPhiL, four-quark basis, 9.94 MB main TU): clang++ -O1 did not finish in an hour; the -O0
+   fallback then SEGFAULTED on entry, its stack frame exceeding the 8 MB default; and g++ -O1 died
+   with "internal compiler error: Segmentation fault" after 21 s at 1.79 GB — a cc1plus stack
+   overflow on the deeply-nested initializers, which `ulimit -s unlimited` alone works around.
+   All three are per-FUNCTION effects, so chunking the tables into ordinary top-level functions
+   fixes them at once, and the emitted values are unchanged (push_back in the same order, which also
+   moves each temporary instead of copying it out of a braced-init).
+   Returns {definitionsString, callExpression}. *)
+
+ntBigTableFns[name_String, ret_String, elems_List] :=
+  If[elems === {},
+    {"static " <> ret <> " " <> name <> "(){ return {}; }\n", name <> "()"},
+    Module[{chunks, nc},
+      chunks = SplitBy[Transpose[{elems, Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk]}], Last][[All, All, 1]];
+      nc = Length[chunks];
+(* Each chunk is a FLAT braced-init returned by its own function, not one push_back per element.
+   The push_back form costs ~14 characters of boilerplate per element, which on the flat index
+   vectors (tens of thousands of bare integers) inflated the TU by ~47% and cost 67% more compile
+   time — the braced-init keeps the original text density while still bounding each function.
+   A single chunk skips the concatenation wrapper entirely, so small tables are emitted exactly as
+   they were before. *)
+      {
+        If[nc === 1,
+          "static " <> ret <> " " <> name <> "(){ return {" <> StringRiffle[First[chunks], ","] <> "}; }\n",
+          StringJoin[
+            MapIndexed["static " <> ret <> " " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(){ return {" <> StringRiffle[#1, ","] <> "}; }\n"&, chunks],
+            "static " <> ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> ");\n" <>
+              StringJoin[Table["  { " <> ret <> " c = " <> name <> "_c" <> ToString[k - 1] <> "(); o.insert(o.end(), std::make_move_iterator(c.begin()), std::make_move_iterator(c.end())); }\n", {k, nc}]] <>
+              "  return o; }\n"]],
+        name <> "()"}]];
 
 (* the same over every net of one family (dnet/lnet/dch/dsl); returns {flatDefs, declString}. *)
 
@@ -787,6 +850,8 @@ colFacG[ntSUNDiagAdj[n_, a_, b_, spec_, scale_], ids_] :=
 colFacG[e_, _] := (
     Message[MakeNTKernel::colleak, Short[e, 6]];
     Abort[]);
+
+(* NOT memoised — see the note on compileDirac above; caching it was measured a net loss. *)
 
 compileColG[e_, ids_] := Module[
     {
@@ -1111,7 +1176,7 @@ $ntDressResolve = Identity;
 
 $dsCache = <||>;
 
-dressedSlotStr[gf : ntDressedNum[_, _, _], env_] := With[{h = Hash[{gf, env}]},
+dressedSlotStr[gf : ntDressedNum[_, _, _], env_] := With[{h = Hash[{gf, $ctCtx}]},
     Lookup[$dsCache, h, $dsCache[h] = dressedSlotStrBody[gf, env]]];
 
 (* Returns the LIST of per-option "DSlotOpt{…}" strings (NOT the wrapped "DSlot{…}"). The generator
@@ -1168,8 +1233,12 @@ orderOpenChain[facs_, din_] :=
       prevLabel = exitLabel; cur = First[nexts]];
     out];
 
+(* Same keying as compileTInv (see there): labels resolved through `ids`, generation-fixed context in
+   $ctCtx. The old key also OMITTED `mask` and `nc` while taking them as arguments — harmless while
+   the cache lived exactly one generation, but it does not (see the reset in mkGenerateKernel), so a
+   later flow with a different mask/nc could have hit a stale entry. $ctCtx closes that. *)
 $dslCache = <||>;
-diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, mask_, nc_] := With[{h = Hash[{gf, ids, env}]},
+diracSlotStr[gf : ntDiracSlot[_, _, _, _], ids_, env_, mask_, nc_] := With[{h = Hash[{ntCanonIds[gf, ids, env], $ctCtx}]},
     Lookup[$dslCache, h, $dslCache[h] = diracSlotStrBody[gf, ids, env, mask, nc]]];
 
 (* Returns the LIST of per-option "DSlotOpt{…}" strings (see dressedSlotStrBody): the generator
@@ -1221,6 +1290,16 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, mask_, nc_]
      4. compile the Lorentz rest separately (restCompiled = {restStr, scalar}) and return the Dirac
         core, scalar and rest SEPARATELY so the contraction stays deferred (rest emitted once, shared
         across a colour group). A dressed chain returns the ntDressedCore[chain, slots] marker instead. *)
+
+(* NOT MEMOISED — measured dead end, do not retry. compileDirac is the single hottest helper in the
+   net-build (476296 calls / 110 s of 144 s on the four-quark hPhiL), and the downstream CSE reporting
+   only 1327 distinct Dirac nets makes it look like almost pure recomputation. It is not: those 1327
+   are distinct at the EMITTED-STRING level, several processing steps downstream, and genuinely
+   different inputs converge on them. Caching on the canonicalised arguments (the same key that gave
+   compileTInv a 13x collapse) yields only 221876 distinct keys out of 476296 calls — 2.1x — and the
+   per-call ntCanonIds ReplaceAll + Hash over a large factor list then costs MORE than the 2.1x saves:
+   net-build 143.8 s -> 162.3 s. compileColG collapses better (82093 -> 15177) but is only 13.8 s to
+   begin with and did not pay for itself either. *)
 
 compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
     {diracFacs, loops, loopStrs, loopStrsBare, nEmptyLoops, slashVecs = {}, tokenOf, restFacs, restCompiled, legStr, sigStr, slots = {}, slotN = 0, dressed, vecOf},
@@ -1364,7 +1443,19 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
    Cartesian product of the options into one single-option dressed sub-term per combination, so each
    combination becomes an ordinary trace that dedups across nets and contracts over phase A's flat
    parallel work list — instead of C++ dress_collect enumerating the 3ⁿ combinations serially per net. *)
-      Module[{chain = "std::vector<DChainTok>{" <> StringRiffle[loopStrs, ", dtfix(dloopsep()), "] <> "}"},
+(* A token-free (all-δ, collapsed) loop contributes an EMPTY segment. The bare branch below deletes
+   those and compensates with 4^nEmptyLoops, but the dressed chain must keep every SEPARATOR — the
+   runtime derives nCollapsed from the marker count (`nloops = 1 + #LoopSep` in dress_enumerate,
+   minus the segments split_loops actually yields, which skips empty ones) and restores tr(1)=4 per
+   collapsed loop. So drop the empty segment's TEXT while keeping its separators: riffle first, then
+   delete the empties, which yields two ADJACENT `dtfix(dloopsep())` tokens for a collapsed loop.
+   StringRiffle over a list containing "" instead emits `…, dtfix(dloopsep()), , dtfix(dloopsep()), …`
+   — a stray empty element, which is a C++ syntax error in leading/middle position (it is only a legal
+   trailing comma in last position, which is why this stayed latent). The comment above the bare
+   branch predicted exactly this: it becomes reachable as soon as a dressed component can contain a
+   token-free loop, which a four-quark/meson-dressed quark line does. Non-empty cases are unchanged
+   character-for-character. *)
+      Module[{chain = "std::vector<DChainTok>{" <> StringRiffle[DeleteCases[Riffle[loopStrs, "dtfix(dloopsep())"], ""], ", "] <> "}"},
         {ntDressedCore[chain, slots], restCompiled[[2]], restCompiled[[1]]}],
       Module[{core = "DiracNet{" <> StringRiffle[loopStrsBare, ", dloopsep(), "] <> "}"},
         {core, restCompiled[[2]] * 4^nEmptyLoops, restCompiled[[1]]}]]];
@@ -1441,7 +1532,38 @@ polyFrameSpec[frame_] := Module[{defs = <||>, vals, rules = {}, polyFrame},
         defs[s] = Sin[a];
         AppendTo[rules, Sin[a] -> s]],
       {a, DeleteDuplicates @ Cases[vals, Sin[a_Symbol] :> a, Infinity]}];
-    polyFrame = Association @ Thread[Keys[frame] -> (vals /. rules)];
+    polyFrame = vals /. rules;
+(* GENERAL radicals. The rewrites above only catch the shapes the symmetric-point frames happen to
+   produce: Sqrt[1-c^2] for a bare symbol c, and trig of a bare angle. An arbitrary algebraic frame
+   produces radicals of COMPOSITE arguments -- e.g. the (S0,S1,SPhi) three-point frame, whose
+   magnitudes are Sqrt[S0^2 (1 - S1 Sin[SPhi])] and whose Q-k opening angle brings a
+   1/Sqrt[1 - S1^2 Sin[SPhi]^2]. Those survive to numericComponents, which then rejects the frame
+   outright ("fractional power of a symbol remains") -- so any such frame was simply unusable.
+
+   A radical is just a scalar function of the runtime coordinates, exactly like the sin symbols
+   above, so give each remaining one a fresh symbol and record its closed form in `defs`; the kernel
+   fills it via cppFlat, which emits the sqrt inline. One symbol per distinct (base, exponent) pair
+   so that negative half-powers become plain symbols too rather than 1/poly, keeping the components
+   polynomial as numericComponents requires.
+
+   ReplaceAll (not ReplaceRepeated) is what makes nesting safe: it rewrites the OUTERMOST radical
+   and does not descend into the replacement, so a nested radical stays inside the recorded closed
+   form and is emitted as part of that one C++ expression. *)
+    Module[{n = 1, radSeen = <||>},
+      polyFrame =
+        polyFrame /. (pw : Power[b_, _Rational] /; ! NumericQ[b]) :>
+          (If[! KeyExistsQ[radSeen, pw],
+             With[{new = Symbol["ntRad$" <> ToString[n++]]},
+               radSeen[pw] = new;
+(* Record the CLOSED FORM in the raw runtime coordinates, not in the symbols minted above. By this
+   point the radical is expressed in ntSin$/ntCos$/ntSinA$, and `vfill` emits a def verbatim via
+   cppFlat -- so leaving them in produces C++ that names another fill slot instead of computing it:
+       f[11] = sqrt(1. - ntSinA$SPhi * S1);   // 'ntSinA$SPhi' was not declared in this scope
+   Those symbols are fill slots, not variables, and only the ones appearing in the COMPONENTS get a
+   slot at all. Resolving `defs` here keeps each definition self-contained. *)
+               defs[new] = pw //. Normal[defs]]];
+           radSeen[pw])];
+    polyFrame = Association @ Thread[Keys[frame] -> polyFrame];
     {polyFrame, defs}];
 
 (* Whether `frame` matches the unit-loop spec's assumption: every momentum is either an external
@@ -1511,7 +1633,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
         PRINTS the committed straight-line kernel header. No reduce/rebase/ibp/sp-kinematics. *)
 
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False] :=
-  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl,
+  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
     chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds},
     str[x_] := ToString[x];
 (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
@@ -1580,7 +1702,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    phase B: fold each net's traces as a balanced tree). Host-only (it spawns threads) and MAIN-TU
    ONLY — the net-builder units are compiled -fno-exceptions and must not see it. *)
         "#include \"numtracer/numeric/trace_fold.hpp\"\n",
-        "#include <iostream>\n#include <string>\n#include <utility>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
+        "#include <iostream>\n#include <string>\n#include <utility>\n#include <iterator>\n#include <vector>\n#include <array>\n#include <cstdlib>\n",
         "#include <thread>\n#include <atomic>\n#include <mutex>\n#include <chrono>\n#include <cstdio>\n#include <algorithm>\n#include <system_error>\n",
         "#include <unistd.h>\n#if defined(__GLIBC__)\n#include <malloc.h>\n#endif\n",
 (* Resident set in MB, straight from /proc — so the generator can report its OWN peak rather than
@@ -1591,7 +1713,28 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         "namespace numtracer::network {\n",
         tmpl,
         "}\n",
-        "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n"];
+        "using namespace numtracer::network;\nusing namespace numtracer::numeric;\n",
+(* ---- colour-net table, as TOP-LEVEL chunk functions rather than a braced-init inside main() ----
+   The distinct colour nets are one `SUNNet{sun3.T(..), ..}` constructor-call literal each, and on a
+   flow with a large colour graph the table dwarfs everything else in the main TU (measured: 6.28 MB
+   of a 9.94 MB TU, 15226 distinct nets). Left inside main() that made the ONE optimised TU
+   pathological — clang++ -O1 did not finish in an hour, and the -O0 fallback then overflowed the
+   8 MB stack on the same oversized frame, so the generator could be neither compiled nor run.
+   The optimiser's blowup is per-FUNCTION, so chunking the table into ordinary top-level functions
+   (the same shape ntChunkDef already uses for the net builders) keeps main() small and each chunk
+   well inside what -O1 handles. The SUNEnvs are function-local: they exist only to build these
+   literals, and per-chunk locals keep the units free of global constructors.
+   Element order is preserved, so the assembled vector is element-for-element what the braced-init
+   produced — and push_back moves each temporary instead of copying it. *)
+        With[{uCol = DeleteDuplicates[colourNets]},
+          If[uCol === {},
+            "static std::vector<SUNNet> ntColNets(){ return {}; }\n",
+            Module[{envDecl, chunks},
+              envDecl = StringJoin["SUNEnv sun" <> # <> "(" <> # <> "); "& /@ DeleteDuplicates @ Flatten @ StringCases[uCol, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]];
+              chunks = SplitBy[Transpose[{uCol, Ceiling[Accumulate[(StringLength /@ uCol) + 2] / $ntDefChunk]}], Last][[All, All, 1]];
+              StringJoin[
+                MapIndexed["static void ntColNets_c" <> ToString[#2[[1]] - 1] <> "(std::vector<SUNNet>& o){ " <> envDecl <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}\n"&, chunks],
+                "static std::vector<SUNNet> ntColNets(){ std::vector<SUNNet> o; o.reserve(" <> ToString[Length[uCol]] <> "); " <> StringJoin[Table["ntColNets_c" <> ToString[k - 1] <> "(o); ", {k, Length[chunks]}]] <> "return o; }\n"]]]]];
     unitPre =
       "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <> "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
 (* dressed nets emit dch<i>()/dsl<i>() builders here (the big DChainTok/DSlot literals — moved OFF
@@ -1966,8 +2109,14 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                       With[{scaPos = AssociationThread[distinctScalarRows -> Range[Length[distinctScalarRows]] - 1], drRowPos = AssociationThread[distinctDressRows -> Range[Length[distinctDressRows]] - 1]},
                         StringJoin[
                           "  const size_t NNET = " <> str[Length[netTerms]] <> ";\n",
-                          "  std::vector<std::vector<int>> sidxU = {" <> StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctIdxRows, ","] <> "};\n",
-                          "  std::vector<int> sidxR = {" <> StringRiffle[str /@ (idxPos /@ idxRows), ","] <> "};\n",
+(* the four big index/scalar tables move to top-level chunk functions (see ntBigTableFns): together
+   with colnets they are what makes main() large enough to break the compiler. *)
+                          With[{t = ntBigTableFns["ntSidxU", "std::vector<std::vector<int>>", ("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctIdxRows]},
+                            tableDefs = tableDefs <> t[[1]];
+                            "  std::vector<std::vector<int>> sidxU = " <> t[[2]] <> ";\n"],
+                          With[{t = ntBigTableFns["ntSidxR", "std::vector<int>", str /@ (idxPos /@ idxRows)]},
+                            tableDefs = tableDefs <> t[[1]];
+                            "  std::vector<int> sidxR = " <> t[[2]] <> ";\n"],
                           "  std::vector<std::vector<int>> sidx(NNET);\n",
                           "  for(size_t i=0;i<NNET;++i) sidx[i]=sidxU[sidxR[i]];\n",
                           "  std::vector<Cx> dscV = {" <>
@@ -1977,8 +2126,12 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                                 ] /@ distinctScalars,
                               ","
                             ] <> "};\n",
-                          "  std::vector<std::vector<int>> dscU = {" <> StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctScalarRows, ","] <> "};\n",
-                          "  std::vector<int> dscR = {" <> StringRiffle[str /@ (scaPos /@ scaIdxRows), ","] <> "};\n",
+                          With[{t = ntBigTableFns["ntDscU", "std::vector<std::vector<int>>", ("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctScalarRows]},
+                            tableDefs = tableDefs <> t[[1]];
+                            "  std::vector<std::vector<int>> dscU = " <> t[[2]] <> ";\n"],
+                          With[{t = ntBigTableFns["ntDscR", "std::vector<int>", str /@ (scaPos /@ scaIdxRows)]},
+                            tableDefs = tableDefs <> t[[1]];
+                            "  std::vector<int> dscR = " <> t[[2]] <> ";\n"],
                           "  std::vector<std::vector<Cx>> dsc(NNET);\n",
                           "  for(size_t i=0;i<NNET;++i){ const auto& r=dscU[dscR[i]]; dsc[i].reserve(r.size());\n",
                           "    for(int k: r) dsc[i].push_back(dscV[k]); }\n",
@@ -1992,7 +2145,9 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                               StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctDressMonos, ","] <> "};\n" <>
                             "  std::vector<std::vector<int>> sdrU = {" <>
                               StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ distinctDressRows, ","] <> "};\n" <>
-                            "  std::vector<int> sdrR = {" <> StringRiffle[str /@ (drRowPos /@ drIdxRows), ","] <> "};\n" <>
+                            With[{t = ntBigTableFns["ntSdrR", "std::vector<int>", str /@ (drRowPos /@ drIdxRows)]},
+                              tableDefs = tableDefs <> t[[1]];
+                              "  std::vector<int> sdrR = " <> t[[2]] <> ";\n"] <>
                             "  std::vector<std::vector<DMono>> sdr(NNET);\n" <>
                             "  for(size_t i=0;i<NNET;++i){ const auto& r=sdrU[sdrR[i]]; sdr[i].reserve(r.size());\n" <>
                             "    for(int k: r) sdr[i].push_back(sdrV[k]); }\n",
@@ -2071,18 +2226,22 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    Phase B therefore needs `groups`, `colv`, `g` and `realOnly`, which are only declared further
    down — hence the move. `tB` still starts here so the reported phase-B time is comparable. *)
                   "  auto tB=std::chrono::steady_clock::now();\n"}]],
-(* one SUNEnv per distinct group rank appearing in the colour nets (colFacG emits `sun<n>.` factors),
-   so the rank is written once. Scan the assembled net strings for the `sun<digits>.` tokens. *)
-            StringJoin["  SUNEnv sun" <> # <> "(" <> # <> ");\n"& /@ DeleteDuplicates @ Flatten @ StringCases[colourNets, "sun" ~~ r : DigitCharacter.. ~~ "." :> r]],
-(* colnets HASH-CONSED for the same reason (0.57 MB -> 0.115 MB on the Fierz gate: 3470 rows,
-   719 distinct). Two nets that differ only in their Lorentz/Dirac part share a colour net, so
-   the duplication is structural. This also collapses the sun_value_cx calls to the distinct
-   nets — 4.8x fewer on that flow — which is a RUN saving on top of the compile one. *)
+(* colnets HASH-CONSED (0.57 MB -> 0.115 MB on the Fierz gate: 3470 rows, 719 distinct). Two nets
+   that differ only in their Lorentz/Dirac part share a colour net, so the duplication is structural.
+   This also collapses the sun_value_cx calls to the distinct nets — 4.8x fewer on that flow — which
+   is a RUN saving on top of the compile one.
+   The table itself is built by ntColNets() in the preamble (see there): kept inside main() it made
+   the optimised TU uncompilable on a large colour graph. The SUNEnvs moved with it. *)
             With[{uCol = DeleteDuplicates[colourNets]},
               With[{colPos = AssociationThread[uCol -> Range[Length[uCol]] - 1]},
-                StringJoin["  std::vector<SUNNet> colnetsU = {" <> StringRiffle[uCol, ","] <> "};\n", "  std::vector<int> colR = {" <> StringRiffle[str /@ (colPos /@ colourNets), ","] <> "};\n", "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n", "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n", "  std::vector<numtracer::Cx> colv(" <> str[nNet] <> ");\n", "  for(int i=0;i<" <> str[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]
+                StringJoin["  std::vector<SUNNet> colnetsU = ntColNets();\n",
+                  With[{t = ntBigTableFns["ntColR", "std::vector<int>", str /@ (colPos /@ colourNets)]},
+                    tableDefs = tableDefs <> t[[1]];
+                    "  std::vector<int> colR = " <> t[[2]] <> ";\n"], "  std::vector<numtracer::Cx> colvU(colnetsU.size());\n", "  for(size_t i=0;i<colnetsU.size();++i) colvU[i]=sun_value_cx(colnetsU[i]);\n", "  std::vector<numtracer::Cx> colv(" <> str[nNet] <> ");\n", "  for(int i=0;i<" <> str[nNet] <> ";++i) colv[i]=colvU[colR[i]];\n"]
               ]],
-            "  std::vector<std::vector<int>> groups = {" <> StringRiffle[("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ groups, ","] <> "};\n",
+            With[{t = ntBigTableFns["ntGroups", "std::vector<std::vector<int>>", ("{" <> StringRiffle[str /@ #, ","] <> "}")& /@ groups]},
+              tableDefs = tableDefs <> t[[1]];
+              "  std::vector<std::vector<int>> groups = " <> t[[2]] <> ";\n"],
             "  GlobalEnv g;\n",
             "  std::vector<GenProg> progs;\n",
 (* realOnly[gi]: this group's dressing coeff is real, so only Re(trace) is consumed -> emit a
@@ -2172,6 +2331,10 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
               "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], \"tr\"+std::to_string(i), decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), \"tr\"+std::to_string(i)); std::cout << s; }\n" <> "      else { const char* rt = (s.find(\"std::complex<double> tr\")!=std::string::npos) ? \" std::complex<double> \" : \" double \";\n" <> "        std::cout << decor << rt << \"tr\" << i << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
             ],
             "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n  return 0;\n}\n"}]];
+(* The table builders are collected DURING the StringJoin above (each With writes into tableDefs as
+   its argument is evaluated), so they can only be prepended here — putting `tableDefs` inside that
+   StringJoin would splice in an empty string, since Mathematica evaluates the arguments in order. *)
+    main = tableDefs <> main;
     {pre, units, decl, main}];
 
 (* ---- whole kernel (boilerplate delegated to FunKit) ------------------------- *)
@@ -2962,10 +3125,17 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
     lorFacOf = {};
     factorCompOf = <||>;(* factor net indices, per-net factor-id list, net->factor-id *)
     $ctCache = <||>;(* clear the compileTInv memo cache for this generation *)
-(* dressedSlotStr / orderDiracLoops memos: both depend on generation-fixed state ($ntDressResolve,
-   env), so they MUST be cleared here alongside $ctCache. *)
+(* dressedSlotStr / diracSlotStr / orderDiracLoops memos: all depend on generation-fixed state
+   ($ntDressResolve, env, mask, nc, frame), so they MUST be cleared here alongside $ctCache.
+   $dslCache used to be cleared only in the post-generation block below, which sits inside
+   `If[RunGenerator && !offline, ...]` — i.e. never under the DiFfRG default (Offline -> True), so it
+   accumulated across every flow of a multi-flow script. *)
     $dsCache = <||>;
     $odCache = <||>;
+    $dslCache = <||>;
+(* the generation-fixed half of every net-builder memo key, hashed ONCE here instead of on each
+   (recursive) call. Covers everything those builders read besides the expression and its ids. *)
+    $ctCtx = Hash[{env, mask, nc, frame}];
     resetDiagDr[];(* clear the per-component diagonal-dressing registry for this generation *)
     resetDr[];(* clear the scalar-dressing (ntDressedNum) registry for this generation *)
 (* frame resolver for dressed-numerator option coefficients (compileDirac → dressedSlotStr): the same
@@ -2974,7 +3144,13 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
       Function[s,
         s /. {ntSP[x_, y_] :> resolveComponents[x, frame] . resolveComponents[y, frame], ntSPS[x_, y_] :> Rest[resolveComponents[x, frame]] . Rest[resolveComponents[y, frame]], ntVec[q_, ii_Integer] :> resolveComponents[q, frame][[ii + 1]]}
       ];
-    Module[{diagData = {}},
+(* The seven net-record accumulators are BAGS, not lists. `Append` on a list copies the whole list,
+   so appending N records to seven of them is O(N^2) with N the NET count — which on a dense flow is
+   an order of magnitude above the diagram count (2591 diagrams -> 82092 nets), and the copies also
+   churn GBs through the allocator. Internal`Bag amortises the append; the lists are materialised
+   once, after the loop. Nothing reads the accumulators DURING the loop except for the running net
+   index, which `nNetAcc` now carries. *)
+    Module[{diagData, bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[], bColToks = Internal`Bag[], bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[], nNetAcc = 0},
       ntLog[
         "[prof] per-diagram net-build (",
         Length[k["Diagrams"]],
@@ -3061,15 +3237,16 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
                     (* rec = {colNet, cores, dData, restList, lorFac(None|{ids..}), factorId(None|id)}; returns net idx *)
                     appendRec =
                       Function[rec,
-                        Module[{ni = Length[invNets]},
-                          invNets = Append[invNets, rec[[2]]];
-                          invRest = Append[invRest, rec[[4]]];
-                          colourNets = Append[colourNets, rec[[1]]];
-                          colToks = Append[colToks, colTok];
-                          diagData = Append[diagData, rec[[3]]];
-                          lorFacOf = Append[lorFacOf, rec[[5]]];
+                        Module[{ni = nNetAcc},
+                          Internal`StuffBag[bInvNets, rec[[2]]];
+                          Internal`StuffBag[bInvRest, rec[[4]]];
+                          Internal`StuffBag[bColourNets, rec[[1]]];
+                          Internal`StuffBag[bColToks, colTok];
+                          Internal`StuffBag[bDiagData, rec[[3]]];
+                          Internal`StuffBag[bLorFacOf, rec[[5]]];
+                          nNetAcc = ni + 1;
                           If[rec[[6]] =!= None,
-                            factorNets = Append[factorNets, ni];
+                            Internal`StuffBag[bFactorNets, ni];
                             factorCompOf[ni] = rec[[6]]];
                           ni]];
                     If[nDir + Boole[hasLor] <= 1,
@@ -3106,7 +3283,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
                             Append[diracComps, {{"SUNNet{}", {#[[1]]}, #[[2]], {{"", 1}}}}&[compileTInv[Times @@ pureLorAcc, diag["Ids"], env, mask, nc]]],
                             diracComps];
                         Do[
-                          Module[{compEntries = factorComps[[ci]], fid = Length[invNets]},
+                          Module[{compEntries = factorComps[[ci]], fid = nNetAcc},
                             scalarleakCheck[compEntries];
                             AppendTo[factorIds, fid];
                             Do[appendRec[{e[[1]], e[[2]], 1, ({#[[1]], #[[2]] e[[3]]}&) /@ e[[4]], None, fid}], {e, compEntries}]
@@ -3121,10 +3298,18 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
                       )]]]],
               k["Diagrams"]]],
         " s"];
+      (* materialise the bags once — everything downstream indexes these as plain lists *)
+      invNets = Internal`BagPart[bInvNets, All];
+      invRest = Internal`BagPart[bInvRest, All];
+      colourNets = Internal`BagPart[bColourNets, All];
+      colToks = Internal`BagPart[bColToks, All];
+      diagData = Internal`BagPart[bDiagData, All];
+      lorFacOf = Internal`BagPart[bLorFacOf, All];
+      factorNets = Internal`BagPart[bFactorNets, All];
 (* memo sizes: the net-build's cost is dominated by the DISTINCT Dirac/Lorentz structures, not the
    call count (a dense flow calls these tens of thousands of times for a few hundred distinct
    results). If a flow ever shows these growing with the call count, a memo has stopped hitting. *)
-      ntLog["[prof]   memo sizes: compileTInv ", Length[$ctCache], " | orderDiracLoops ", Length[$odCache], " | dressedSlotStr ", Length[$dsCache]];
+      ntLog["[prof]   memo sizes: compileTInv ", Length[$ctCache], " | orderDiracLoops ", Length[$odCache], " | dressedSlotStr ", Length[$dsCache], " | diracSlotStr ", Length[$dslCache], " (nets ", nNetAcc, ")"];
 (* ---- per-component diagonal dressings (ntSUNDiag{Fund,Adj}) ----------------------------------
    A diagram whose colour net carries a diag factor folds (via the validated C++ engine,
    sun_value_dressed, run through the build-time seam) to a SUNPoly Σ_t coeff_t Π D^{dr}, where

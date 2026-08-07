@@ -1,0 +1,28 @@
+{
+	"name":"gen",
+	"class":"ZAqbq7_147_num_kernel",
+	"namespace":"zaqbq7_147_num",
+	"gen_dir":".",
+	"generator":"gen_qcd_aqbq147_7_num.cpp",
+	"units":[
+		"gen_qcd_aqbq147_7_num_u0.cpp",
+		"gen_qcd_aqbq147_7_num_u1.cpp",
+		"gen_qcd_aqbq147_7_num_u2.cpp",
+		"gen_qcd_aqbq147_7_num_u3.cpp",
+		"gen_qcd_aqbq147_7_num_u4.cpp",
+		"gen_qcd_aqbq147_7_num_u5.cpp",
+		"gen_qcd_aqbq147_7_num_u6.cpp",
+		"gen_qcd_aqbq147_7_num_u7.cpp"
+	],
+	"decorator":"static inline",
+	"main_opt":"-O1",
+	"full_parallel":false,
+	"maxw":0,
+	"maxw_b":0,
+	"complex":true,
+	"kernels":"ZAqbq7_147_num_kernels.hh",
+	"probe":"probe_zaqbq7_147_num.cpp",
+	"verdict_macro":"NT_ZAQBQ7_147_NUM_VERDICT",
+	"verdict":"numtrace_verdict.hh",
+	"generated":1
+}

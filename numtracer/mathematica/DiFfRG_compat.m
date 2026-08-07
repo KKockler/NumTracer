@@ -149,7 +149,7 @@ MakeNTKernelDiFfRG::noparams = "\"Parameters\" is required (the DiFfRG kernelPar
 
 MakeNTKernelDiFfRG::nointeg = "\"Integrator\" and \"IntegrationVariables\" are required.";
 
-MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator type `1`; using the first.";
+MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator type `1`; emitting the dressing parameters as `const auto&`.";
 
 (* Positional second argument: the constant, mirroring DiFfRG's MakeKernel[kernelExpr, constExpr, ...].
    `constExpr` is a plain Mathematica expression in p/k and the dressing names (e.g. ZA[p]), NOT an
@@ -201,8 +201,11 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
           First[dressTys]
         ,
         _,
-          Message[MakeNTKernelDiFfRG::mixtype, dressTys];
-          First[dressTys]
+(* Mixed interpolator types are legitimate: a flow may read most dressings off 1-D momentum grids
+   and one or two off a 3-D vertex grid (S0,S1,SPhi). Automatic emits `const auto&`, which binds all
+   of them; taking the first would declare the 3-D grid as a 1-D spline and the kernel would fail to
+   compile at the first three-argument call. *)
+          Automatic
       ];
 (* scalar "double" params (etaPiL, d1V, rhoL, ...) beyond k/p: these are forwarded by DiFfRG's
    integrator between k and the interpolators, so NumTracer must declare them in the kernel /
@@ -268,10 +271,36 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
     kernelFile = FileNameJoin[{kernelDir, "kernel.hh"}];
     tracesFile = FileNameJoin[{kernelDir, "kernels.hh"}];
 (* (1) DiFfRG scaffold FIRST: lays down flows/<name>/ incl. the integrator TUs + a placeholder kernel.hh.
-   Its per-file Prints are captured and replaced by one NumTracer line (see ntReportDiFfRG). *)
-    ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"]]]];
-    (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel *)
-    MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+   Its per-file Prints are captured and replaced by one NumTracer line (see ntReportDiFfRG).
+
+   flowDir is BLOCKED across the call. DiFfRG's MakeKernel has no output-directory option — it writes to
+   FileNameJoin[DiFfRG`CodeTools`Directory`flowDir, name] — so without this our "FlowDirectory" option
+   would redirect only NumTracer's own writes (step 2) while the scaffold silently kept landing in the
+   session-global flow directory. That is a live footgun, not a hypothetical: emitting one flow into a
+   scratch directory then overwrote the REAL committed kernel.hh of the same-named flow in the default
+   tree with the `body = 0.` placeholder — valid C++ that contributes zero to the flow, with nothing
+   saying so. Scoping it makes "FlowDirectory" mean what it says for both halves of the emission. *)
+    Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
+      DiFfRG`CodeTools`Directory`flowDir = flowDir;
+      ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"]]]]];
+(* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel.
+
+   Guarded, because step (1) has already written a PLACEHOLDER kernel.hh whose body is literally
+   `0.`. If step (2) does not complete — a leak detected at the emission chokepoint, a singular Gram,
+   an interrupt, an OOM — that placeholder is what stays on disk, and it is valid C++: the flow
+   builds cleanly and contributes ZERO to the RG flow, with nothing anywhere saying so. A silent zero
+   is the worst failure this pipeline can produce, so on any non-completion we replace the file with
+   a `#error`, which turns it into a loud compile failure naming the flow. The manifest is not
+   written in that case either (MakeNTKernel writes it last), so `make numtrace` also still owes the
+   kernels. *)
+    If[TrueQ @ CheckAbort[
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         True,
+         False],
+      Null,
+      Export[kernelFile, "#error NumTracer generation for flow \"" <> name <> "\" did not complete; this kernel.hh is the DiFfRG placeholder (body 0.), not a traced kernel. Re-run the generation and fix the reported error.\n", "Text"];
+      Print["[NumTracer] ", name, ": generation ABORTED — ", kernelFile, " poisoned with #error so the build cannot silently use the zero placeholder."];
+      Abort[]];
     kernelFile
   ];
 
