@@ -3,6 +3,10 @@
 #include <cmath>
 #include <complex>
 namespace DiFfRG { namespace etapil_num {
+#ifndef NT_TRACE_COMPLEX
+#define NT_TRACE_COMPLEX std::complex<double>
+#endif
+using nt_complex_t = NT_TRACE_COMPLEX;
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = dress(0)
@@ -21,74 +25,77 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[5] = cos1;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = -18;
   const double s1 = f[2];
   const double s2 = s1*s1;
-  const double s3 = s0*s2;
+  const double s3 = (-36)*s2;
   const double s4 = f[1];
   const double s5 = s4*s4;
   const double s6 = s3*s5;
-  const double s7 = 18;
   const double s8 = f[4];
   const double s9 = s8*s8;
-  const double s10 = s7*s9;
+  const double s10 = (36)*s9;
   const double s11 = f[3];
   const double s12 = s11*s11;
-  const double s13 = s10*s12;
   const double s14 = f[0];
   const double s15 = s14*s14;
   const double s16 = s6*s15;
-  const double s17 = s13+s16;
+  const double s17 = fma(s10, s12, s16);
   const double s18 = s12*s17;
   return s18;
 }
-static inline std::complex<double> tr1([[maybe_unused]] const double *f) {
+static inline nt_complex_t tr1([[maybe_unused]] const double *f) {
   const double s0 = f[4];
   const double s1 = f[3];
   const double s2 = s1*s1;
   const double s3 = f[2];
   const double s4 = f[1];
   const double s5 = f[0];
-  const double s6 = -36;
-  const double s7 = s0*s6;
+  const double s7 = s0*(36);
   const double s8 = s2*s7;
   const double s9 = s3*s8;
   const double s10 = s4*s9;
   const double s11 = s5*s10;
-  return std::complex<double>{0.0, s11};
+  return nt_complex_t{0.0, s11};
 }
-static inline double tr2([[maybe_unused]] const double *f) {
-  const double s0 = -0.017999999999999999;
-  const double s1 = 18;
+static inline nt_complex_t tr2([[maybe_unused]] const double *f) {
+  const double s0 = f[4];
+  const double s1 = f[3];
+  const double s2 = s1*s1;
+  const double s3 = f[2];
+  const double s4 = f[1];
+  const double s5 = f[0];
+  const double s7 = s0*(-36);
+  const double s8 = s2*s7;
+  const double s9 = s3*s8;
+  const double s10 = s4*s9;
+  const double s11 = s5*s10;
+  return nt_complex_t{0.0, s11};
+}
+static inline double tr3([[maybe_unused]] const double *f) {
   const double s2 = f[3];
-  const double s3 = s1*s2;
   const double s4 = f[5];
-  const double s5 = s0*s4;
-  const double s6 = s3+s5;
+  const double s5 = (0.035999999999999997)*s4;
+  const double s6 = fma((-36), s2, s5);
   const double s7 = f[4];
   const double s8 = s7*s7;
   const double s9 = s6*s8;
-  const double s10 = -18;
   const double s11 = f[2];
   const double s12 = s11*s11;
-  const double s13 = s10*s12;
+  const double s13 = (36)*s12;
   const double s14 = f[1];
   const double s15 = s14*s14;
   const double s16 = s13*s15;
   const double s17 = f[0];
   const double s18 = s17*s17;
-  const double s19 = s16*s18;
   const double s20 = s2*s9;
-  const double s21 = s19+s20;
-  const double s22 = 0.017999999999999999;
-  const double s23 = s4*s22;
+  const double s21 = fma(s16, s18, s20);
+  const double s23 = s4*(-0.035999999999999997);
   const double s24 = s12*s23;
   const double s25 = s15*s24;
-  const double s26 = s18*s25;
   const double s27 = s2*s21;
-  const double s28 = s26+s27;
+  const double s28 = fma(s18, s25, s27);
   const double s29 = s2*s28;
   return s29;
 }
-static inline double tr3(const double *f) { return tr2(f); }
+static inline double tr4(const double *f) { return tr3(f); }
 }} // namespace DiFfRG::etapil_num

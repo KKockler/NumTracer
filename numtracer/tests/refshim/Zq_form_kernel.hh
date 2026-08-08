@@ -11,7 +11,8 @@ namespace DiFfRG {
 
     static KOKKOS_FORCEINLINE_FUNCTION auto kernel(const double& l1, const double& cos1, const double& p, const double& k, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& ZA, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& Zq, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& Mq, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& ZAqbq1, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& dtZA, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& dtZq)
     {
-      using namespace DiFfRG;using namespace DiFfRG::compute;const auto _interp1 = RB(powr<2>(k), powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p));
+      using namespace DiFfRG;using namespace DiFfRG::compute;
+      const auto _interp1 = RB(powr<2>(k), powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p));
       const auto _interp2 = ZA(pow(1. + powr<6>(k),0.16666666666666666667));
       const auto _interp3 = ZA(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
       const auto _interp4 = ZAqbq1(0.816496580927726 * sqrt(powr<2>(l1) - cos1 * l1 * p + powr<2>(p)));
@@ -40,7 +41,7 @@ namespace DiFfRG {
       const auto _cse2 = _cse1 + powr<2>(l1) + powr<2>(p);
       const auto _cse3 = sqrt(_cse2);
       const auto _cse4 = powr<-1>(p);
-      return fma(1.333333333333333, _cse3 * _cse4 * _den1 * _den2 * _den3 * _den6 * powr<2>(_interp4) * (_cse3 * _interp18 + _interp17 * _interp8) * (_interp13 * (50. * _interp15 - 50. * _interp2) * powr<6>(k) + _interp14 * _interp2 * (1. + powr<6>(k)) + _interp12 * _interp13 * (1. + 1. * powr<6>(k))) * (-3. * cos1 * l1 + p + 2. * powr<2>(cos1) * p), fma(1.333333333333333, _cse4 * _den3 * _den4 * _den5 * powr<2>(_interp4) * (_interp5 * _interp6 + _interp7 * _interp8 + _interp6 * (-50. * _interp8 + 50. * _interp9)) * (-powr<2>(_interp10) + powr<2>(_interp6) * powr<2>(_interp8) + 2. * _interp11 * _interp6 * _interp8 * l1 + powr<2>(_interp11) * powr<2>(l1)) * (3. * cos1 * powr<2>(l1) - 2. * l1 * p - 4. * powr<2>(cos1) * l1 * p + 3. * cos1 * powr<2>(p)), 0.));
+      return fma(-1.333333333333333, _cse3 * _cse4 * _den1 * _den2 * _den3 * _den6 * powr<2>(_interp4) * (_cse3 * _interp18 + _interp17 * _interp8) * (_interp13 * (50. * _interp15 - 50. * _interp2) * powr<6>(k) + _interp14 * _interp2 * (1. + powr<6>(k)) + _interp12 * _interp13 * (1. + 1. * powr<6>(k))) * (-3. * cos1 * l1 + p + 2. * powr<2>(cos1) * p), fma(1.333333333333333, _cse4 * _den3 * _den4 * _den5 * powr<2>(_interp4) * (_interp5 * _interp6 + _interp7 * _interp8 + _interp6 * (-50. * _interp8 + 50. * _interp9)) * (-powr<2>(_interp10) + powr<2>(_interp6) * powr<2>(_interp8) + 2. * _interp11 * _interp6 * _interp8 * l1 + powr<2>(_interp11) * powr<2>(l1)) * (3. * cos1 * powr<2>(l1) - 2. * l1 * p - 4. * powr<2>(cos1) * l1 * p + 3. * cos1 * powr<2>(p)), 0.));
     }
 
     static KOKKOS_FORCEINLINE_FUNCTION auto constant(const double& p, const double& k, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& ZA, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& Zq, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& Mq, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& ZAqbq1, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& dtZA, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& dtZq)

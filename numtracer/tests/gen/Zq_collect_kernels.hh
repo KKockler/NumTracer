@@ -3,13 +3,17 @@
 #include <cmath>
 #include <complex>
 namespace DiFfRG { namespace zq_collect {
+#ifndef NT_TRACE_COMPLEX
+#define NT_TRACE_COMPLEX std::complex<double>
+#endif
+using nt_complex_t = NT_TRACE_COMPLEX;
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = dress(0)
 //   f[1] = var(0)
 //   f[2] = var(1)
 //   f[3] = var(3)
-//   f[4] = inv(20)
+//   f[4] = inv(12)
 //   f[5] = dress(1)
 //   f[6] = dress(3)
 static inline constexpr int nenv = 7;
@@ -26,61 +30,48 @@ static inline double tr0([[maybe_unused]] const double *f) {
   const double s0 = 16;
   const double s1 = f[1];
   const double s2 = s1*s1;
-  const double s3 = s0*s2;
   const double s4 = f[3];
   const double s5 = s4*s4;
   const double s6 = s0*s5;
-  const double s7 = s3+s6;
+  const double s7 = fma(s0, s2, s6);
   const double s8 = 32;
   const double s9 = f[4];
-  const double s10 = s7*s9;
-  const double s11 = s8+s10;
-  const double s12 = -16;
-  const double s13 = s9*s12;
+  const double s11 = fma(s7, s9, s8);
+  const double s13 = s9*(-16);
   const double s14 = f[0];
   const double s15 = s14*s14;
-  const double s16 = s13*s15;
   const double s17 = f[5];
   const double s18 = s17*s17;
   const double s19 = s11*s18;
-  const double s20 = s16+s19;
+  const double s20 = fma(s13, s15, s19);
   const double s21 = -32;
-  const double s22 = s5*s13;
-  const double s23 = s21+s22;
-  const double s24 = s15*s23;
+  const double s23 = fma(s5, s13, s21);
   const double s25 = s2*s20;
-  const double s26 = s24+s25;
+  const double s26 = fma(s15, s23, s25);
   const double s27 = s18*s21;
-  const double s28 = s2*s27;
   const double s29 = s8*s15;
-  const double s30 = s28+s29;
+  const double s30 = fma(s2, s27, s29);
   const double s31 = s9*s30;
   const double s32 = s4*s31;
-  const double s33 = s1*s32;
   const double s34 = f[2];
   const double s35 = s26*s34;
-  const double s36 = s33+s35;
+  const double s36 = fma(s1, s32, s35);
   const double s37 = s4*s36;
   const double s38 = s1*s37;
   return s38;
 }
-static inline std::complex<double> tr1([[maybe_unused]] const double *f) {
+static inline nt_complex_t tr1([[maybe_unused]] const double *f) {
   const double s0 = f[3];
   const double s1 = f[2];
   const double s2 = f[1];
   const double s3 = f[6];
-  const double s4 = 32;
-  const double s5 = 16;
   const double s6 = s1*s1;
-  const double s7 = s4*s6;
-  const double s8 = s5+s7;
-  const double s9 = -48;
-  const double s10 = s1*s9;
-  const double s11 = s2*s10;
+  const double s8 = fma((-32), s6, (-16));
+  const double s10 = s1*(48);
   const double s12 = s0*s8;
-  const double s13 = s11+s12;
+  const double s13 = fma(s2, s10, s12);
   const double s14 = s3*s13;
   const double s15 = s0*s14;
-  return std::complex<double>{0.0, s15};
+  return nt_complex_t{0.0, s15};
 }
 }} // namespace DiFfRG::zq_collect

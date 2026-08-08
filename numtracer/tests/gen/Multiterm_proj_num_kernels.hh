@@ -14,9 +14,8 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = p;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 4;
   const double s1 = f[2];
-  const double s2 = s0*s1;
+  const double s2 = (4)*s1;
   const double s3 = f[1];
   const double s4 = s2*s3;
   const double s5 = f[0];

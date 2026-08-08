@@ -14,12 +14,10 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = p;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 3;
-  return s0;
+  return (3);
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s0 = 4;
-  return s0;
+  return (4);
 }
 static inline double tr2([[maybe_unused]] const double *f) {
   [[maybe_unused]] const double s0 = 1;

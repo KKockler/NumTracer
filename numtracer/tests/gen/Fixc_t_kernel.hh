@@ -14,7 +14,8 @@ namespace numtracer_kernels
       using namespace numtracer;
       using namespace numtracer::compute;
       double fenv[(numtracer_kernels::fixc_t::nenv) > 0 ? (numtracer_kernels::fixc_t::nenv) : 1];
-      numtracer_kernels::fixc_t::fill(fenv, p0, p, l0, l1, cos1);  return numtracer_kernels::fixc_t::tr0(fenv);
+      numtracer_kernels::fixc_t::fill(fenv, p0, p, l0, l1, cos1);
+      return numtracer_kernels::fixc_t::tr0(fenv);
     }
 
     static inline auto constant(const double& p)

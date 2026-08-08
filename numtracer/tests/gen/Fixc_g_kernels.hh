@@ -4,7 +4,7 @@
 namespace numtracer_kernels { namespace fixc_g {
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
-//   f[0] = var(1)
+//   f[0] = var(0)
 //   f[1] = var(5)
 static inline constexpr int nenv = 2;
 static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] double p, [[maybe_unused]] double l0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1) {
@@ -12,13 +12,11 @@ static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] 
   f[1] = p0;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 1;
-  return s0;
+  return (1);
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s0 = 4;
   const double s1 = f[0];
-  const double s2 = s0*s1;
+  const double s2 = (4)*s1;
   return s2;
 }
 static inline double tr2([[maybe_unused]] const double *f) {

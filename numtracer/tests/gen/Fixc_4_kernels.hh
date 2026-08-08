@@ -5,32 +5,29 @@ namespace numtracer_kernels { namespace fixc_4 {
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(1)
-//   f[1] = var(5)
-//   f[2] = var(0)
-//   f[3] = var(2)
-//   f[4] = var(4)
+//   f[1] = var(2)
+//   f[2] = var(4)
+//   f[3] = var(0)
+//   f[4] = var(5)
 static inline constexpr int nenv = 5;
 static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] double p, [[maybe_unused]] double l0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1) {
-  f[0] = l0;
-  f[1] = p0;
-  f[2] = cos1;
-  f[3] = l1;
-  f[4] = p;
+  f[0] = l1;
+  f[1] = cos1;
+  f[2] = p;
+  f[3] = l0;
+  f[4] = p0;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 4;
-  const double s1 = f[1];
-  const double s2 = s0*s1;
-  const double s3 = -4;
-  const double s4 = f[4];
-  const double s5 = s3*s4;
-  const double s6 = f[3];
-  const double s7 = s5*s6;
-  const double s8 = f[2];
-  const double s9 = s7*s8;
+  const double s1 = f[2];
+  const double s2 = (-4)*s1;
+  const double s3 = f[1];
+  const double s4 = s2*s3;
+  const double s6 = f[4];
+  const double s7 = (4)*s6;
+  const double s8 = f[3];
   const double s10 = f[0];
-  const double s11 = s2*s10;
-  const double s12 = s9+s11;
+  const double s11 = s4*s10;
+  const double s12 = fma(s7, s8, s11);
   return s12;
 }
 }} // namespace numtracer_kernels::fixc_4

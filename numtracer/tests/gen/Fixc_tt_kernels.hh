@@ -8,7 +8,6 @@ static inline constexpr int nenv = 0;
 static inline void fill(double *f, [[maybe_unused]] double p0, [[maybe_unused]] double p, [[maybe_unused]] double l0, [[maybe_unused]] double l1, [[maybe_unused]] double cos1) {
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 4;
-  return s0;
+  return (4);
 }
 }} // namespace numtracer_kernels::fixc_tt

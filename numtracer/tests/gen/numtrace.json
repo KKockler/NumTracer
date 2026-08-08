@@ -1,20 +1,25 @@
 {
 	"name":"gen",
-	"class":"FTProj_num_kernel",
-	"namespace":"ftproj_num",
+	"class":"YM_ZA4_num_kernel",
+	"namespace":"ym_za4_num",
 	"gen_dir":".",
-	"generator":"gen_ftproj_num.cpp",
+	"generator":"gen_ym_za4_num.cpp",
 	"units":[
-		"gen_ftproj_num_u0.cpp",
-		"gen_ftproj_num_u1.cpp",
-		"gen_ftproj_num_u2.cpp"
+		"gen_ym_za4_num_u0.cpp",
+		"gen_ym_za4_num_u1.cpp",
+		"gen_ym_za4_num_u2.cpp",
+		"gen_ym_za4_num_u3.cpp",
+		"gen_ym_za4_num_u4.cpp",
+		"gen_ym_za4_num_u5.cpp",
+		"gen_ym_za4_num_u6.cpp",
+		"gen_ym_za4_num_u7.cpp"
 	],
 	"decorator":"static inline",
 	"main_opt":"-O1",
 	"full_parallel":false,
-	"maxw":0,
+	"maxw":6,
 	"maxw_b":0,
 	"complex":false,
-	"kernels":"FTProj_num_kernels.hh",
+	"kernels":"YM_ZA4_num_kernels.hh",
 	"generated":1
 }

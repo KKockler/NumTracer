@@ -14,7 +14,8 @@ namespace numtracer_kernels
       using namespace numtracer;
       using namespace numtracer::compute;
       double fenv[(numtracer_kernels::epsadj_num::nenv) > 0 ? (numtracer_kernels::epsadj_num::nenv) : 1];
-      numtracer_kernels::epsadj_num::fill(fenv, l1, cos1, cos2, p);  return numtracer_kernels::epsadj_num::tr0(fenv);
+      numtracer_kernels::epsadj_num::fill(fenv, l1, cos1, cos2, p);
+      return numtracer_kernels::epsadj_num::tr0(fenv);
     }
 
     static inline auto constant(const double& p)

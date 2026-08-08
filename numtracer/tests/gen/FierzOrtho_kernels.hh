@@ -13,8 +13,7 @@ static inline double tr0([[maybe_unused]] const double *f) {
 static inline double tr1(const double *f) { return tr0(f); }
 static inline double tr2(const double *f) { return tr0(f); }
 static inline double tr3([[maybe_unused]] const double *f) {
-  const double s0 = 9216;
-  return s0;
+  return (9216);
 }
 static inline double tr4(const double *f) { return tr0(f); }
 static inline double tr5(const double *f) { return tr0(f); }
@@ -29,8 +28,7 @@ static inline double tr13(const double *f) { return tr0(f); }
 static inline double tr14(const double *f) { return tr0(f); }
 static inline double tr15(const double *f) { return tr0(f); }
 static inline double tr16([[maybe_unused]] const double *f) {
-  const double s0 = 165888;
-  return s0;
+  return (165888);
 }
 static inline double tr17(const double *f) { return tr0(f); }
 static inline double tr18(const double *f) { return tr0(f); }
@@ -39,8 +37,7 @@ static inline double tr20(const double *f) { return tr0(f); }
 static inline double tr21(const double *f) { return tr0(f); }
 static inline double tr22(const double *f) { return tr0(f); }
 static inline double tr23([[maybe_unused]] const double *f) {
-  const double s0 = -7.2759576141834001e-11;
-  return s0;
+  return (-7.2759576141834001e-11);
 }
 static inline double tr24(const double *f) { return tr0(f); }
 static inline double tr25(const double *f) { return tr0(f); }
@@ -54,41 +51,33 @@ static inline double tr32(const double *f) { return tr0(f); }
 static inline double tr33(const double *f) { return tr0(f); }
 static inline double tr34(const double *f) { return tr0(f); }
 static inline double tr35([[maybe_unused]] const double *f) {
-  const double s0 = 1.4210854715202001e-14;
-  return s0;
+  return (1.4210854715202001e-14);
 }
 static inline double tr36(const double *f) { return tr0(f); }
 static inline double tr37([[maybe_unused]] const double *f) {
-  const double s0 = 5.6843418860808002e-14;
-  return s0;
+  return (5.6843418860808002e-14);
 }
 static inline double tr38([[maybe_unused]] const double *f) {
-  const double s0 = -2.8421709430404001e-14;
-  return s0;
+  return (-2.8421709430404001e-14);
 }
 static inline double tr39(const double *f) { return tr0(f); }
 static inline double tr40(const double *f) { return tr38(f); }
 static inline double tr41(const double *f) { return tr0(f); }
 static inline double tr42([[maybe_unused]] const double *f) {
-  const double s0 = 8.5265128291211997e-14;
-  return s0;
+  return (8.5265128291211997e-14);
 }
 static inline double tr43([[maybe_unused]] const double *f) {
-  const double s0 = 2.8421709430404001e-14;
-  return s0;
+  return (2.8421709430404001e-14);
 }
 static inline double tr44(const double *f) { return tr0(f); }
 static inline double tr45([[maybe_unused]] const double *f) {
-  const double s0 = 384;
-  return s0;
+  return (384);
 }
 static inline double tr46([[maybe_unused]] const double *f) {
-  const double s0 = 5.6843418860808005e-13;
-  return s0;
+  return (5.6843418860808005e-13);
 }
 static inline double tr47([[maybe_unused]] const double *f) {
-  const double s0 = 1.1368683772161999e-13;
-  return s0;
+  return (1.1368683772161999e-13);
 }
 static inline double tr48(const double *f) { return tr0(f); }
 static inline double tr49(const double *f) { return tr0(f); }
@@ -99,23 +88,19 @@ static inline double tr53(const double *f) { return tr0(f); }
 static inline double tr54(const double *f) { return tr0(f); }
 static inline double tr55(const double *f) { return tr0(f); }
 static inline double tr56([[maybe_unused]] const double *f) {
-  const double s0 = -1.4551915228367e-11;
-  return s0;
+  return (-1.4551915228367e-11);
 }
 static inline double tr57(const double *f) { return tr0(f); }
 static inline double tr58(const double *f) { return tr0(f); }
 static inline double tr59([[maybe_unused]] const double *f) {
-  const double s0 = -221184;
-  return s0;
+  return (-221184);
 }
 static inline double tr60([[maybe_unused]] const double *f) {
-  const double s0 = 221184;
-  return s0;
+  return (221184);
 }
 static inline double tr61(const double *f) { return tr0(f); }
 static inline double tr62([[maybe_unused]] const double *f) {
-  const double s0 = -4.3655745685101001e-11;
-  return s0;
+  return (-4.3655745685101001e-11);
 }
 static inline double tr63(const double *f) { return tr0(f); }
 static inline double tr64(const double *f) { return tr0(f); }
@@ -124,16 +109,14 @@ static inline double tr66(const double *f) { return tr0(f); }
 static inline double tr67(const double *f) { return tr0(f); }
 static inline double tr68(const double *f) { return tr0(f); }
 static inline double tr69([[maybe_unused]] const double *f) {
-  const double s0 = -7.2759576141834001e-12;
-  return s0;
+  return (-7.2759576141834001e-12);
 }
 static inline double tr70(const double *f) { return tr0(f); }
 static inline double tr71(const double *f) { return tr0(f); }
 static inline double tr72(const double *f) { return tr0(f); }
 static inline double tr73(const double *f) { return tr0(f); }
 static inline double tr74([[maybe_unused]] const double *f) {
-  const double s0 = 55296;
-  return s0;
+  return (55296);
 }
 static inline double tr75(const double *f) { return tr74(f); }
 static inline double tr76(const double *f) { return tr0(f); }
@@ -151,29 +134,25 @@ static inline double tr87(const double *f) { return tr60(f); }
 static inline double tr88(const double *f) { return tr0(f); }
 static inline double tr89(const double *f) { return tr0(f); }
 static inline double tr90([[maybe_unused]] const double *f) {
-  const double s0 = 1.4551915228367e-11;
-  return s0;
+  return (1.4551915228367e-11);
 }
 static inline double tr91(const double *f) { return tr0(f); }
 static inline double tr92(const double *f) { return tr0(f); }
 static inline double tr93(const double *f) { return tr0(f); }
 static inline double tr94(const double *f) { return tr0(f); }
 static inline double tr95([[maybe_unused]] const double *f) {
-  const double s0 = 4.3655745685101001e-11;
-  return s0;
+  return (4.3655745685101001e-11);
 }
 static inline double tr96(const double *f) { return tr0(f); }
 static inline double tr97(const double *f) { return tr0(f); }
 static inline double tr98(const double *f) { return tr0(f); }
 static inline double tr99([[maybe_unused]] const double *f) {
-  const double s0 = 1990656;
-  return s0;
+  return (1990656);
 }
 static inline double tr100(const double *f) { return tr74(f); }
 static inline double tr101(const double *f) { return tr0(f); }
 static inline double tr102([[maybe_unused]] const double *f) {
-  const double s0 = 5.8207660913467e-11;
-  return s0;
+  return (5.8207660913467e-11);
 }
 static inline double tr103(const double *f) { return tr0(f); }
 static inline double tr104(const double *f) { return tr0(f); }
@@ -181,8 +160,7 @@ static inline double tr105(const double *f) { return tr0(f); }
 static inline double tr106(const double *f) { return tr0(f); }
 static inline double tr107(const double *f) { return tr0(f); }
 static inline double tr108([[maybe_unused]] const double *f) {
-  const double s0 = 1.746229827404e-10;
-  return s0;
+  return (1.746229827404e-10);
 }
 static inline double tr109(const double *f) { return tr0(f); }
 }} // namespace numtracer_kernels::fierz_ortho

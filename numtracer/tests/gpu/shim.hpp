@@ -24,6 +24,12 @@
 #endif
 
 #define KOKKOS_FORCEINLINE_FUNCTION inline
+// The generated GPU kernels now decorate with KOKKOS_INLINE_FUNCTION (the gpu .wls emit for the
+// Kokkos consumer); this TU is not a Kokkos build, so supply the equivalent expansion. Guarded:
+// in a real Kokkos TU the macro is already defined and must win.
+#ifndef KOKKOS_INLINE_FUNCTION
+#define KOKKOS_INLINE_FUNCTION NT_DH inline
+#endif
 
 // ---- the regulators the generated kernels call UNQUALIFIED -------------------
 // NumTracer emits a plain kernel class; the consumer supplies RB/RF/... . Global scope,
@@ -43,8 +49,19 @@ namespace DiFfRG {
 // `using std::complex;`): std::complex's arithmetic lowers to gcc `_Complex` builtins that
 // nvcc silently miscompiles to 0 in device code, so CUDA TUs must use libcu++'s
 // cuda::std::complex instead. Host TUs keep std::complex.
+// RE-CONFIRMED 2026-08-08 on CUDA 12.9/sm_89: an experiment aliasing this to std::complex
+// made the whole regenerated ZA3_gpu kernel return EXACTLY 0.0 on device while the identical
+// __host__ call computed correct values. Do not retry; the traces header's complex type is
+// instead overridden via NT_TRACE_COMPLEX below.
 #if defined(__CUDACC__) || defined(__CUDA__)
 template <class T> using complex = ::cuda::std::complex<T>;
+// The traces header types its complex returns via NT_TRACE_COMPLEX (default std::complex);
+// point it at the SAME device-safe type so the COEN assembly's complex coefficients and the
+// trace values share one complex type (mixing the two has no operator+ and, worse, std::complex
+// arithmetic is the device-zeroing path this alias exists to avoid).
+#ifndef NT_TRACE_COMPLEX
+#define NT_TRACE_COMPLEX ::cuda::std::complex<double>
+#endif
 #else
 template <class T> using complex = std::complex<T>;
 #endif

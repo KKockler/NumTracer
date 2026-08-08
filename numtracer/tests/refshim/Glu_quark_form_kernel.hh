@@ -11,7 +11,8 @@ namespace DiFfRG {
 
     static KOKKOS_FORCEINLINE_FUNCTION auto kernel(const double& l1, const double& cos1, const double& p, const double& k)
     {
-      using namespace DiFfRG;using namespace DiFfRG::compute;const auto _interp1 = RF(powr<2>(k), powr<2>(l1));
+      using namespace DiFfRG;using namespace DiFfRG::compute;
+      const auto _interp1 = RF(powr<2>(k), powr<2>(l1));
       const auto _interp2 = RF(powr<2>(k), powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p));
       const auto _interp3 = RFdot(powr<2>(k), powr<2>(l1));
       const auto _den1 = powr<-2>(_interp1 + powr<2>(l1));
@@ -23,7 +24,9 @@ namespace DiFfRG {
     {
       using namespace DiFfRG;using namespace DiFfRG::compute;
       return 0.;
-    }private: static KOKKOS_FORCEINLINE_FUNCTION auto RB(const auto& k2, const auto& p2)
+    }
+    private:
+    static KOKKOS_FORCEINLINE_FUNCTION auto RB(const auto& k2, const auto& p2)
     {
       return Regulator::RB(k2, p2);
     }

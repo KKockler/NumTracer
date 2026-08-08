@@ -35,9 +35,17 @@ tKernel = First @ AbsoluteTiming[
     "IntegrationVariables" -> {"l1", "cos1", "cos2"},
     "Coordinates" -> {"LogarithmicCoordinates1D<double>"}, "CoordinateArguments" -> {"p"}]];
 Print["[time] FormTracer MakeKernel (147): ", tKernel, " s"];
-(* place the generated kernel header where the compare test includes it. *)
+(* place the generated kernel header where the compare test includes it. MakeKernel now writes
+   into the DiFfRG flow output dir (flows/ZA3_147/), not the cwd, and the product carries DiFfRG
+   framework includes — swap them for the standalone shim, like the other refshim oracles. *)
+$src = FileNameJoin[{$repo, "flows", "ZA3_147", "kernel.hh"}];
 $out = FileNameJoin[{$repo, "numtracer", "tests", "refshim", "ZA3_147_kernel.hh"}];
-If[FileExistsQ["ZA3_147.hh"], CopyFile["ZA3_147.hh", $out, OverwriteTarget -> True];
-   Print["wrote oracle: ", $out],
-   Print["WARN: ZA3_147.hh not found in ", Directory[]]];
+If[FileExistsQ[$src],
+  Module[{txt = Import[$src, "Text"]},
+    txt = StringReplace[txt,
+      "#include \"DiFfRG/physics/interpolation.hh\"\n#include \"DiFfRG/physics/physics.hh\"" ->
+        "#include \"shim.hpp\""];
+    Export[$out, txt, "Text"];
+    Print["wrote oracle: ", $out]],
+  Print["WARN: ", $src, " not found"]];
 Print["DONE ZA3 147 FORM kernel."];

@@ -38,4 +38,34 @@ tKernel = First @ AbsoluteTiming[
     "Coordinates" -> {"LogarithmicCoordinates1D<double>"}, "CoordinateArguments" -> {"p"}]];
 Print["[time] FormTracer MakeKernel (FORM codegen + CSE): ", tKernel, " s"];
 Print["[time] FormTracer generation TOTAL: ", tTrace + tKernel, " s"];
+
+(* WORKAROUND (2026-08-08): COEN's sub-kernel split emits `_cseN` references across sub-kernel
+   scopes on this flow (undeclared-identifier C++; same machinery hard-aborts on aqbq147 with
+   "cannot lift sub-kernel definitions ... {_cse4}"). Disable the split for the oracle re-emit —
+   one flat kernel, the same values, same trick Cpp.m itself uses as its no-split fallback.
+   Remove once the COEN lift handles renumbered `_cse` names across blocks. *)
+FunKit`Private`$codeMaxKernelTerms = 10^9;
+FunKit`Private`$kernelSplitLevel = 1;
+tKernel2 = First @ AbsoluteTiming[
+  MakeKernel[FlowAqbq1,
+    "Name" -> "ZAqbq1", "Integrator" -> "Integrator_p2_4D_2ang", "d" -> 4, "AD" -> False,
+    "ctype" -> "double", "Device" -> "GPU", "Type" -> "double",
+    "Parameters" -> kernelParameterList, "KernelBody" -> SP3Defs,
+    "IntegrationVariables" -> {"l1", "cos1", "cos2"},
+    "Coordinates" -> {"LogarithmicCoordinates1D<double>"}, "CoordinateArguments" -> {"p"}]];
+Print["[time] FormTracer MakeKernel (unsplit re-emit for the oracle): ", tKernel2, " s"];
+
+(* place the generated kernel header where compare_zaqbq1 includes it (this used to be a manual
+   copy — see tests/gen/README.md): the MakeKernel product from the DiFfRG flow output dir, with
+   the framework includes swapped for the standalone shim. *)
+$src = FileNameJoin[{$repo, "flows", "ZAqbq1", "kernel.hh"}];
+$out = FileNameJoin[{$repo, "numtracer", "tests", "refshim", "ZAqbq1_kernel.hh"}];
+If[FileExistsQ[$src],
+  Module[{txt = Import[$src, "Text"]},
+    txt = StringReplace[txt,
+      "#include \"DiFfRG/physics/interpolation.hh\"\n#include \"DiFfRG/physics/physics.hh\"" ->
+        "#include \"shim.hpp\""];
+    Export[$out, txt, "Text"];
+    Print["wrote oracle: ", $out]],
+  Print["WARN: ", $src, " not found"]];
 Print["DONE ZAqbq1 FORM kernel."];

@@ -3,16 +3,20 @@
 #include <cmath>
 #include <complex>
 namespace DiFfRG { namespace za_num {
+#ifndef NT_TRACE_COMPLEX
+#define NT_TRACE_COMPLEX std::complex<double>
+#endif
+using nt_complex_t = NT_TRACE_COMPLEX;
 template<int N> static inline double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }
 // fundamental-symbol env layout (fill f[i] per call):
 //   f[0] = var(3)
-//   f[1] = inv(22)
+//   f[1] = inv(13)
 //   f[2] = var(1)
 //   f[3] = var(0)
 //   f[4] = dress(0)
-//   f[5] = dress(2)
-//   f[6] = dress(3)
-//   f[7] = dress(1)
+//   f[5] = dress(3)
+//   f[6] = dress(1)
+//   f[7] = dress(2)
 static inline constexpr int nenv = 8;
 static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] double cos1, [[maybe_unused]] double p, [[maybe_unused]] double dr_0, [[maybe_unused]] double dr_1, [[maybe_unused]] double dr_2, [[maybe_unused]] double dr_3) {
   f[0] = p;
@@ -20,111 +24,119 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = cos1;
   f[3] = l1;
   f[4] = dr_0;
-  f[5] = dr_2;
-  f[6] = dr_3;
-  f[7] = dr_1;
+  f[5] = dr_3;
+  f[6] = dr_1;
+  f[7] = dr_2;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 24;
-  const double s1 = 48;
   const double s2 = f[2];
   const double s3 = s2*s2;
-  const double s4 = s0*s3;
-  const double s5 = s1+s4;
-  const double s6 = -48;
-  const double s7 = -96;
-  const double s8 = s3*s6;
-  const double s9 = s7+s8;
+  const double s5 = fma((24), s3, (48));
+  const double s9 = fma(s3, (-48), (-96));
   const double s10 = f[0];
   const double s11 = s10*s10;
-  const double s12 = s9*s11;
   const double s13 = f[3];
   const double s14 = s13*s13;
   const double s15 = s5*s14;
-  const double s16 = s12+s15;
-  const double s17 = 264;
-  const double s18 = -336;
-  const double s19 = s3*s17;
-  const double s20 = s18+s19;
+  const double s16 = fma(s9, s11, s15);
+  const double s20 = fma(s3, (264), (-336));
   const double s21 = f[1];
-  const double s22 = s16*s21;
-  const double s23 = s20+s22;
+  const double s23 = fma(s16, s21, s20);
   const double s24 = s2*s9;
-  const double s25 = s10*s24;
   const double s26 = s13*s23;
-  const double s27 = s25+s26;
+  const double s27 = fma(s10, s24, s26);
   const double s28 = s5*s21;
-  const double s29 = s11*s28;
-  const double s30 = s20+s29;
-  const double s31 = s11*s30;
+  const double s30 = fma(s11, s28, s20);
   const double s32 = s13*s27;
-  const double s33 = s31+s32;
+  const double s33 = fma(s11, s30, s32);
   return s33;
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s0 = -48;
-  const double s1 = 336;
   const double s2 = f[2];
   const double s3 = s2*s2;
-  const double s4 = s0*s3;
-  const double s5 = s1+s4;
+  const double s5 = fma((-48), s3, (336));
   return s5;
 }
 static inline double tr2([[maybe_unused]] const double *f) {
-  const double s0 = 24;
-  const double s1 = -24;
   const double s2 = f[2];
   const double s3 = s2*s2;
-  const double s4 = s0*s3;
-  const double s5 = s1+s4;
+  const double s5 = fma((24), s3, (-24));
   const double s6 = f[3];
   const double s7 = s6*s6;
   const double s8 = s5*s7;
   return s8;
 }
-static inline std::complex<double> tr3([[maybe_unused]] const double *f) {
+static inline double tr3([[maybe_unused]] const double *f) {
+  const double s2 = f[2];
+  const double s3 = s2*s2;
+  const double s5 = fma((-24), s3, (24));
+  const double s6 = f[3];
+  const double s7 = s6*s6;
+  const double s8 = s5*s7;
+  return s8;
+}
+static inline nt_complex_t tr4([[maybe_unused]] const double *f) {
   const double s0 = f[6];
   const double s1 = s0*s0;
   const double s2 = f[3];
   [[maybe_unused]] const double s3 = s2*s2;
-  const double s4 = f[5];
+  const double s4 = f[4];
   const double s5 = s4*s4;
   const double s6 = f[0];
   const double s7 = f[2];
-  const double s8 = f[4];
-  const double s9 = f[7];
-  const double s10 = -32;
-  const double s11 = -16;
+  const double s8 = f[7];
+  const double s9 = f[5];
   const double s12 = s7*s7;
-  const double s13 = s10*s12;
-  const double s14 = s11+s13;
-  const double s15 = 48;
-  const double s16 = s7*s15;
-  const double s17 = s6*s16;
+  const double s14 = fma((32), s12, (16));
+  const double s16 = s7*(-48);
   const double s18 = s2*s14;
-  const double s19 = s17+s18;
+  const double s19 = fma(s6, s16, s18);
   const double s20 = s1*s19;
-  const double s21 = 32;
-  const double s22 = 16;
-  const double s23 = s12*s21;
-  const double s24 = s22+s23;
-  const double s25 = s5*s24;
+  const double s24 = fma(s12, (-32), (-16));
   const double s26 = s2*s20;
-  const double s27 = s25+s26;
-  const double s28 = -96;
-  const double s29 = s0*s28;
-  const double s30 = s4*s29;
-  const double s31 = s8*s30;
+  const double s27 = fma(s5, s24, s26);
+  const double s29 = s8*(96);
+  const double s30 = s0*s29;
   const double s32 = s9*s27;
-  const double s33 = s31+s32;
-  const double s34 = -48;
-  const double s35 = s9*s34;
+  const double s33 = fma(s4, s30, s32);
+  const double s35 = s9*(48);
   const double s36 = s5*s35;
   const double s37 = s7*s36;
-  const double s38 = s6*s37;
   const double s39 = s2*s33;
-  const double s40 = s38+s39;
+  const double s40 = fma(s6, s37, s39);
   const double s41 = s2*s40;
-  return std::complex<double>{0.0, s41};
+  return nt_complex_t{0.0, s41};
+}
+static inline nt_complex_t tr5([[maybe_unused]] const double *f) {
+  const double s0 = f[6];
+  const double s1 = s0*s0;
+  const double s2 = f[3];
+  [[maybe_unused]] const double s3 = s2*s2;
+  const double s4 = f[4];
+  const double s5 = s4*s4;
+  const double s6 = f[0];
+  const double s7 = f[2];
+  const double s8 = f[7];
+  const double s9 = f[5];
+  const double s12 = s7*s7;
+  const double s14 = fma((-32), s12, (-16));
+  const double s16 = s7*(48);
+  const double s18 = s2*s14;
+  const double s19 = fma(s6, s16, s18);
+  const double s20 = s1*s19;
+  const double s24 = fma(s12, (32), (16));
+  const double s26 = s2*s20;
+  const double s27 = fma(s5, s24, s26);
+  const double s29 = s8*(-96);
+  const double s30 = s0*s29;
+  const double s32 = s9*s27;
+  const double s33 = fma(s4, s30, s32);
+  const double s35 = s9*(-48);
+  const double s36 = s5*s35;
+  const double s37 = s7*s36;
+  const double s39 = s2*s33;
+  const double s40 = fma(s6, s37, s39);
+  const double s41 = s2*s40;
+  return nt_complex_t{0.0, s41};
 }
 }} // namespace DiFfRG::za_num

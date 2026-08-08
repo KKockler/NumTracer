@@ -482,10 +482,10 @@ namespace numtracer::network
     // return std::complex<double>{re, im}. The kernel multiplies it by the (complex) dressing
     // coefficient and the consumer takes std::real — so the imaginary part reaches the kernel.
     if (p.rootIm != kRealProgram) {
-      out << effDecor << " std::complex<double> " << name << "([[maybe_unused]] const double *f) {\n";
+      out << effDecor << " nt_complex_t " << name << "([[maybe_unused]] const double *f) {\n";
       out << std::setprecision(17);
       for (std::size_t i = 0; i < p.ins.size(); ++i) edetail::emit_stmt(out, p.ins, i, pl);
-      out << "  return std::complex<double>{";
+      out << "  return nt_complex_t{";
       opnd(p.root);
       out << ", ";
       opnd(p.rootIm);
@@ -538,11 +538,11 @@ namespace numtracer::network
       if (!anyComplex)
         opnd(p.root[i]);
       else if (p.rootIm[i] == kRealProgram) {
-        out << "std::complex<double>{";
+        out << "nt_complex_t{";
         opnd(p.root[i]);
         out << ", 0.0}";
       } else {
-        out << "std::complex<double>{";
+        out << "nt_complex_t{";
         opnd(p.root[i]);
         out << ", ";
         opnd(p.rootIm[i]);
@@ -577,7 +577,7 @@ namespace numtracer::network
     for (const FusedProg &q : ps)
       for (std::size_t i = 0; i < q.root.size(); ++i)
         if (q.rootIm[i] != kRealProgram) anyComplex = true;
-    const char *elemT = anyComplex ? "std::complex<double>" : "double";
+    const char *elemT = anyComplex ? "nt_complex_t" : "double";
     out << "using " << name << "_t = " << elemT << ";\n";
 
     for (std::size_t ci = 0; ci < ps.size(); ++ci)
