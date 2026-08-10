@@ -2551,7 +2551,13 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    their dressing/coupling coefficient (e.g. the σ-Yukawa hSigL: 503 groups, only 157 distinct trace
    bodies) emit hundreds of byte-identical trN. Render each trace, key on the name-independent body,
    and emit a duplicate as a one-line forwarder `trN(f){ return trK(f); }` (canonical K = first with
-   that body). The body is computed identically once per call site regardless (GCC CSEs the inlined
+   that body). The forwarder's RETURN TYPE is read back off the emitted signature (the token right
+   before " tr<i>(") rather than sniffed for a spelling: emit_cpp writes the complex return type as
+   the `nt_complex_t` alias, so the old `find("std::complex<double> tr")` test silently never matched
+   and every complex duplicate got a `double` forwarder — a hard compile error in any flow that has
+   both complex traces and duplicate bodies. Only the type is taken from `s`; the decorator stays
+   `decor`, so a canonical body that eff_decor out-of-lined does not drag `noinline` onto the
+   one-line forwarder. The body is computed identically once per call site regardless (GCC CSEs the inlined
    identical traces — see ZA4 fusion notes), so this is a pure SOURCE-SIZE/compile win, runtime-neutral.
    Flows with no shared trace structure (ZAqbq1/4/7_147: 108/108 distinct) never hit `seen` ⇒ the
    emitted bytes are unchanged. *)
@@ -2559,7 +2565,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    (there is a single body), and the kernel reads tarr[i] rather than calling tr_i. *)
             If[crossCSE,
               "  emit_cpp_fused(std::cout, fused, \"trace_all\", decor);\n",
-              "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], \"tr\"+std::to_string(i), decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), \"tr\"+std::to_string(i)); std::cout << s; }\n" <> "      else { const char* rt = (s.find(\"std::complex<double> tr\")!=std::string::npos) ? \" std::complex<double> \" : \" double \";\n" <> "        std::cout << decor << rt << \"tr\" << i << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
+              "  { std::unordered_map<std::string,std::string> seen; seen.reserve((size_t)" <> str[nGrp] <> ");\n" <> "    for(int i=0;i<" <> str[nGrp] <> ";++i){\n" <> "      const std::string nm = \"tr\"+std::to_string(i);\n" <> "      std::ostringstream os; emit_cpp(os, progs[i], nm, decor);\n" <> "      std::string s = os.str(); std::string body = s.substr(s.find('{'));\n" <> "      auto it = seen.find(body);\n" <> "      if(it==seen.end()){ seen.emplace(std::move(body), nm); std::cout << s; }\n" <> "      else { const std::string sig = s.substr(0, s.find(\" \"+nm+\"(\")); const std::string rt = sig.substr(sig.rfind(' ')+1);\n" <> "        std::cout << decor << \" \" << rt << \" \" << nm << \"(const double *f) { return \" << it->second << \"(f); }\\n\"; } } }\n"
             ],
             "  std::cout << \"}} // namespace " <> kns <> "::\" << hns << \"\\n\";\n",
             "  if(ntprof) std::fprintf(stderr,\"[num] emission: %.1f s\\n\", std::chrono::duration<double>(std::chrono::steady_clock::now()-tEmit).count());\n",
