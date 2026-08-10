@@ -167,9 +167,17 @@ arithmetic is division-free and GPU-friendly.
    from the introduction, made visible.
 
 5. **Break it deliberately — a free index.** Drop the second `nvec`, leaving `nu` open. The network
-   no longer closes. Read the error and remember what it looks like; an unclosed index in a
-   hand-built net is one of the two mistakes ([step-01](step-01.md) extension 3 is the other) that
-   account for most first-day confusion.
+   no longer closes, and `numeric_value` throws:
+
+   ```text
+   numtracer: Lorentz index id 1 is OPEN (occurs once) — the network does not close to a scalar.
+   ```
+
+   Read it and remember what it looks like; an unclosed index in a hand-built net is one of the two
+   mistakes ([step-01](step-01.md) extension 3 is the other) that account for most first-day
+   confusion. The guard matters more than it looks: the contraction core sums *every* index it is
+   given over $0..3$, so before it existed this net returned $\sum_\nu (p\cdot P)_\nu$ — a
+   finite, plausible, meaningless number, with no diagnostic at all.
 
 6. **A frame with no zero components.** Use four symbols for $l$ and four for $p$ and redo the
    contraction, then compare the monomial count to the three-symbol version. The ratio is the price

@@ -38,6 +38,12 @@ products, opaque runtime factors — ride along and are emitted as ordinary arit
   polynomial in the frame's scalar symbols. A trace over real vectors is real, so the generated
   kernel carries only the **real part**; the imaginary half is dropped when it vanishes (the
   generic case) and kept only if it genuinely survives.
+- **Closure is enforced, in every sector.** There is no tensor-valued result: an index that occurs
+  only once is a caller error, not a free index, and both contraction cores refuse it. Reach for a
+  tensor and you get an exception naming the offending index, never a number. To extract tensor
+  information, either **project** — contract with a basis element and emit one scalar per
+  $\langle P_i, T_j\rangle$ pair — or **pin the index to a fixed component** (`ntGamma[0, d1, d2]`
+  is $\gamma^0$; see [step-19](../tutorials/step-19.md)) and emit one closed kernel per component.
 
 ## What it is — and isn't
 

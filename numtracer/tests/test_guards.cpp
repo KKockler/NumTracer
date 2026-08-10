@@ -26,6 +26,21 @@
 //   (D4) snap_coeff passed NaN/Inf through. RBuilder::ieq compares constants with k==k, so a NaN
 //        never dedups (unbounded SSA slots) and gets printed as a literal `nan` into a committed
 //        kernel header.
+//   (E1) an OPEN (once-occurring) index made the engine return a plausible wrong number in silence.
+//        A finished network is a scalar, but neither contraction core checked that the network it was
+//        handed actually closes:
+//          * Lorentz: `eliminate` sums EVERY live id over 0..3, so a lone index was contracted against
+//            (1,1,1,1). `p·P(l)` with ν left open returned Σ_ν (p·P)_ν = 0.2459… — no diagnostic. Only
+//            a free DIRAC leg with NO Lorentz net was caught (close_free_legs); with any Lorentz net
+//            present the leg joined the elimination and was summed like the rest.
+//          * SU(N) adjoint: dense-summed the same way — `f^{abc}f^{abd}` with c,d open returned 24
+//            instead of the rank-2 `N δ^{cd}`.
+//          * SU(N) δ legs: worse — union-find identifies a δ's two labels, the class is then "touched
+//            only by δ" and counts as a CLOSED LOOP, so a lone δ^{ab} returned N²−1 = 8 and a lone
+//            δ^{ij} returned N = 3. Only the open fundamental chain THROUGH A GENERATOR was caught.
+//        Both cores now count occurrences up front and refuse count == 1. Counts ≥ 3 are deliberately
+//        left alone (the front-end's NumTrace::badlabel owns those), so no valid net changes value —
+//        which is what the anchors below pin down.
 #include "numtracer/core/axplan.hpp"
 #include "numtracer/network/dirac.hpp"
 #include "numtracer/network/network.hpp"
@@ -212,6 +227,85 @@ int main() {
     ok("snap_coeff rejects +Inf", throws([] { (void)snap_coeff(std::numeric_limits<double>::infinity()); }));
     ok("snap_coeff still passes finite values", std::abs(snap_coeff(1.5) - 1.5) < 1e-15);
     ok("snap_coeff still passes zero", snap_coeff(0.0) == 0.0);
+  }
+
+  // ---- E1a: an open LORENTZ index must throw, not be summed over 0..3 ------------------------
+  {
+    using namespace numtracer::numeric;
+    using namespace numtracer::network;
+    // The step-04 frame: p = (p0,0,0,0) along axis 0, l = (l0,l1,0,0) in the 0-1 plane.
+    const int nsym = 3;
+    LorentzEnv env(nsym);
+    std::vector<std::array<MPoly, 4>> comp(2, {env.zero(), env.zero(), env.zero(), env.zero()});
+    comp[0][0] = env.var(0);
+    comp[1][0] = env.var(1);
+    comp[1][1] = env.var(2);
+    MPoly l2 = env.zero();
+    for (int i = 0; i < 4; ++i)
+      l2 = l2 + comp[1][i] * comp[1][i];
+    const std::vector<MPoly> atomDen = {l2};
+    const double Pm = 1.3, l0 = 0.5, l1 = 0.7;
+    const std::vector<double> x = {Pm, l0, l1};
+    const double l2v = l0 * l0 + l1 * l1;
+    const std::vector<double> av = {1.0 / l2v};
+    enum { mu, nu };
+
+    // ANCHOR: the closed contraction p·P(l)·p = p²(1−cos²θ) is untouched by the guard.
+    {
+      NNet lor = {NTerm{Cx{1, 0}, {nvec(mu, {{1.0, 0}}), nprojT(mu, nu, {{1.0, 1}}, 0), nvec(nu, {{1.0, 0}})}}};
+      const double got = eval(env.numeric_value(DiracNet{}, lor, comp, atomDen), x, av).re;
+      const double cth = l0 / std::sqrt(l2v);
+      ok("open-index guard: closed p.P(l).p still exact", std::fabs(got - Pm * Pm * (1 - cth * cth)) < 1e-12);
+    }
+    // THE trap: drop the second p and ν occurs once. Pre-guard this returned Σ_ν (p·P)_ν silently.
+    {
+      NNet lor = {NTerm{Cx{1, 0}, {nvec(mu, {{1.0, 0}}), nprojT(mu, nu, {{1.0, 1}}, 0)}}};
+      ok("open Lorentz index throws (not summed over 0..3)",
+         throws([&] { (void)env.numeric_value(DiracNet{}, lor, comp, atomDen); }));
+    }
+    // ANCHOR: a SELF-PAIRED free leg (γ^μ … γ^μ, both slots on one Dirac factor) is a legitimate
+    // count-2 contraction that close_free_legs routes through contract_factors — it must still work.
+    // tr(γ^μ p̸ γ_μ q̸) = −8 p·q in d = 4.
+    {
+      const DiracNet ch = {dgamma(mu), dslash({{1.0, 0}}), dgamma(mu), dslash({{1.0, 1}})};
+      const double got = eval(env.numeric_value(ch, NNet{}, comp, atomDen), x, av).re;
+      ok("open-index guard: self-paired gamma legs still contract", std::fabs(got - (-8.0 * Pm * l0)) < 1e-12);
+    }
+  }
+
+  // ---- E1b: an open SU(N) leg must throw, in every sector -------------------------------------
+  {
+    using namespace numtracer::network;
+    SUNEnv sun3(3); // Adim = 8
+    enum { a, b, c, d, i, j, k };
+
+    // ANCHORS: the closed nets keep their values.
+    ok("open-leg guard: f^{abc}f^{abc} still 24", sun_value({sun3.f(a, b, c), sun3.f(a, b, c)}) == 24.0);
+    ok("open-leg guard: tr(T^a T^a) still 4", std::fabs(sun_value({sun3.T(a, i, j), sun3.T(a, j, i)}) - 4.0) < 1e-12);
+    // a label used TWICE WITHIN ONE factor is a legal closed loop (δ^{aa} = N²−1), not an open leg.
+    ok("open-leg guard: delta^{aa} still 8", sun_value({sun3.deltaAdj(a, a)}) == 8.0);
+
+    // THE traps. Pre-guard values in comments — every one of them silently wrong.
+    ok("open adjoint delta leg throws (was 8)", throws([&] { (void)sun_value({sun3.deltaAdj(a, b)}); }));
+    ok("open adjoint f legs throw (was 24)",
+       throws([&] { (void)sun_value({sun3.f(a, b, c), sun3.f(a, b, d)}); }));
+    ok("open adjoint generator legs throw (was 4)",
+       throws([&] { (void)sun_value({sun3.T(a, i, j), sun3.T(b, j, i)}); }));
+    ok("open fundamental delta leg throws (was 3)", throws([&] { (void)sun_value({sun3.deltaFund(i, j)}); }));
+    // the one case that was already caught (extract_cycles) — now caught earlier, still caught.
+    ok("open fundamental generator chain still throws",
+       throws([&] { (void)sun_value({sun3.T(a, i, j), sun3.T(a, j, k)}); }));
+
+    // the DRESSED fold is a second contraction core with the same union-find; guard it too.
+    auto arr = [](int dim) {
+      std::vector<int> v(dim);
+      for (int n = 0; n < dim; ++n) v[n] = n;
+      return v;
+    };
+    ok("dressed: closed diagAdj loop still evaluates",
+       !throws([&] { (void)sun_value_dressed({sun3.diagAdj(a, b, arr(8)), sun3.deltaAdj(b, a)}); }));
+    ok("dressed: open diagAdj leg throws",
+       throws([&] { (void)sun_value_dressed({sun3.diagAdj(a, b, arr(8)), sun3.deltaAdj(b, c)}); }));
   }
 
   std::printf("\n%s (%d failure%s)\n", fail ? "TESTS FAILED" : "ALL TESTS PASSED", fail, fail == 1 ? "" : "s");

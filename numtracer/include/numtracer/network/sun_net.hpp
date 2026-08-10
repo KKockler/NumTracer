@@ -38,6 +38,7 @@
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <string> // the open-leg guard's diagnostic (assert_no_open_labels)
 #include <vector>
 
 namespace numtracer::network {
@@ -283,6 +284,40 @@ inline const SUNDyn &sun_data_for(int N) {
   return it->second;
 }
 
+/// @brief Reject an OPEN (once-occurring) colour/flavour label before it is silently closed away.
+///
+/// The adjoint sector has the same hazard as the Lorentz one (see
+/// @ref numtracer::numeric::ndetail::assert_no_open_ids), by two different mechanisms:
+///   * an open adjoint index on an `f` or a generator is DENSE-SUMMED over `0..N²−2` — `f^{abc}f^{abd}`
+///     with `c`,`d` open returned 24 instead of the rank-2 `N δ^{cd}`;
+///   * an open index on a `δ` is worse: union-find identifies the δ's two labels, the class is then
+///     "touched only by δ" and is counted as a CLOSED LOOP — a lone `δ^{ab}` returned `N²−1 = 8`.
+/// Only the open FUNDAMENTAL chain was caught (by @ref extract_cycles), and only when a generator sits
+/// on it; a fundamental `δ` line with a free end closed to `N` just like the adjoint case.
+///
+/// Counting occurrences here — before the union-find, which is what destroys the evidence — catches all
+/// of them uniformly. Labels are counted per group (@ref sun_value_cx already partitions by rank, and
+/// each group owns a disjoint label space), a label used twice within one factor (`δ^{aa}`, a legal
+/// closed loop) counts 2 and passes, and counts ≥ 3 are left alone so no valid net changes value.
+inline void assert_no_open_labels(int N, const std::vector<const SUNFac *> &net) {
+  std::map<int, int> cnt; // label -> occurrences (nets are small; the map keeps the report ordered)
+  for (const SUNFac *f : net) {
+    ++cnt[f->a];
+    ++cnt[f->b];
+    // only `f^{abc}` and `T^a_{ij}` carry a third label; every other kind leaves `c` at -1
+    if (f->kind == SUNFacKind::F || f->kind == SUNFacKind::T) ++cnt[f->c];
+  }
+  for (const auto &[lbl, n] : cnt)
+    if (n == 1) {
+      const std::string msg =
+          "sun_net: SU(" + std::to_string(N) + ") index label " + std::to_string(lbl) +
+          " is OPEN (occurs once) — the colour/flavour net does not close to a scalar. Tie the leg off "
+          "(a δ, an f, a generator trace, or a colour projector). (Contracting an open leg would "
+          "silently sum or δ-close it and return a meaningless number.)";
+      NT_THROW(std::runtime_error, msg.c_str());
+    }
+}
+
 /// @brief Extract the generator fundamental cycles. Each generator `T^a_{ij}` is a directed edge
 ///        rowClass(i) → colClass(j); a closed contraction makes these disjoint cycles, one
 ///        `tr(T^{a_1}…T^{a_m})` per cycle. Returns each cycle as its ordered adjoint classes.
@@ -342,6 +377,8 @@ inline Cx contract_group(int N, const std::vector<const SUNFac *> &net) {
   //      (`sumF`), dense-sum the remaining generator-only adjoint classes (`sumGen`), and for each
   //      consistent assignment fold in the product of generator traces (`loopProd`). × the closed-loop
   //      scalar. Snap √3-residual zeros from the generator-table arithmetic.
+  // Step 1 (union-find) destroys the evidence an open leg leaves, so the closure check comes first.
+  assert_no_open_labels(N, net);
   const SUNDyn &dat = sun_data_for(N);
   const int Adim = N * N - 1; // adjoint dimension
 
@@ -486,6 +523,7 @@ inline SUNPoly poly_mul(const SUNPoly &a, const SUNPoly &b) {
 /// a generator row/col) is not yet supported and throws — the flavour use case is a generator-free
 /// δ loop, and the gluon use case is adjoint.
 inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &net) {
+  assert_no_open_labels(N, net); // before the union-find, as in contract_group
   const SUNDyn &dat = sun_data_for(N);
   const int Adim = N * N - 1;
 

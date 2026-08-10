@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <string> // the open-index guard's diagnostic (assert_no_open_ids)
 #include <vector>
 
 namespace numtracer::numeric
@@ -631,14 +632,59 @@ namespace numtracer::numeric
       return out;
     }
 
+    /// @brief Reject an OPEN (uncontracted) Lorentz index before it is silently summed away.
+    ///
+    /// `eliminate` sums EVERY live id over 0..3, whether or not a second slot carries it. An id
+    /// appearing exactly once across the factor list is therefore not "left free": it is contracted
+    /// against `(1,1,1,1)`, which is not a tensor operation at all. The result is a plausible-looking
+    /// but meaningless scalar, with no diagnostic anywhere — the worst failure mode the engine can
+    /// have. A finished network is a scalar (see documentation/getting_started/scope-and-conventions.md),
+    /// so a once-occurring id is always a caller error: an unclosed hand-built net, a mis-split
+    /// diagram, or a projector/basis element left off.
+    ///
+    /// Only count 1 is rejected. Count 2 is the ordinary contraction (including a self-trace whose two
+    /// slots sit on the SAME factor, e.g. `g^{μμ}`); counts ≥ 3 are caught upstream by the front-end
+    /// (`NumTrace::badlabel`) and are left alone here so this guard cannot change what a valid net does.
+    inline void assert_no_open_ids(const std::vector<Factor> &facs)
+    {
+      // Flat parallel arrays, not a map: id lists are tiny (≤ ~14 distinct) and this runs per Lorentz
+      // term of every diagram, so a linear scan beats any allocation.
+      gch::small_vector<int, 16> ids, cnt;
+      for (const Factor &F : facs)
+        for (int id : F.ids) {
+          std::size_t p = 0;
+          for (; p < ids.size(); ++p)
+            if (ids[p] == id) break;
+          if (p == ids.size()) {
+            ids.push_back(id);
+            cnt.push_back(1);
+          } else
+            ++cnt[p];
+        }
+      for (std::size_t p = 0; p < ids.size(); ++p)
+        if (cnt[p] == 1) {
+          const std::string msg = "numtracer: Lorentz index id " + std::to_string(ids[p]) +
+                                  " is OPEN (occurs once) — the network does not close to a scalar. "
+                                  "Every Lorentz index must be contracted: tie the leg off with a "
+                                  "metric/vector/projector, or pin it to a fixed component. (Contracting "
+                                  "an open index would silently sum it over 0..3 and return a "
+                                  "meaningless number.)";
+          NT_THROW(std::runtime_error, msg.c_str());
+        }
+    }
+
     /// Contract a set of dense factors over their shared Lorentz ids into one scalar MPoly, by GREEDY
     /// VARIABLE ELIMINATION: repeatedly pick the id whose incident factors have the smallest combined
     /// id-set (min-degree heuristic), merge those factors, and sum that id out. This keeps every
     /// intermediate tensor treewidth-bounded — a single global 4^G sum (G = all ids) is exponential and
     /// blows up for the quark triangle (G≈14); elimination stays at 4^(few) per step.
+    ///
+    /// Throws (via @ref assert_no_open_ids) if the factor list does not close — see there for why an
+    /// open index cannot simply be left free.
     inline MPoly contract_factors(int nsym, std::vector<Factor> facs, const std::vector<MPoly> &atomDen = {},
                                   const std::vector<std::vector<int>> &units = {})
     {
+      assert_no_open_ids(facs);
       // Algorithm (greedy min-fill-in elimination), repeated until no shared ids remain:
       //   1. collect the distinct live Lorentz ids;
       //   2. score each id by the size of the combined id-set of its incident factors (its fill-in =
