@@ -1,0 +1,96 @@
+WARNING: '/discretization/threads' has changed meaning. It used to set the length of the
+         assembly pipeline; that is now '/discretization/mesh_workers' (default 8).
+         It now sets the number of CPU threads the whole program may use, so this run is
+         limited to 8 threads. Set '/discretization/threads' to 0 to use all available cores.
+
+[explicit residual    ] t: 5.00000000000000028e-02  | k: 9.51229424500714060e+01  | calc_dt: 111(4)ms    | calls: 11   | calc_t: 1s229ms
+[explicit residual    ] t: 1.10000000000000001e-01  | k: 8.95834135296528160e+01  | calc_dt: 101(1)ms    | calls: 11   | calc_t: 2s356ms
+[explicit residual    ] t: 1.79999999999999993e-01  | k: 8.35270211411271930e+01  | calc_dt: 101(1)ms    | calls: 11   | calc_t: 3s482ms
+[explicit residual    ] t: 2.99999999999999989e-01  | k: 7.40818220681717889e+01  | calc_dt: 101(1)ms    | calls: 11   | calc_t: 4s609ms
+[explicit residual    ] t: 4.00000000000000078e-01  | k: 6.70320046035639194e+01  | calc_dt: 103(4)ms    | calls: 11   | calc_t: 5s756ms
+[explicit residual    ] t: 5.20000000000000129e-01  | k: 5.94520547970194286e+01  | calc_dt: 107(1)ms    | calls: 11   | calc_t: 6s943ms
+[explicit residual    ] t: 6.20000000000000218e-01  | k: 5.37944437594674341e+01  | calc_dt: 107(1)ms    | calls: 11   | calc_t: 8s129ms
+[explicit residual    ] t: 7.40000000000000324e-01  | k: 4.77113915521034215e+01  | calc_dt: 107(1)ms    | calls: 11   | calc_t: 9s318ms
+[explicit residual    ] t: 8.40000000000000413e-01  | k: 4.31710523429079487e+01  | calc_dt: 107(1)ms    | calls: 11   | calc_t: 10s509ms
+[explicit residual    ] t: 9.40000000000000502e-01  | k: 3.90627835358520912e+01  | calc_dt: 110(2)ms    | calls: 10   | calc_t: 11s622ms
+[explicit residual    ] t: 1.04000000000000048e+00  | k: 3.53454681958779986e+01  | calc_dt: 111(1)ms    | calls: 10   | calc_t: 12s742ms
+[explicit residual    ] t: 1.14000000000000057e+00  | k: 3.19819021816303746e+01  | calc_dt: 111(2)ms    | calls: 10   | calc_t: 13s864ms
+[explicit residual    ] t: 1.24000000000000066e+00  | k: 2.89384217939050430e+01  | calc_dt: 111(2)ms    | calls: 10   | calc_t: 14s986ms
+[explicit residual    ] t: 1.34000000000000075e+00  | k: 2.61845668580325821e+01  | calc_dt: 115(4)ms    | calls: 10   | calc_t: 16s147ms
+[explicit residual    ] t: 1.44000000000000083e+00  | k: 2.36927758682121556e+01  | calc_dt: 117(1)ms    | calls: 10   | calc_t: 17s330ms
+[explicit residual    ] t: 1.54000000000000092e+00  | k: 2.14381101426977736e+01  | calc_dt: 117(2)ms    | calls: 10   | calc_t: 18s515ms
+[explicit residual    ] t: 1.64000000000000101e+00  | k: 1.93980042290891674e+01  | calc_dt: 117(2)ms    | calls: 10   | calc_t: 19s702ms
+[explicit residual    ] t: 1.74000000000000110e+00  | k: 1.75520400616996675e+01  | calc_dt: 118(2)ms    | calls: 10   | calc_t: 20s890ms
+[explicit residual    ] t: 1.84000000000000119e+00  | k: 1.58817426106920507e+01  | calc_dt: 117(1)ms    | calls: 10   | calc_t: 22s76ms
+[explicit residual    ] t: 1.94000000000000128e+00  | k: 1.43703949777702729e+01  | calc_dt: 127(3)ms    | calls: 9    | calc_t: 23s240ms
+[explicit residual    ] t: 2.02000000000000135e+00  | k: 1.32655465080121555e+01  | calc_dt: 127(2)ms    | calls: 9    | calc_t: 24s399ms
+[explicit residual    ] t: 2.12000000000000144e+00  | k: 1.20031628511456567e+01  | calc_dt: 128(2)ms    | calls: 9    | calc_t: 25s563ms
+[explicit residual    ] t: 2.20000000000000151e+00  | k: 1.10803158362333711e+01  | calc_dt: 128(2)ms    | calls: 9    | calc_t: 26s723ms
+[explicit residual    ] t: 2.30000000000000160e+00  | k: 1.00258843722803572e+01  | calc_dt: 128(2)ms    | calls: 9    | calc_t: 27s887ms
+[explicit residual    ] t: 2.38000000000000167e+00  | k: 9.25505775103431283e+00  | calc_dt: 128(1)ms    | calls: 9    | calc_t: 29s53ms
+[explicit residual    ] t: 2.48000000000000176e+00  | k: 8.37432255921958024e+00  | calc_dt: 129(2)ms    | calls: 9    | calc_t: 30s227ms
+[explicit residual    ] t: 2.56000000000000183e+00  | k: 7.73047404432996021e+00  | calc_dt: 128(1)ms    | calls: 9    | calc_t: 31s393ms
+[explicit residual    ] t: 2.66000000000000192e+00  | k: 6.99482217446552301e+00  | calc_dt: 129(1)ms    | calls: 9    | calc_t: 32s561ms
+[explicit residual    ] t: 2.74000000000000199e+00  | k: 6.45703468931683577e+00  | calc_dt: 128(2)ms    | calls: 9    | calc_t: 33s728ms
+[explicit residual    ] t: 2.84000000000000208e+00  | k: 5.84256659645006948e+00  | calc_dt: 129(1)ms    | calls: 9    | calc_t: 34s902ms
+[explicit residual    ] t: 2.92000000000000215e+00  | k: 5.39336873003558992e+00  | calc_dt: 128(2)ms    | calls: 9    | calc_t: 36s68ms
+[explicit residual    ] t: 3.00000000000000222e+00  | k: 4.97870683678638315e+00  | calc_dt: 140(8)ms    | calls: 8    | calc_t: 37s201ms
+[explicit residual    ] t: 3.08000000000000229e+00  | k: 4.59592566490441090e+00  | calc_dt: 143(1)ms    | calls: 8    | calc_t: 38s351ms
+[explicit residual    ] t: 3.16000000000000236e+00  | k: 4.24257410805112922e+00  | calc_dt: 143(1)ms    | calls: 8    | calc_t: 39s506ms
+[explicit residual    ] t: 3.24000000000000243e+00  | k: 3.91638950989869761e+00  | calc_dt: 143(2)ms    | calls: 8    | calc_t: 40s656ms
+[explicit residual    ] t: 3.32000000000000250e+00  | k: 3.61528317540463284e+00  | calc_dt: 143(1)ms    | calls: 8    | calc_t: 41s811ms
+[explicit residual    ] t: 3.40000000000000258e+00  | k: 3.33732699603259952e+00  | calc_dt: 143(1)ms    | calls: 8    | calc_t: 42s966ms
+[explicit residual    ] t: 3.48000000000000265e+00  | k: 3.08074110327509931e+00  | calc_dt: 144(1)ms    | calls: 8    | calc_t: 44s122ms
+[explicit residual    ] t: 3.56000000000000272e+00  | k: 2.84388247141844275e+00  | calc_dt: 157(1)ms    | calls: 8    | calc_t: 45s389ms
+[explicit residual    ] t: 3.64000000000000279e+00  | k: 2.62523439656878921e+00  | calc_dt: 160(4)ms    | calls: 8    | calc_t: 46s674ms
+[explicit residual    ] t: 3.72000000000000286e+00  | k: 2.42339678456910468e+00  | calc_dt: 155(7)ms    | calls: 8    | calc_t: 47s927ms
+[explicit residual    ] t: 3.80000000000000293e+00  | k: 2.23707718561655300e+00  | calc_dt: 153(9)ms    | calls: 8    | calc_t: 49s159ms
+[explicit residual    ] t: 3.88000000000000300e+00  | k: 2.06508251817125021e+00  | calc_dt: 153(9)ms    | calls: 8    | calc_t: 50s393ms
+[explicit residual    ] t: 3.96000000000000307e+00  | k: 1.90631142916115781e+00  | calc_dt: 152(9)ms    | calls: 8    | calc_t: 51s624ms
+[explicit residual    ] t: 4.04000000000000181e+00  | k: 1.75974724156233608e+00  | calc_dt: 152(8)ms    | calls: 8    | calc_t: 52s846ms
+[explicit residual    ] t: 4.12000000000000011e+00  | k: 1.62445144419498710e+00  | calc_dt: 151(9)ms    | calls: 8    | calc_t: 54s65ms
+[explicit residual    ] t: 4.19999999999999840e+00  | k: 1.49955768204777318e+00  | calc_dt: 151(7)ms    | calls: 8    | calc_t: 55s282ms
+[explicit residual    ] t: 4.27999999999999670e+00  | k: 1.38426620864795513e+00  | calc_dt: 150(6)ms    | calls: 8    | calc_t: 56s488ms
+[explicit residual    ] t: 4.35999999999999499e+00  | k: 1.27783876495358273e+00  | calc_dt: 150(6)ms    | calls: 8    | calc_t: 57s701ms
+[explicit residual    ] t: 4.43999999999999329e+00  | k: 1.17959385197516453e+00  | calc_dt: 151(7)ms    | calls: 8    | calc_t: 58s917ms
+[explicit residual    ] t: 4.51999999999999158e+00  | k: 1.08890236685545383e+00  | calc_dt: 171(2)ms    | calls: 7    | calc_t: 1min0s
+[explicit residual    ] t: 4.57999999999999030e+00  | k: 1.02548962964041235e+00  | calc_dt: 173(8)ms    | calls: 7    | calc_t: 1min1s
+[explicit residual    ] t: 4.65999999999998860e+00  | k: 9.46646240171043263e-01  | calc_dt: 176(1)ms    | calls: 7    | calc_t: 1min2s
+[explicit residual    ] t: 4.73999999999998689e+00  | k: 8.73864618547340655e-01  | calc_dt: 164(2)ms    | calls: 8    | calc_t: 1min3s
+[explicit residual    ] t: 4.81999999999998519e+00  | k: 8.06678713909973588e-01  | calc_dt: 154(7)ms    | calls: 8    | calc_t: 1min5s
+[explicit residual    ] t: 4.87999999999998391e+00  | k: 7.59701402757768873e-01  | calc_dt: 169(2)ms    | calls: 7    | calc_t: 1min6s
+[explicit residual    ] t: 4.95999999999998220e+00  | k: 7.01292783258554819e-01  | calc_dt: 183(9)ms    | calls: 7    | calc_t: 1min7s
+[explicit residual    ] t: 5.01999999999998092e+00  | k: 6.60452670931493402e-01  | calc_dt: 181(9)ms    | calls: 7    | calc_t: 1min8s
+[explicit residual    ] t: 5.09999999999997922e+00  | k: 6.09674656551576266e-01  | calc_dt: 183(9)ms    | calls: 7    | calc_t: 1min10s
+[explicit residual    ] t: 5.15999999999997794e+00  | k: 5.74169968565433009e-01  | calc_dt: 181(1)ms    | calls: 7    | calc_t: 1min11s
+[explicit residual    ] t: 5.23999999999997623e+00  | k: 5.30025683587052932e-01  | calc_dt: 184(9)ms    | calls: 7    | calc_t: 1min12s
+[explicit residual    ] t: 5.29999999999997495e+00  | k: 4.99159390691034099e-01  | calc_dt: 181(9)ms    | calls: 7    | calc_t: 1min14s
+[explicit residual    ] t: 5.37999999999997325e+00  | k: 4.60782192999287521e-01  | calc_dt: 183(9)ms    | calls: 7    | calc_t: 1min15s
+[explicit residual    ] t: 5.43999999999997197e+00  | k: 4.33948327073901796e-01  | calc_dt: 181(9)ms    | calls: 7    | calc_t: 1min16s
+[explicit residual    ] t: 5.51999999999997026e+00  | k: 4.00584794209053741e-01  | calc_dt: 184(9)ms    | calls: 7    | calc_t: 1min17s
+[explicit residual    ] t: 5.57999999999996898e+00  | k: 3.77256551879232238e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min19s
+[explicit residual    ] t: 5.65999999999996728e+00  | k: 3.48251689821177768e-01  | calc_dt: 185(1)ms    | calls: 7    | calc_t: 1min20s
+[explicit residual    ] t: 5.71999999999996600e+00  | k: 3.27971090234368379e-01  | calc_dt: 183(9)ms    | calls: 7    | calc_t: 1min21s
+[explicit residual    ] t: 5.79999999999996430e+00  | k: 3.02755474537592273e-01  | calc_dt: 185(1)ms    | calls: 7    | calc_t: 1min23s
+[explicit residual    ] t: 5.85999999999996302e+00  | k: 2.85124368267973827e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min24s
+[explicit residual    ] t: 5.93999999999996131e+00  | k: 2.63202965101330122e-01  | calc_dt: 185(1)ms    | calls: 7    | calc_t: 1min25s
+[explicit residual    ] t: 5.99999999999996003e+00  | k: 2.47875217666645747e-01  | calc_dt: 181(1)ms    | calls: 7    | calc_t: 1min26s
+[explicit residual    ] t: 6.07999999999995833e+00  | k: 2.28817665292226469e-01  | calc_dt: 186(1)ms    | calls: 7    | calc_t: 1min28s
+[explicit residual    ] t: 6.13999999999995705e+00  | k: 2.15492361829770690e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min29s
+[explicit residual    ] t: 6.21999999999995534e+00  | k: 1.98924521726525194e-01  | calc_dt: 186(1)ms    | calls: 7    | calc_t: 1min30s
+[explicit residual    ] t: 6.27999999999995406e+00  | k: 1.87340059422250987e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min32s
+[explicit residual    ] t: 6.35999999999995236e+00  | k: 1.72936671185723867e-01  | calc_dt: 185(1)ms    | calls: 7    | calc_t: 1min33s
+[explicit residual    ] t: 6.41999999999995108e+00  | k: 1.62865623478836014e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min34s
+[explicit residual    ] t: 6.49999999999994937e+00  | k: 1.50343919297764861e-01  | calc_dt: 185(1)ms    | calls: 7    | calc_t: 1min36s
+[explicit residual    ] t: 6.55999999999994809e+00  | k: 1.41588571034687638e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min37s
+[explicit residual    ] t: 6.63999999999994639e+00  | k: 1.30702724383645719e-01  | calc_dt: 185(1)ms    | calls: 7    | calc_t: 1min38s
+[explicit residual    ] t: 6.69999999999994511e+00  | k: 1.23091190267354864e-01  | calc_dt: 183(1)ms    | calls: 7    | calc_t: 1min39s
+[explicit residual    ] t: 6.77999999999994341e+00  | k: 1.13627489831983050e-01  | calc_dt: 182(1)ms    | calls: 7    | calc_t: 1min41s
+[explicit residual    ] t: 6.83999999999994213e+00  | k: 1.07010339963966611e-01  | calc_dt: 178(9)ms    | calls: 7    | calc_t: 1min42s
+[explicit residual    ] t: 6.91999999999994042e+00  | k: 9.87829940531288198e-02  | calc_dt: 181(1)ms    | calls: 7    | calc_t: 1min43s
+[explicit residual    ] t: 6.97999999999993914e+00  | k: 9.30303203205005980e-02  | calc_dt: 178(1)ms    | calls: 7    | calc_t: 1min45s
+[TimeStepperBoostABM::run_vars: finished after 350 steps]
+m2A: 1.17315
+Zc(0): 0.688852
+[Timestepping finished successfully, m2A = 1.17314905347264, Zc(0) = 0.688852420345153]
+Program finished after 106s

@@ -1,0 +1,16 @@
+# Nf2 full-kernel fp64 SASS instruction count, sm_89, baseline vs interpolator index sharing.
+# Clock-independent metric — the primary grade for these flows, since sustained Nf2 runs throttle
+# this laptop badly enough to invert a wall-clock comparison.
+flow,base_fp64,share_fp64,reduction_pct
+Zc,2975,2371,20.3
+ZA,4755,3101,34.8
+Zq,3571,2831,20.7
+ZAcbc,6721,5363,20.2
+ZA3,9719,7161,26.3
+ZAqbq1,15151,11941,21.2
+ZAqbq7,14927,11765,21.2
+ZAqbq4,17273,13689,20.7
+ZAAqbq1,15343,13357,12.9
+ZAAqbq2,22921,20663,9.9
+ZA4,31221,26969,13.6
+TOTAL,144577,119211,17.5

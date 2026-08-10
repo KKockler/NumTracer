@@ -23,13 +23,6 @@ expr = fRG["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[];
 projIdx = {1, 2, 3};
 labels  = {1, 4, 7};
 
-(* WORKAROUND (2026-08-08): COEN's sub-kernel split emits `_cseN` references across sub-kernel
-   scopes on the larger FORM kernels (undeclared-identifier C++, or a hard "cannot lift" abort).
-   Disable the split — one flat kernel, same values, the same no-split fallback Cpp.m uses
-   internally. Remove once the COEN lift handles renumbered `_cse` names across blocks. *)
-FunKit`Private`$codeMaxKernelTerms = 10^9;
-FunKit`Private`$kernelSplitLevel = 1;
-
 Do[
   Module[{k = projIdx[[s]], lab = labels[[s]], cacheDir, proj, tr, Flow, tT, tK, out, src, txt},
     cacheDir = FileNameJoin[{$repo, "numtracer", "tests", "gen", "TraceCache_aqbq" <> ToString[lab] <> "_147form"}];

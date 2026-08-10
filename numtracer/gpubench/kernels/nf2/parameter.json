@@ -1,0 +1,69 @@
+{
+  "tuning": {
+    "tune_m2A": true,
+    "lower_m2A": -20.0,
+    "upper_m2A": -5.0,
+    "m2A_tol": 1e-06,
+    "m2A_tol_coarse": 0.001,
+    "m2A_warm_start_delta": 1.5,
+    "tune_STI": false,
+    "STI_tol": 0.0001,
+    "STI_step_size": 0.01,
+    "STI_tilt_step_size": 0.01,
+    "STI_lower": 8.0,
+    "STI_upper": 50.0,
+    "STI_flow_final_time": 7.0,
+    "STI_quadrature_factor": 0.5,
+    "STI_m2A_zc_target": 0.01,
+    "m2A_zc_target": 0.01
+  },
+  "physical": {
+    "Lambda": 100.0,
+    "m2A": 8.767383098602,
+    "alphaA3": 0.1297,
+    "alphaA4": 0.1335,
+    "alphaAcbc": 0.13,
+    "alphaAqbq": 0.1361,
+    "eta_iter_max": 80,
+    "eta_tol": 1e-05,
+    "eta_relax": 0.4
+  },
+  "integration": {
+    "x_order": 32,
+    "cos1_order": 6,
+    "cos2_order": 6,
+    "phi_order": 6,
+    "x_extent_tolerance": 0.001,
+    "jacobian_quadrature_factor": 0.5
+  },
+  "discretization": {
+    "p_grid_min": 0.001,
+    "p_grid_max": 150.0,
+    "p_grid_bias": 9.0,
+    "threads": 8,
+    "batch_size": 64
+  },
+  "timestepping": {
+    "final_time": 7.0,
+    "output_dt": 0.05,
+    "explicit": {
+      "dt": 0.02,
+      "minimal_dt": 1e-06,
+      "maximal_dt": 0.1,
+      "abs_tol": 0.0001,
+      "rel_tol": 0.001
+    },
+    "implicit": {
+      "dt": 0.0001,
+      "minimal_dt": 1e-06,
+      "maximal_dt": 0.1,
+      "abs_tol": 1e-14,
+      "rel_tol": 1e-08
+    }
+  },
+  "output": {
+    "verbosity": 1,
+    "folder": "./",
+    "name": "output"
+  }
+}

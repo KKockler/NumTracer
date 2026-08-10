@@ -1,0 +1,29 @@
+WARNING: '/discretization/threads' has changed meaning. It used to set the length of the
+         assembly pipeline; that is now '/discretization/mesh_workers' (default 8).
+         It now sets the number of CPU threads the whole program may use, so this run is
+         limited to 8 threads. Set '/discretization/threads' to 0 to use all available cores.
+
+[explicit residual    ] t: 3.25000000000000011e-01  | k: 7.22527353642072171e+02  | calc_dt: 39(1)ms     | calls: 27   | calc_t: 1s89ms
+[explicit residual    ] t: 1.00000000000000022e+00  | k: 3.67879441171442238e+02  | calc_dt: 37(2)ms     | calls: 28   | calc_t: 2s155ms
+[explicit residual    ] t: 1.70000000000000084e+00  | k: 1.82683524052734498e+02  | calc_dt: 37.5(5)ms   | calls: 27   | calc_t: 3s200ms
+[explicit residual    ] t: 2.34999999999999964e+00  | k: 9.53691622155496503e+01  | calc_dt: 38(2)ms     | calls: 27   | calc_t: 4s255ms
+[explicit residual    ] t: 2.99999999999999734e+00  | k: 4.97870683678640731e+01  | calc_dt: 40.4(5)ms   | calls: 26   | calc_t: 5s336ms
+[explicit residual    ] t: 3.64999999999999503e+00  | k: 2.59911287787554706e+01  | calc_dt: 40.5(5)ms   | calls: 25   | calc_t: 6s406ms
+[explicit residual    ] t: 4.24999999999999289e+00  | k: 1.42642339089993566e+01  | calc_dt: 40(1)ms     | calls: 25   | calc_t: 7s456ms
+[explicit residual    ] t: 4.89999999999999059e+00  | k: 7.44658307092441074e+00  | calc_dt: 40(1)ms     | calls: 26   | calc_t: 8s535ms
+[explicit residual    ] t: 5.54999999999998828e+00  | k: 3.88745724347617516e+00  | calc_dt: 40(1)ms     | calls: 26   | calc_t: 9s610ms
+[explicit residual    ] t: 6.19999999999998597e+00  | k: 2.02943063629576281e+00  | calc_dt: 40(1)ms     | calls: 26   | calc_t: 10s690ms
+[explicit residual    ] t: 6.84999999999998366e+00  | k: 1.05945569290762709e+00  | calc_dt: 40.0(5)ms   | calls: 26   | calc_t: 11s767ms
+[explicit residual    ] t: 7.49999999999998135e+00  | k: 5.53084370147843951e-01  | calc_dt: 41(2)ms     | calls: 25   | calc_t: 12s840ms
+[explicit residual    ] t: 8.04999999999997939e+00  | k: 3.19101922481210110e-01  | calc_dt: 43(2)ms     | calls: 23   | calc_t: 13s898ms
+[explicit residual    ] t: 8.64999999999998792e+00  | k: 1.75126848157660608e-01  | calc_dt: 43.5(5)ms   | calls: 24   | calc_t: 14s974ms
+[explicit residual    ] t: 9.24999999999999645e+00  | k: 9.61116520613950337e-02  | calc_dt: 44(1)ms     | calls: 23   | calc_t: 16s30ms
+[explicit residual    ] t: 9.85000000000000497e+00  | k: 5.27471930155135674e-02  | calc_dt: 43.7(5)ms   | calls: 24   | calc_t: 17s116ms
+[explicit residual    ] t: 1.04000000000000128e+01  | k: 3.04324830084032501e-02  | calc_dt: 44(1)ms     | calls: 23   | calc_t: 18s180ms
+[explicit residual    ] t: 1.10000000000000213e+01  | k: 1.67017007902453031e-02  | calc_dt: 44(1)ms     | calls: 23   | calc_t: 19s246ms
+[explicit residual    ] t: 1.15500000000000291e+01  | k: 9.63604310396357772e-03  | calc_dt: 45(1)ms     | calls: 23   | calc_t: 20s313ms
+[TimeStepperBoostABM::run_vars: finished after 240 steps]
+m2A: 6037.24
+Zc(0): 0.931614
+[Timestepping finished successfully, m2A = 6037.240528758876, Zc(0) = 0.9316141347304615]
+Program finished after 22s

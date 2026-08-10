@@ -129,6 +129,11 @@ Options[MakeNTKernelDiFfRG] =
     ,
     "Type" -> "double"
     ,
+(* Fuse every trace into one shared CSE program (`trace_all`) instead of emitting one function per
+   trace. Off by default, as in MakeNTKernel. Note the design comment in Codegen.m: GlobalCollect
+   (on by default) is said to subsume it -- but nothing in the code enforces that, so the two are
+   independently settable and the combination is worth measuring rather than assuming. *)
+    "CrossTraceCSE" -> False,
     "Decorator" -> Automatic
     ,(* Automatic -> derived from Device *)
     "FlowDirectory" -> Automatic
@@ -151,6 +156,58 @@ MakeNTKernelDiFfRG::nointeg = "\"Integrator\" and \"IntegrationVariables\" are r
 
 MakeNTKernelDiFfRG::mixtype = "Parameters declare more than one interpolator type `1`; emitting the dressing parameters as `const auto&`.";
 
+(* ---- k-only lookup hoisting: patch the DiFfRG-generated wrappers ---------------------------
+   When MakeNTKernel hoisted M loop-constant dressing lookups ($ntLastHoistCount, see
+   "HoistLoopConstLookups" in Codegen.m), the kernel signature carries M trailing `const double&
+   nthk<i>` parameters and the kernel class a static host evaluator ntHoisted(k, scalars...,
+   dressings...). The integrator forwards its args... verbatim into the kernel call, so the ONLY
+   remaining wiring is the wrapper TUs DiFfRG's MakeKernel scaffold already wrote:
+
+     CT_map_*.cc:  return integrator.map(dest, coordinates, <tail>);
+       ->          const auto _nth = <name>_kernel<Regulator>::ntHoisted(<tail>);
+                   return integrator.map(dest, coordinates, <tail>, _nth[0], ..., _nth[M-1]);
+     CT_get.cc:    integrator.get(dest, p, <tail>);              (same treatment)
+
+   <tail> is exactly (k, scalars..., dressings...) — ntHoisted's parameter list by construction.
+   `Regulator` is the public alias the scaffold puts in the integrator class; the wrapper body
+   resolves <name>_kernel through the class's enclosing namespace (DiFfRG). The patch is
+   idempotent by the ntHoisted guard (a re-run of the scaffold rewrites the files fresh anyway). *)
+
+ntPatchHoistWrappers[kernelDir_String, name_String, m_Integer] :=
+  Module[{kcls = name <> "_kernel<Regulator>", idxs, files, txt, patched, nPatched = 0, hdr, hdrTxt, hdrPatched},
+    idxs = StringRiffle[("_nth[" <> ToString[#] <> "]")& /@ Range[0, m - 1], ", "];
+(* The scaffold's tuple forwarders in <name>.hh unpack the dressing tuple BY VALUE
+   (`const auto...t`), which is fine for the device path (the integrator copies into its own
+   tuple anyway) but hands ntHoisted COPIES — and a SplineInterpolator1D copy has no host
+   mirror, so .CPU() throws ("get_on() on a copied instance"). Unpack by reference instead. *)
+    hdr = FileNameJoin[{kernelDir, name <> ".hh"}];
+    If[FileExistsQ[hdr],
+      hdrTxt = Import[hdr, "Text"];
+      hdrPatched = StringReplace[hdrTxt, "(const auto...t)" -> "(const auto&...t)"];
+      Which[
+        StringContainsQ[hdrTxt, "(const auto&...t)"],
+          Null,(* already by-reference *)
+        hdrPatched =!= hdrTxt,
+          Export[hdr, hdrPatched, "Text"],
+        True,
+          Print["[NumTracer] ", name, ": WARNING — tuple-forwarder pattern not found in ",
+            hdr, "; the hoisted-lookup host evaluation may receive interpolator copies and throw."]]];
+    files = FileNames[{"CT_map_*.cc", "CT_get.cc"}, FileNameJoin[{kernelDir, "src"}]];
+    Do[
+      txt = Import[f, "Text"];
+      If[StringContainsQ[txt, "ntHoisted"], Continue[]];
+      patched = StringReplace[txt, {
+        RegularExpression["return (integrator\\w*)\\.map\\(dest, coordinates,\\s*(.*?)\\);"] :>
+          "const auto _nth = " <> kcls <> "::ntHoisted($2);\n  return $1.map(dest, coordinates, $2, " <> idxs <> ");",
+        RegularExpression["(integrator\\w*)\\.get\\(dest, p,\\s*(.*?)\\);"] :>
+          "const auto _nth = " <> kcls <> "::ntHoisted($2);\n  $1.get(dest, p, $2, " <> idxs <> ");"}];
+      If[patched =!= txt,
+        Export[f, patched, "Text"];
+        nPatched++],
+      {f, files}];
+    Print["[NumTracer] ", name, ": k-only hoist — ", m, " lookup(s) hoisted; ", nPatched,
+      " wrapper TU(s) patched to pass host-evaluated values."]];
+
 (* Positional second argument: the constant, mirroring DiFfRG's MakeKernel[kernelExpr, constExpr, ...].
    `constExpr` is a plain Mathematica expression in p/k and the dressing names (e.g. ZA[p]), NOT an
    NTKernel — the integrand still comes from `ntk`. Pass the constant EITHER positionally OR via the
@@ -160,7 +217,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, constExpr_ /; Head[constExpr] =!= Rule && Head[
   MakeNTKernelDiFfRG[ntk, "Constant" -> constExpr, opts];
 
 MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
-  Module[{name, nsTag, params, dress, dressTys, dressTy, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
+  Module[{name, nsTag, params, dress, dressTys, dressTy, shareInterpIdx, scalarParams, adParams, device, decor, body, flowDir, genDir, kernelDir, genFile, kernelFile, tracesFile},
     name = OptionValue["Name"];
     If[name === Automatic,
       Message[MakeNTKernelDiFfRG::noname];
@@ -192,6 +249,25 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
     (* auto-derive the dressing names + their common interpolator type from the non-"double" params *)
     dress = Cases[params, a_?AssociationQ /; a["Type"] =!= "double" :> a["Name"]];
     dressTys = DeleteDuplicates[Cases[params, a_?AssociationQ /; a["Type"] =!= "double" :> a["Type"]]];
+(* Interpolator index sharing (NumTracer's "ShareInterpolatorIndex"): a flow evaluates several
+   dressings at the SAME momentum, and each lookup otherwise repeats the coordinate transform --
+   a fp64 log1p for a logarithmic axis, ~200 of the ~210 fp64 instructions a lookup costs. The
+   compiler cannot share it, because every interpolator owns its own `coordinates` members. Paying
+   it once measured 1.13-1.26x on the YangMills flow set, results bit-identical
+   (numtracer/gpubench/FINDINGS.md).
+
+   This is a DiFfRG-side capability, which is why NumTracer keeps the pass opt-in and it is enabled
+   HERE. All five DiFfRG interpolators are split: the 1-D ones return a scalar index, the 2-D/3-D
+   and stack ones return a device::array of indices, so the emitted `const auto _ixN = h.index(...)`
+   is uniform and the rewrite needs no per-arity special case. The pass is still all-or-nothing per
+   kernel, so any dressing handle NOT in this list opts the whole kernel out. *)
+    shareInterpIdx =
+      dressTys =!= {} &&
+        AllTrue[dressTys,
+          StringQ[#] &&
+            StringMatchQ[#,
+              ("SplineInterpolator1D" | "SplineInterpolator1DStack" | "LinearInterpolator1D" |
+                "LinearInterpolator2D" | "LinearInterpolator3D") ~~ "<" ~~ ___] &];
     dressTy =
       Switch[Length[dressTys],
         0,
@@ -301,14 +377,19 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    a `#error`, which turns it into a loud compile failure naming the flow. The manifest is not
    written in that case either (MakeNTKernel writes it last), so `make numtrace` also still owes the
    kernels. *)
+    $ntLastHoistCount = 0;
     If[TrueQ @ CheckAbort[
-         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "Dressings" -> dress, "DressingType" -> dressTy, "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
          True,
          False],
       Null,
       Export[kernelFile, "#error NumTracer generation for flow \"" <> name <> "\" did not complete; this kernel.hh is the DiFfRG placeholder (body 0.), not a traced kernel. Re-run the generation and fix the reported error.\n", "Text"];
       Print["[NumTracer] ", name, ": generation ABORTED — ", kernelFile, " poisoned with #error so the build cannot silently use the zero placeholder."];
       Abort[]];
+(* (3) wire the hoisted k-only lookups through the scaffold's wrapper TUs (no-op when none).
+   $ntLastHoistCount is a Private`-context handoff (the NumTracer` context is Protected). *)
+    If[IntegerQ[$ntLastHoistCount] && $ntLastHoistCount > 0,
+      ntPatchHoistWrappers[kernelDir, name, $ntLastHoistCount]];
     kernelFile
   ];
 

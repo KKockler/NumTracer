@@ -25,7 +25,12 @@ spAngles4 = {
   Global`cosl1p3 -> -(1/3) Sqrt[1 - Global`cos1^2] (Global`cos2 + Sqrt[2 - 2 Global`cos2^2] (Cos[Global`phi] - Sqrt[3] Sin[Global`phi])),
   Global`cosl1p4 -> -(1/3) Sqrt[1 - Global`cos1^2] (Global`cos2 + Sqrt[2 - 2 Global`cos2^2] (Cos[Global`phi] + Sqrt[3] Sin[Global`phi]))};
 
-fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}] // FTruncate // FPlot // FRoute // FPrint;
+(* Full permutation group of the identical external legs; the ClassTrans/transAAqbq
+   projectors are covariant under it. Symmetries must be stated by hand since FunKit
+   0bacdd1 -- without this the derivative yields every leg ordering as its own diagram
+   (measured on za4_147: 6183 diagrams / 164 s, vs 294 / 7.6 s with it). *)
+symLegs = FMakeSymmetryList[{A[i1], A[i2], A[i3], A[i4]}];
+fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}, "Symmetries" -> symLegs] // FTruncate // FPlot // FRoute // FPrint;
 proj = FTerm[TBGetProjector["AAAAClassTrans", 1, {i1, i2, i3, i4} /. fRG["1-Loop"]["ExternalIndices"]]];
 traceA4 = proj ** (fRG["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[]);
 net = FromFunKit[ SPParam[traceA4 // dressingRules] ];

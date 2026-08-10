@@ -1,0 +1,15 @@
+# nf2 ZA4: register control sweep. -maxrregcount is inert (launch bounds take precedence in CUDA);
+# the launch-bounds value is the only knob, and no value avoids the sm_90 spill.
+knob,value,arch,regs,stack,spill_store,spill_load
+maxrregcount,any,sm_80,254,1400,1824,1824
+maxrregcount,any,sm_90,168,4976,11636,11780
+launch_bounds,64,sm_80,254,1400,1824,1824
+launch_bounds,128,sm_80,254,1400,1824,1824
+launch_bounds,256,sm_80,254,1400,1824,1824
+launch_bounds,512,sm_80,64,3640,9480,9472
+launch_bounds,1024,sm_80,64,3576,9424,9416
+launch_bounds,64,sm_90,168,4976,11636,11780
+launch_bounds,128,sm_90,168,4976,11636,11780
+launch_bounds,256,sm_90,128,5984,14504,14656
+launch_bounds,512,sm_90,64,8216,22160,22392
+launch_bounds,1024,sm_90,64,8216,22160,22392

@@ -1,0 +1,21 @@
+{
+  "class" : "ZAcbc_kernel",
+  "complex" : false,
+  "decorator" : "static KOKKOS_INLINE_FUNCTION",
+  "full_parallel" : false,
+  "gen_dir" : "../../gen",
+  "generated" : 1,
+  "generator" : "gen_zacbc_ym_num.cpp",
+  "kernels" : "kernels.hh",
+  "main_opt" : "-O1",
+  "maxw" : 8,
+  "maxw_b" : 0,
+  "name" : "ZAcbc",
+  "namespace" : "zacbc_ym",
+  "units" : 
+  [
+    "gen_zacbc_ym_num_u0.cpp",
+    "gen_zacbc_ym_num_u1.cpp",
+    "gen_zacbc_ym_num_u2.cpp"
+  ]
+}

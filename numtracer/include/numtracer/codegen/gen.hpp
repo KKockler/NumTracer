@@ -18,6 +18,7 @@
 
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iomanip>
 #include <ostream>
@@ -421,9 +422,22 @@ namespace numtracer::network
     /// swept flows (>=500: noinline wins or ties; <500: inline wins).
     ///
     /// Only for DEVICE code: the host has no 255-register cliff, and its all-inline emission stays
-    /// byte-identical. Device-ness is decided by the decorator containing `__device__` — that is the
-    /// CONTRACT, not a heuristic: every decorator the codegen emits for a device target spells it, and
-    /// a decorator that does not is treated as host (all-inline) with no diagnostic.
+    /// byte-identical.
+    ///
+    /// HOW DEVICE-NESS IS DECIDED — and why it is no longer a string sniff. This used to test the
+    /// decorator for a literal `__device__` and call that "the CONTRACT". It was silently broken:
+    /// `ntKokkosDecor` (Codegen.m) rewrites `__host__ __device__ inline` to `KOKKOS_INLINE_FUNCTION`
+    /// BEFORE emission, and DiFfRG_compat.m hands the Kokkos spelling directly for a GPU target — so
+    /// no production decorator has ever contained `__device__` and the gate NEVER fired, on any real
+    /// flow, with no diagnostic (measured 2026-08-08: QCD_Nf2/no_mesons ZA4 has 75 trace functions,
+    /// 7 of them over 500 lines, `tr0` at 2281, and zero `noinline`). The measured cost of missing
+    /// it is the 0.70-0.73x above.
+    ///
+    /// Sniffing for `KOKKOS_` instead would be wrong in the other direction: those macros expand to
+    /// plain `inline` on a host-only Kokkos build, where all-inline is correct. So the target is now
+    /// stated EXPLICITLY by the caller via `NT_GEN_DEVICE=1` (Codegen.m sets it from the same
+    /// condition that picks the decorator). The `__device__` test is kept only as a back-compat
+    /// fallback for callers still passing the raw CUDA spelling.
     ///
     /// Overrides:
     ///   NT_GEN_NOINLINE_TRACES : force out-of-line for EVERY function (host+device) — the compile-cost
@@ -434,12 +448,24 @@ namespace numtracer::network
     ///                            nothing to spill). Read ONCE per process and cached: emission must be
     ///                            consistent across every function in a run, so changing the variable
     ///                            mid-process deliberately has no effect.
+    /// Is this generation targeting device code? Authoritative signal is `NT_GEN_DEVICE` (set by
+    /// Codegen.m from the same condition that chooses the decorator); the raw-CUDA spelling is
+    /// honoured as a fallback. Read once per process: emission must be consistent across every
+    /// function in a run.
+    inline bool device_target(const std::string &decor)
+    {
+      static const bool envDevice = [] {
+        const char *e = std::getenv("NT_GEN_DEVICE");
+        return e != nullptr && *e != '\0' && std::string(e) != "0";
+      }();
+      return envDevice || decor.find("__device__") != std::string::npos;
+    }
+
     inline std::string eff_decor(const std::string &decor, std::size_t nInstr = 0)
     {
       std::string effDecor = decor;
       bool noinline = std::getenv("NT_GEN_NOINLINE_TRACES") != nullptr;
-      const bool isDevice = decor.find("__device__") != std::string::npos;
-      if (!noinline && isDevice) {
+      if (!noinline && device_target(decor)) {
         static const std::size_t noinlineMinInstr = [] {
           if (const char *e = std::getenv("NT_GEN_NOINLINE_MIN")) {
             const long v = std::atol(e);
@@ -450,6 +476,17 @@ namespace numtracer::network
         noinline = nInstr > noinlineMinInstr;
       }
       if (noinline) {
+        // A Kokkos INLINE/FORCEINLINE macro expands to `__device__ __host__ __forceinline__`, so
+        // appending `__attribute__((noinline))` to it emits a self-contradiction the compiler is
+        // free to resolve either way. Swap in KOKKOS_FUNCTION — same host/device qualification,
+        // no inline hint — and only then attach the attribute.
+        for (const char *kokkosInline : {"KOKKOS_FORCEINLINE_FUNCTION", "KOKKOS_INLINE_FUNCTION"}) {
+          const std::size_t at = effDecor.find(kokkosInline);
+          if (at != std::string::npos) {
+            effDecor.replace(at, std::strlen(kokkosInline), "KOKKOS_FUNCTION");
+            break;
+          }
+        }
         const std::string kw = " inline";
         if (effDecor.size() >= kw.size() && effDecor.compare(effDecor.size() - kw.size(), kw.size(), kw) == 0)
           effDecor.replace(effDecor.size() - kw.size(), kw.size(), " __attribute__((noinline))");

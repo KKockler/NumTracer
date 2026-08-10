@@ -11,7 +11,12 @@ $RecursionLimit = 1000000;
 frame = NumTracer`sp3Frame[Global`p, Global`l1, Global`cos1, Global`cos2, Global`p1, Global`p2, Global`p3, Global`l1];
 args  = {Global`l1, Global`cos1, Global`cos2, Global`p, Global`k};
 dress = {ZA3, ZAcbc, ZA4, ZAqbq1, ZAqbq4, ZAqbq7, dtZc, Zc, dtZA, ZA, dtZq, Zq, Mq};
-fRGA3 = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3]}] // FTruncate // FRoute;
+(* Full permutation group of the identical external legs; the ClassTrans/transAAqbq
+   projectors are covariant under it. Symmetries must be stated by hand since FunKit
+   0bacdd1 -- without this the derivative yields every leg ordering as its own diagram
+   (measured on za4_147: 6183 diagrams / 164 s, vs 294 / 7.6 s with it). *)
+symLegs = FMakeSymmetryList[{A[i1], A[i2], A[i3]}];
+fRGA3 = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3]}, "Symmetries" -> symLegs] // FTruncate // FRoute;
 projA3 = FTerm[TBGetProjector["AAAClassTrans", 1, {i1, i2, i3} /. fRGA3["1-Loop"]["ExternalIndices"]]];
 traceA3 = projA3 ** (fRGA3["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[]);
 flow = SPParam[traceA3 // dressingRules];

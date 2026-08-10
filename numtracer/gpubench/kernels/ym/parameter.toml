@@ -1,0 +1,69 @@
+[physical]
+    Lambda       = 1000
+    m2A          = 0
+    alphaA3      = 0.075
+    alphaA4      = 0.075
+    alphaAcbc    = 0.075
+    eta_iter_max = 50
+    eta_tol      = 1e-5
+    eta_relax    = 0.4
+
+[tuning]
+    tune_m2A              = false
+    lower_m2A             = -20
+    upper_m2A             = -5
+    m2A_tol               = 0.000001
+    m2A_tol_coarse        = 0.001
+    m2A_warm_start_delta  = 1.5
+    tune_STI              = false
+    STI_tol               = 0.0001
+    STI_step_size         = 0.01
+    STI_tilt_step_size    = 0.01
+    STI_lower             = 8
+    STI_upper             = 90
+    STI_flow_final_time   = 9
+    STI_quadrature_factor = 0.5
+    STI_m2A_zc_target     = 0.01
+    m2A_zc_target         = 0.01
+
+[integration]
+    x_order                    = 32
+    cos1_order                 = 8
+    cos2_order                 = 8
+    phi_order                  = 8
+    x_extent_tolerance         = 0.001
+    jacobian_quadrature_factor = 0.5
+
+[discretization]
+    p_grid_min = 0.005
+    p_grid_max = 250
+    # Cluster the 64 momentum points around the gluon dressing peak. p_grid_focus = 0 gives a plain
+    # logarithmic grid; at 2 the cell width at 1 GeV is 0.021 decades instead of 0.075, and 32
+    # instead of 14 points fall into [0.3, 3] GeV.
+    p_grid_center = 1.0
+    p_grid_focus  = 2.0
+    threads       = 8
+    batch_size    = 64
+
+[timestepping]
+    final_time = 12
+    output_dt  = 0.25
+
+[timestepping.explicit]
+    dt         = 0.05
+    minimal_dt = 0.000001
+    maximal_dt = 0.1
+    abs_tol    = 0.0001
+    rel_tol    = 0.001
+
+[timestepping.implicit]
+    abs_tol    = 1e-14
+    rel_tol    = 1e-8
+    dt         = 0.0001
+    minimal_dt = 0.000001
+    maximal_dt = 0.1
+
+[output]
+    verbosity = 1
+    folder    = "./"
+    name      = "output"

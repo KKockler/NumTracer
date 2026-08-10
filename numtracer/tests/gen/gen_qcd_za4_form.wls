@@ -23,7 +23,12 @@ FSetCacheDirectory[$cacheDir];
 
 {tTrace, FlowA4} = AbsoluteTiming[
   Module[{fRG, proj, tr, fl},
-    fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}] // FTruncate // FPlot // FRoute // FPrint;
+    (* Full permutation group of the identical external legs; the ClassTrans/transAAqbq
+       projectors are covariant under it. Symmetries must be stated by hand since FunKit
+       0bacdd1 -- without this the derivative yields every leg ordering as its own diagram
+       (measured on za4_147: 6183 diagrams / 164 s, vs 294 / 7.6 s with it). *)
+    symLegs = FMakeSymmetryList[{A[i1], A[i2], A[i3], A[i4]}];
+    fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}, "Symmetries" -> symLegs] // FTruncate // FPlot // FRoute // FPrint;
     proj = TBGetProjector["AAAAClassTrans", 1, {i1, i2, i3, i4} /. fRG["1-Loop"]["ExternalIndices"]] //
              TBProjectToSymmetricPoint[#, l1, p, p1, p2, p3, p4] & // Simplify;
     tr   = FTerm[proj] ** (fRG["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[]);
@@ -32,13 +37,6 @@ FSetCacheDirectory[$cacheDir];
     ParallelMap[Simplify, fl]]];
 Print["[time] FORM trace (FTakeDerivatives..FormTrace..SPParam..Simplify): ", tTrace, " s"];
 
-
-(* WORKAROUND (2026-08-08): COEN's sub-kernel split emits `_cseN` references across sub-kernel
-   scopes on the larger FORM kernels (undeclared-identifier C++, or a hard "cannot lift" abort).
-   Disable the split — one flat kernel, same values, the same no-split fallback Cpp.m uses
-   internally. Remove once the COEN lift handles renumbered `_cse` names across blocks. *)
-FunKit`Private`$codeMaxKernelTerms = 10^9;
-FunKit`Private`$kernelSplitLevel = 1;
 
 tKernel = First @ AbsoluteTiming[
   MakeKernel[FlowA4,

@@ -76,7 +76,12 @@ namespace numtracer::numeric
         for (int j = 0; j < 4; ++j) {
           const Cx g = numtracer::dirac::kGamma[mu][i][j];
           if (g.re == 0 && g.im == 0) continue;
-          S.a[i][j] = S.a[i][j] + MPolyFactory::constant(nsym, g) * comp[mu];
+          // `scaled` instead of `constant(g) * comp[mu]`: same coefficient product in the same operand
+          // order and the same monomial order, but without the scratch + `from_scratch` sort. γ is
+          // sparse, so this fires a handful of times per (mu,i,j) sweep — but the sweep itself runs per
+          // Slash token per `numeric_dirac` call, i.e. inside the 89%-of-phase-A Dirac fold. The
+          // accumulate moves as well: `S.a[i][j]` starts empty.
+          S.a[i][j] = std::move(S.a[i][j]) + MPolyFactory::scaled(nsym, comp[mu], g);
         }
     }
     return S;

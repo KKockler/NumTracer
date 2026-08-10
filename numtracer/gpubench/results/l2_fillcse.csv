@@ -1,0 +1,5 @@
+flow,arch,extra,regs,stack,spill_store,spill_load,dadd,dmul,dfma,dsetp,mufu,fp64_total,occ_pct,waves
+ZAAqbq2,sm_80,"",128,40,0,0,45,429,1187,5,14,1680,25,16
+ZAAqbq2,sm_90,"",166,40,0,0,45,434,1187,5,14,1685,18,12
+ZAAqbq1,sm_80,"",96,40,0,0,28,193,533,5,12,771,32,21
+ZAAqbq1,sm_90,"",64,40,0,0,28,203,533,5,12,781,50,32

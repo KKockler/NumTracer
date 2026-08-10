@@ -28,7 +28,14 @@ spAngles4 = {
   Global`cosl1p3 -> -(1/3) Sqrt[1 - Global`cos1^2] (Global`cos2 + Sqrt[2 - 2 Global`cos2^2] (Cos[Global`phi] - Sqrt[3] Sin[Global`phi])),
   Global`cosl1p4 -> -(1/3) Sqrt[1 - Global`cos1^2] (Global`cos2 + Sqrt[2 - 2 Global`cos2^2] (Cos[Global`phi] + Sqrt[3] Sin[Global`phi]))};
 
-fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}] // FTruncate // FPlot // FRoute // FPrint;
+(* AAAAClassTrans is Bose-symmetric in all four gluon legs at generic momenta, so the FULL
+   permutation group may be used — the projector below is covariant under every element, which is
+   the condition FMakeSymmetryList's usage note attaches to the bare-field form. Since FunKit
+   0bacdd1 ("symmetries were unconditionally used - that's wrong") the caller must state this by
+   hand; without it this fixture derives every leg ordering as its own diagram. Same choice as the
+   production flow in qcd-codes/vacuum/QCD_Nf2/*/QCD.wl. *)
+sym  = FMakeSymmetryList[{A[i1], A[i2], A[i3], A[i4]}];
+fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}, "Symmetries" -> sym] // FTruncate // FPlot // FRoute // FPrint;
 proj = FTerm[TBGetProjector["AAAAClassTrans", 1, {i1, i2, i3, i4} /. fRG["1-Loop"]["ExternalIndices"]]];
 traceA4 = proj ** (fRG["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[]);
 net = FromFunKit[ SPParam[traceA4 // dressingRules] ];

@@ -489,17 +489,69 @@ $ntCompileJobs := ntCompileJobs[];
    top-level defs (so the bin-packer may scatter them across units), and their forward declarations
    go into the shared decl header, which is where the cross-unit calls resolve. *)
 
+(* Two dedup fast paths precede the generic chunking. They exist because these tables are hugely
+   redundant ROW-WISE, which the per-element chunker cannot see (measured 2026-08-08 on the emitted
+   generator sources):
+
+     table     rows    distinct    share of source (za3_147 / za4)
+     sdn0      33618          1        26% / 4%     -> every row is literally `DiracNet{}`
+     sln0      33618         19        22% / 70%
+     sdslR0    33618      33601        35% / 4%     -> genuinely distinct, correctly left alone
+
+   Both paths reproduce the vector element-for-element; only the SOURCE TEXT shrinks. `sdslR0` is
+   the control that keeps this honest: the guard below rejects it, because a 33601/33618 table
+   would pay for an index vector and save nothing. *)
+
+(* escape hatch + the A/B control for the two paths below *)
+ntNoTableDedup[] := StringQ[Environment["NT_GEN_NO_TABLE_DEDUP"]] && Environment["NT_GEN_NO_TABLE_DEDUP"] =!= "";
+
 ntChunkDef[name_String, ret_String, elems_List] :=
-  If[Length[elems] <= 1 || Total[StringLength /@ elems] <= $ntDefChunk,
-    {{ret <> " " <> name <> "(){ return {" <> StringRiffle[elems, ", "] <> "}; }"}, ""},
-    Module[
-      {cs, chunks, nc, defs},
-      (* cumulative chars / chunk size is nondecreasing, so equal keys form contiguous runs *)
-      cs = Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk];
-      chunks = SplitBy[Transpose[{elems, cs}], Last][[All, All, 1]];
-      nc = Length[chunks];
-      defs = MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}"&, chunks];
-      {Append[defs, ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> "); " <> StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nc}]] <> "return o; }"], StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nc}]]}
+  Module[{u, pos, idxCost, dedup},
+    dedup = !ntNoTableDedup[];
+    u = If[dedup, DeleteDuplicates[elems], elems];
+    pos = If[dedup, Lookup[AssociationThread[u -> Range[Length[u]] - 1], elems], {}];
+    (* one index entry costs its digits plus a comma *)
+    idxCost = (StringLength[ToString[Length[u]]] + 1) * Length[elems];
+    Which[
+      Length[elems] <= 1 || Total[StringLength /@ elems] <= $ntDefChunk,
+        {{ret <> " " <> name <> "(){ return {" <> StringRiffle[elems, ", "] <> "}; }"}, ""},
+
+      (* --- every row identical: the fill ctor, and the payload is emitted ONCE --- *)
+      dedup && Length[u] === 1,
+        {{ret <> " " <> name <> "(){ return " <> ret <> "(" <> ToString[Length[elems]] <> ", " <> First[u] <> "); }"}, ""},
+
+      (* --- few distinct rows: distinct table + an index run --- *)
+      (* Conservative: compares payloads only, charging the index to the new form while giving the
+         old form no credit for the ~14 chars/element of `o.push_back(...); ` it also pays. *)
+      dedup && Length[u] < Length[elems] && Total[StringLength /@ u] + idxCost < Total[StringLength /@ elems],
+        Module[{uDefs, uDecl, xs, xchunks, xnc, xdefs, xdecl, n},
+          n = ToString[Length[elems]];
+          {uDefs, uDecl} = ntChunkDef[name <> "_u", ret, u];
+          (* the distinct table is reached from the assembler below, which the bin-packer may put in
+             another unit, so it needs its own forward declaration (ntChunkDef only declares the
+             _c helpers it generates, never its own entry point). *)
+          xs = ToString /@ pos;
+          xchunks = SplitBy[Transpose[{xs, Ceiling[Accumulate[(StringLength /@ xs) + 1] / $ntDefChunk]}], Last][[All, All, 1]];
+          xnc = Length[xchunks];
+          xdefs = MapIndexed["void " <> name <> "_x" <> ToString[#2[[1]] - 1] <> "(std::vector<int>& o){ static const int a[] = {" <> StringRiffle[#1, ","] <> "}; o.insert(o.end(), a, a + " <> ToString[Length[#1]] <> "); }"&, xchunks];
+          xdecl = StringJoin[Table["void " <> name <> "_x" <> ToString[k - 1] <> "(std::vector<int>&);\n", {k, xnc}]];
+          {
+            Join[uDefs, xdefs,
+              {ret <> " " <> name <> "(){ " <> ret <> " u = " <> name <> "_u(); std::vector<int> x; x.reserve(" <> n <> "); " <>
+                 StringJoin[Table[name <> "_x" <> ToString[k - 1] <> "(x); ", {k, xnc}]] <>
+                 ret <> " o; o.reserve(" <> n <> "); for (int i : x) o.push_back(u[i]); return o; }"}],
+            uDecl <> ret <> " " <> name <> "_u();\n" <> xdecl}],
+
+      True,
+        Module[
+          {cs, chunks, nc, defs},
+          (* cumulative chars / chunk size is nondecreasing, so equal keys form contiguous runs *)
+          cs = Ceiling[Accumulate[(StringLength /@ elems) + 2] / $ntDefChunk];
+          chunks = SplitBy[Transpose[{elems, cs}], Last][[All, All, 1]];
+          nc = Length[chunks];
+          defs = MapIndexed["void " <> name <> "_c" <> ToString[#2[[1]] - 1] <> "(" <> ret <> "& o){ " <> StringJoin[("o.push_back(" <> # <> "); ")& /@ #1] <> "}"&, chunks];
+          {Append[defs, ret <> " " <> name <> "(){ " <> ret <> " o; o.reserve(" <> ToString[Length[elems]] <> "); " <> StringJoin[Table[name <> "_c" <> ToString[k - 1] <> "(o); ", {k, nc}]] <> "return o; }"], StringJoin[Table["void " <> name <> "_c" <> ToString[k - 1] <> "(" <> ret <> "&);\n", {k, nc}]]}
+        ]
     ]];
 
 (* ---- big literal tables as TOP-LEVEL functions, not braced-inits inside main() ---------------
@@ -599,6 +651,20 @@ ntTcmallocPrefix[] :=
          "/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4", "/usr/lib/libtcmalloc_minimal.so.4"},
         FileExistsQ, None]},
       If[lib === None, "", "LD_PRELOAD='" <> lib <> "' "]]];
+
+(* NT_GEN_DEVICE=1 tells the generator that the emitted kernel is DEVICE code, which is what enables
+   gen.hpp's size-gated `__noinline__` (device-only: the host has no register cliff, and its
+   all-inline emission is byte-identical). It is passed explicitly rather than sniffed from the
+   decorator because `ntKokkosDecor` rewrites the raw CUDA spelling to the Kokkos macros before this
+   point — that is exactly why the old `decor.find("__device__")` test silently never fired on any
+   production flow. `Automatic` falls back to the raw spelling so existing raw-CUDA callers keep
+   working; DiFfRG_compat passes True/False from its own Device option. *)
+ntDeviceEnvPrefix[deviceTarget_, decor_String] :=
+  With[{isDev =
+      If[deviceTarget === Automatic,
+        StringContainsQ[decor, "__device__"],
+        TrueQ[deviceTarget]]},
+    If[isDev, "NT_GEN_DEVICE=1 ", ""]];
 
 chunkLorInv[lorExpr_, ids_, env_, mask_, nc_] := Which[
     lorExpr === 0,
@@ -1755,7 +1821,7 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
         PRINTS the committed straight-line kernel header. No reduce/rebase/ibp/sp-kinematics. *)
 
 emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False] :=
-  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
+  Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
     chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
     str[x_] := ToString[x];
 (* DRESSED nets (symbolic dressing collection): a core may be ntDressedCore[chainStr, slotsStr]
@@ -1860,8 +1926,16 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
 (* colour-net table: forward decls + assembler only — the chunk DEFINITIONS ride the -O0 units
    (colChunkDefs, hoisted above), keeping the 6+ MB table off the serial -O1 main-TU compile. *)
         colMainDecls];
-    unitPre =
-      "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <> "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
+(* The shared header block goes through a per-flow `_pch.hh` so the build can precompile it ONCE
+   instead of per unit TU. Measured 2026-08-08 (za3_147, one -O0 unit, perf instructions:u):
+   11.10 G plain -> 2.29 G with -include-pch, i.e. 4.85x less compile work per unit, against a
+   ~2 s one-off PCH build amortised over 8 (za3_147) to 74 (za4_147) units.
+   The `#ifndef NT_GEN_PCH` guard keeps the emitted source STANDALONE-compilable — required, since
+   ab_gen.sh and any hand build compile these TUs with no PCH at all. The guard must suppress the
+   textual include when a PCH is in play: re-including the same headers on top of the PCH costs
+   5.98 G, throwing away half the win. *)
+    unitInc =
+      "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
 (* dressed nets emit dch<i>()/dsl<i>() builders here (the big DChainTok/DSlot literals — moved OFF
    the single -O1 main TU onto these parallel -O0 units, since a 100k+-char braced-init is ~quadratic
    even at -O0); they need the dressed-token types from numeric_contract.hpp. Non-dressed units don't
@@ -1876,7 +1950,11 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
         If[colChunkDefs =!= {},
           "#include \"numtracer/network/sun_net.hpp\"\n",
           ""
-        ] <> "using numtracer::Cx;\nnamespace numtracer::network {\n" <> tmpl <> "}\nusing namespace numtracer::network;\n" <>
+        ];
+    unitPre =
+      "// GENERATED by MakeNTKernel — do not edit. Numeric net-builder unit (compiled -O0).\n" <>
+        "#ifndef NT_GEN_PCH\n" <> unitInc <> "#endif\n" <>
+        "using numtracer::Cx;\nnamespace numtracer::network {\n" <> tmpl <> "}\nusing namespace numtracer::network;\n" <>
         If[hasDressed,
           "using namespace numtracer::numeric;\n",
           ""];
@@ -2650,6 +2728,83 @@ ntMarkGenerated[manifestFile_String] := Module[{m = Import[manifestFile, "RawJSO
    regAlias adds `using Regulator = REG;` (DiFfRG reads it back off the kernel class) and only makes
    sense with the template, which is why it implies it at the call sites below. *)
 
+(* ---- interpolator index sharing --------------------------------------------------------------
+   COEN hoists every dressing lookup into `const auto _interpN = <Interp>(<arg>);`. Many of those
+   share an argument: a flow evaluates several dressings at the SAME momentum. The lookup is not
+   cheap — measured at ~210 fp64 SASS instructions, of which ~200 are the fp64 log1p inside
+   Coordinates::backward (the spline evaluation itself is ~10) — and the compiler CANNOT share it,
+   because each interpolator owns its own `coordinates` members and cannot be proven to agree with
+   another's. So a kernel with 13 lookups over 8 distinct arguments pays 13 transforms.
+
+   This rewrites each such group to pay the transform once:
+
+     const auto _interp3 = ZA3(<arg>);        ->   const auto _ix0 = ZA3.index(<arg>);
+     const auto _interp7 = ZAcbc(<arg>);           const auto _interp3 = ZA3.at(_ix0);
+                                                   const auto _interp7 = ZAcbc.at(_ix0);
+
+   Measured on the YangMills flow set: 1.13-1.26x end to end, 14.5-24% fewer fp64 instructions,
+   results bit-identical. See numtracer/gpubench/FINDINGS.md.
+
+   Requires DiFfRG's SplineInterpolator1D/LinearInterpolator1D to expose index()/at(), where
+   index() depends ONLY on the coordinate system (clamping lives in at(), since it is size
+   dependent and would otherwise make an index untransferable between interpolators of different
+   length). The interpolators of one flow are all built on the consumer's single coordinate object,
+   which is what makes the sharing legal.
+
+   Applied per kernel BODY, which is why a complex flow's three #if branches need no special care:
+   each goes through its own MakeCppFunction, so a hoist can never escape into a sibling branch.
+
+   LAYERING: whether a dressing handle offers index()/at() is a property of the CONSUMER's
+   interpolator type, not of NumTracer — the index()/at() split is a DiFfRG pattern. So this pass is
+   opt-in via "ShareInterpolatorIndex" and stays inert for every other backend; DiFfRG_compat.m
+   turns it on once it has checked the dressing types. The callees are taken from the `dress` list
+   the caller already supplies, so nothing here has to know how DiFfRG spells an interpolator type.
+   Regulator calls (RB/RFdot/...) and, on complex flows, ntRe(ns::trK(fenv)) share the same
+   `const auto _interpN = f(...)` shape and must NOT be rewritten — restricting callees to `dress`
+   excludes them by construction (and ntRe is an overloaded member, so ntRe.index() would not even
+   compile).
+
+   NT_NO_INTERP_SHARE=1 disables it (the A/B control). *)
+
+$ntInterpShare = (Environment["NT_NO_INTERP_SHARE"] =!= "1");
+
+(* k-only lookup hoisting ("HoistLoopConstLookups"): NT_GEN_NO_KHOIST=1 disables (the A/B control). *)
+$ntKHoist = (Environment["NT_GEN_NO_KHOIST"] =!= "1");
+
+ntInterpLine[ln_String] :=
+  Module[{m = StringCases[ln,
+      RegularExpression["^(\\s*)const auto (_interp\\d+) = (\\w+)\\((.*)\\);\\s*$"] :> {"$1", "$2", "$3", "$4"}]},
+    If[m === {}, None, First[m]]];
+
+ntShareInterpIndices[text_String, splines_List] :=
+  Module[{lines, parsed, counts, shared, idxName, emitted, out, nrw = 0},
+    If[!TrueQ[$ntInterpShare] || splines === {}, Return[text]];
+    lines = StringSplit[text, "\n", All];
+    parsed = ntInterpLine /@ lines;
+(* count arguments over interpolator lookups only *)
+    counts = Counts[Cases[parsed, p_List /; MemberQ[splines, p[[3]]] :> StringTrim[p[[4]]]]];
+    shared = Select[Keys[counts], counts[#] >= 2 &];
+    If[shared === {}, Return[text]];
+    idxName = AssociationThread[Sort[shared] -> ("_ix" <> ToString[#] & /@ Range[0, Length[shared] - 1])];
+    emitted = <||>;
+    out = Reap[
+        MapThread[
+          Function[{ln, p},
+            If[p === None || !MemberQ[splines, p[[3]]] || !KeyExistsQ[idxName, StringTrim[p[[4]]]],
+              Sow[ln],
+              Module[{ind = p[[1]], nm = p[[2]], cal = p[[3]], arg = StringTrim[p[[4]]], ix},
+                ix = idxName[arg];
+(* the first user of an argument owns the transform; every later one reuses the index *)
+                If[!KeyExistsQ[emitted, arg],
+                  emitted[arg] = True;
+                  Sow[ind <> "const auto " <> ix <> " = " <> cal <> ".index(" <> arg <> ");"]];
+                nrw++;
+                Sow[ind <> "const auto " <> nm <> " = " <> cal <> ".at(" <> ix <> ");"]]]],
+          {lines, parsed}]][[2]];
+    ntLog["[interp] shared ", Length[shared], " of ", Length[counts],
+      " distinct interpolator arguments (", nrw, " lookups rewritten)"];
+    StringRiffle[If[out === {}, lines, First[out]], "\n"]];
+
 ntKernelClass[name_, members_List, decor_, regTemplate_, regAlias_, extraPriv_List] :=
   FunKit`MakeCppClass[
     Sequence @@
@@ -2731,11 +2886,24 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
     "Components" -> Automatic,
     "SymbolDefs" -> <||>,
     "Decorator" -> "static inline",
+(* Does the emitted kernel target DEVICE code? This drives gen.hpp's size-gated `__noinline__`, which
+   is a device-only lever (the host has no 255-register cliff). It must be stated, not sniffed from
+   the decorator: `ntKokkosDecor` rewrites any raw `__host__ __device__` to the Kokkos macros before
+   emission, so the old `__device__` string test never fired on a real flow — and testing for
+   `KOKKOS_` instead would be wrong the other way, since those expand to plain `inline` on a
+   host-only Kokkos build. Automatic infers from the raw CUDA spelling only (i.e. host unless the
+   caller says otherwise); MakeNTKernelDiFfRG passes its own Device option through. *)
+    "DeviceTarget" -> Automatic,
     "RuntimeInclude" -> "numtracer/codegen/runtime.hpp",
     "ExtraIncludes" -> {},
     "KernelNamespace" -> "numtracer_kernels",
     "SupportNamespace" -> "numtracer",
     "DressingType" -> Automatic,
+(* Opt-in: rewrite repeated dressing lookups to share one coordinate transform (see
+   ntShareInterpIndices). Requires the consumer's interpolator handle to expose index()/at(),
+   which is a DiFfRG property, so this stays False for backend-agnostic emission. *)
+    "ShareInterpolatorIndex" -> False,
+    "HoistLoopConstLookups" -> False,
     "RegulatorTemplate" -> False,
     "RegulatorAlias" -> False,
     "RealProbe" -> True,
@@ -3148,7 +3316,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
     Needs["FunKit`"];
 (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
    steps (the integrand Sum, COEN's expression lowering) recurse ~linearly in that count, so the
@@ -3559,6 +3727,39 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
                 Times @@ (traceRef[pGroupOf[#]]& /@ lorFacOf[[rep + 1]])
               ] * traceRef[gi - 1]],
           {gi, nAdd}]];
+(* ---- k-only dressing-lookup hoisting ("HoistLoopConstLookups") -----------------------------
+   A lookup whose argument contains NO integration variable and NO grid coordinate is a LAUNCH
+   CONSTANT: Zc[k] or ZA[(1+k^6)^(1/6)] is the same number for every thread of a map() launch,
+   yet each thread pays the full coordinate transform (a fp64 log1p/log+asinh) plus the spline
+   evaluation for it. Replace each DISTINCT such call with a scalar kernel parameter nthk<i>,
+   evaluated once on the host by the generated static helper ntHoisted() (below) that the
+   DiFfRG-side wrapper calls before launching.
+   Applied to the integrand BEFORE the complex-branch split, so all #if branches see the same
+   substitution and the kernel signature is branch-independent.
+   NOT bit-identical: host libm log/exp differ from device libdevice in the last ulp, so this is
+   gated at the physics level (observables + dressing sweeps), not bitwise.
+   Opt-in (DiFfRG_compat.m enables it after checking the dressing types expose .CPU());
+   NT_GEN_NO_KHOIST=1 is the A/B control. *)
+    hoistCalls = {};
+    hoistSyms = {};
+    If[TrueQ[OptionValue["HoistLoopConstLookups"]] && $ntKHoist && dress =!= {},
+      Module[{loopSyms = DeleteCases[args, Global`k], dressPat},
+(* "Dressings" may arrive as strings (DiFfRG_compat derives them from the parameter list); in the
+   integrand the calls carry SYMBOL heads, so normalise before matching. *)
+        dressPat = Alternatives @@ (If[StringQ[#], Symbol["Global`" <> #], #]& /@ dress);
+        hoistCalls =
+          DeleteDuplicates @
+            Cases[integrand, (d : dressPat)[a_] /; FreeQ[a, Alternatives @@ loopSyms], {0, Infinity}];
+        If[hoistCalls =!= {},
+          hoistSyms = Table[Symbol["Global`nthk" <> ToString[i - 1]], {i, Length[hoistCalls]}];
+          integrand = integrand /. Thread[hoistCalls -> hoistSyms];
+          ntLog["[khoist] hoisted ", Length[hoistCalls],
+            " loop-constant dressing lookup(s) to host-evaluated kernel parameters"]]]];
+(* consumed by DiFfRG_compat.m to decide whether (and with how many values) to patch the
+   generated CT_map/CT_get wrappers after this call returns. Lives in the shared Private`
+   context: the NumTracer` context itself is Protect-ed at package load (NumTracer.m), so an
+   exported-context handoff symbol would silently fail to assign (Set::wrsym). *)
+    $ntLastHoistCount = Length[hoistCalls];
 (* OPTIMIZATION (opt-in, "PruneRealTraces"): a group whose dressing coefficient is REAL has only
    Re(trace) consumed (the consumer takes Re of the whole kernel; a real coeff cannot move
    Im(trace) into the real part). Flag it so the generator emits a `double` trace and never
@@ -3663,7 +3864,11 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
           If[AssociationQ[interpTy],
             Lookup[interpTy, If[StringQ[nm], nm, ToString[nm]], First[Values[interpTy]]],
             interpTy]]},
-      kernelParams = Join[mkParam[#, "double"]& /@ args, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
+(* the hoisted k-only lookup values ride at the END of the parameter list, so the DiFfRG wrapper
+   can append them after the dressings without disturbing any existing argument position. The
+   loop-independent constant() is called with the same argument tail (tuple_cat(pos, m_args)), so
+   it must accept them too — unused there. *)
+      kernelParams = Join[mkParam[#, "double"]& /@ args, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress, mkParam[#, "double"]& /@ hoistSyms];
 (* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
    where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds
    full_args = tuple_cat(coordinates.forward(idx), m_args)). Matching only `p` and `k` by name works
@@ -3671,7 +3876,25 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    DROPS all three coordinates, and a constant body referring to them then fails to compile with
    "identifier S0 is undefined". "CoordinateArgs" carries the real coordinate names; `args` already
    lists coordinates before k, so filtering preserves the order DiFfRG passes them in. *)
-      constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress];
+      constParams = Join[mkParam[#, "double"]& /@ Select[args, constArgQ], mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress, mkParam[#, "double"]& /@ hoistSyms];
+(* the host-side evaluator for the hoisted k-only lookups. The DiFfRG wrapper (patched by
+   DiFfRG_compat.m) calls it once per map()/get() invocation and appends its results to the
+   integrator call, in hoistSyms order. Host-only by construction (.CPU()); the expressions are
+   the SAME CppForm lowering the kernel would have used, so semantics differ from the in-kernel
+   evaluation only by host-libm-vs-libdevice last-ulp rounding. *)
+      hoistFnStr =
+        If[hoistCalls === {},
+          None,
+          Module[{hkParams, vals},
+            hkParams = Join[
+              mkParam[#, "double"]& /@ Select[args, # === Global`k&],
+              mkParam[#, scalarTy[#]]& /@ scalarParams,
+              mkParam[#, dressTy[#]]& /@ dress];
+            vals = (SymbolName[Head[#]] <> ".CPU()(" <> cppFlat[#[[1]]] <> ")")& /@ hoistCalls;
+            "static device::array<double, " <> ToString[Length[hoistCalls]] <> "> ntHoisted(" <>
+              StringRiffle[FunKit`MakeParameterString /@ hkParams, ", "] <> ")\n{\n  " <>
+              StringRiffle[ntSupportUsings[sns], "\n  "] <> "\n  return {{" <>
+              StringRiffle[vals, ",\n    "] <> "}};\n}"]];
 (* dressed kernels: fill() takes one `double dr_<id>` per dressing atom — the kernel body computes
    the atom's value (regulators / interpolators in scope there) and passes it. Matches fm.dress. *)
       If[!FreeQ[invNets, _ntDressedCore],
@@ -3705,7 +3928,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    preprocessor pick is what lets the whole generation run offline, as a build step. Each body goes
    through its own MakeCppFunction so COEN's CSE spans the whole expression, exactly as when Mathematica
    used to re-lower the single chosen one after the probe. *)
-          mkKernelFn = Function[expr, FunKit`MakeCppFunction[expr, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble]];
+          mkKernelFn = Function[expr, ntShareInterpIndices[FunKit`MakeCppFunction[expr, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble], If[TrueQ[OptionValue["ShareInterpolatorIndex"]], dress, {}]]];
           kernelFn =
             If[!complexQ,
               mkKernelFn[integrand],
@@ -3719,7 +3942,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
                 "#endif"}, "\n"]];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
 (* ntRe/ntIm are needed by both real branches, so a complex flow always carries them. *)
-          classStr = ntKernelClass[name, {kernelFn, constFn}, decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
+          classStr = ntKernelClass[name, Join[{kernelFn, constFn}, If[hoistFnStr === None, {}, {hoistFnStr}]], decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
             FunKit`MakeCppHeader[
@@ -3735,6 +3958,12 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
 (* Split generator: a main TU + N net-builder unit TUs + a decl header (all in the tests/gen/ dir), so the
    net-builder codegen compiles in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
+(* Precompiled-header source for the -O0 net-builder units. Deliberately a SUPERSET of what any
+   one unit includes (a unit skips numeric_contract.hpp when the flow has no dressed nets, and
+   sun_net.hpp when it is colour-free): the PCH is built once, so precompiling a header this flow
+   does not use costs one 2 s build, whereas threading the exact per-flow set out of the emitter
+   would mean plumbing it through the return value for no measured gain. *)
+    pchFile = StringReplace[genFile, ".cpp" -> "_pch.hh"];
     unitFiles = Table[StringReplace[genFile, ".cpp" -> "_u" <> ToString[u - 1] <> ".cpp"], {u, 1, Length[genUnits]}];
     ntLog[
       "[prof] write generator files (",
@@ -3745,6 +3974,12 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
       First @
         AbsoluteTiming[
           ntExportCpp[declFile, genDecl];
+          ntExportCpp[pchFile,
+            "// GENERATED by MakeNTKernel — do not edit. Precompiled-header source for the -O0\n" <>
+            "// net-builder units; see the NT_GEN_PCH guard in each unit TU.\n#pragma once\n" <>
+            "#include \"numtracer/network/network.hpp\"\n#include \"numtracer/network/dirac.hpp\"\n" <>
+            "#include \"numtracer/core/lit.hpp\"\n#include <utility>\n" <>
+            "#include \"numtracer/numeric/numeric_contract.hpp\"\n#include \"numtracer/network/sun_net.hpp\"\n"];
 (* each unit #includes the shared decl header so its net builders can call the cross-unit CSE
    accessors (lc<k>()/dc<k>()) and sibling net builders, parsed once per TU. *)
           Module[{uInc = "#include \"" <> FileNameTake[declFile] <> "\"\n"},
@@ -3769,7 +4004,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    codegen runs across cores. A failed unit compile leaves its .o missing -> the link rc is nonzero,
    so the existing rc check catches it. *)
       Module[
-        {tcc, cc, mainObj, unitObjs, pcmd, lcmd, clog = bin <> "_compile.log", cxx = resolveGenCxx[], mainOpt, libPath = resolveGenLib[incDir], useLib, hoDef, libArg},
+        {tcc, cc, mainObj, unitObjs, pcmd, lcmd, pchOut, pchCmd, pchArg, clog = bin <> "_compile.log", cxx = resolveGenCxx[], mainOpt, libPath = resolveGenLib[incDir], useLib, hoDef, libArg},
 (* Default: link the prebuilt libNumTracer.a (engine bodies compiled once). If it is not found,
    fall back to a self-contained header-only compile so generation still works (older, slower
    path — every engine body re-instantiated in the main TU). *)
@@ -3848,7 +4083,24 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    (core/config.hpp), which degrades to abort() there — so this only removes dead cleanup code.
    The MAIN TU keeps exceptions: it emits a try/catch thread-pool fallback (see the parWork
    template below, `catch(const std::system_error&)`), which is ill-formed under -fno-exceptions. *)
-        pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"")& /@ Join[{"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"}, Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> "-I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')", {u, 1, Length[unitFiles]}]], " "] <> " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD > '" <> clog <> "' 2>&1";
+(* PRECOMPILED HEADER for the -O0 unit TUs. Measured 2026-08-08 (za3_147, one unit, perf
+   instructions:u): 11.10 G -> 2.29 G, i.e. 4.85x less compile work per unit, for a ~2 s one-off
+   PCH build amortised over 8 (za3_147) to 74 (za4_147) units. This is the lever the table-size
+   work was NOT: the emitted tables are ~3% of what the compiler parses (a 126 KB unit
+   preprocesses to 3.34 MB), so shrinking them moved the compile 0%.
+   clang++ only — GCC's PCH is a different mechanism (a .gch beside the header, found implicitly)
+   and is not worth a second code path while resolveGenCxx[] prefers clang++ anyway. When the PCH
+   is not built the units fall back to their textual includes via the NT_GEN_PCH guard, so this is
+   a pure optimisation with no correctness surface. NT_GEN_NO_PCH=1 opts out.
+   The PCH MUST be built with the unit TUs' exact flag set (-O0 -fno-exceptions -fno-rtti + hoDef);
+   clang rejects a PCH whose flags disagree with the consumer's. *)
+        pchOut = bin <> ".pch";
+        pchCmd =
+          If[StringContainsQ[cxx, "clang"] && !(StringQ[Environment["NT_GEN_NO_PCH"]] && Environment["NT_GEN_NO_PCH"] =!= ""),
+            "(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> "-I '" <> incDir <> "' -x c++-header '" <> pchFile <> "' -o '" <> pchOut <> "') > '" <> clog <> "' 2>&1",
+            None];
+        pchArg = If[pchCmd === None, "", " -DNT_GEN_PCH -include-pch '" <> pchOut <> "'"];
+        pcmd = "printf '%s\\0' " <> StringRiffle[("\"" <> # <> "\"")& /@ Join[{"(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 " <> mainOpt <> hoDef <> "-pthread -I '" <> incDir <> "' -c '" <> genFile <> "' -o '" <> mainObj <> "')"}, Table["(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> pchArg <> " -I '" <> incDir <> "' -c '" <> unitFiles[[u]] <> "' -o '" <> unitObjs[[u]] <> "')", {u, 1, Length[unitFiles]}]], " "] <> " | xargs -0 -P " <> ToString[$ntCompileJobs] <> " -I CMD bash -c CMD >> '" <> clog <> "' 2>&1";
         lcmd = cxx <> " -pthread '" <> mainObj <> "' " <> StringRiffle[("'" <> # <> "'")& /@ unitObjs, " "] <> libArg <> " -o '" <> bin <> "' >> '" <> clog <> "' 2>&1";
 (* Content-addressed compile cache: the generator source is a deterministic function of the flow,
    and the compile dominates the run ~11:1 on medium flows (measured 2026-08-08 across za3_147 /
@@ -3862,7 +4114,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
           cacheOff = StringQ[Environment["NT_GEN_NO_COMPILE_CACHE"]] && Environment["NT_GEN_NO_COMPILE_CACHE"] =!= "";
           srcKey =
             ToString @ Hash[
-              {FileHash[#, "SHA256"]& /@ Join[{genFile, declFile}, unitFiles],
+              {FileHash[#, "SHA256"]& /@ Join[{genFile, declFile, pchFile}, unitFiles],
                If[useLib, FileHash[libPath, "SHA256"], "header-only"],
                FileHash[#, "SHA256"]& /@ Sort[FileNames["*.hpp", incDir, Infinity]],
                pcmd, lcmd}, (* the command lines carry cxx, -O levels and every other flag *)
@@ -3875,6 +4127,10 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
             Print["[time]   generator compile: 0 s (cache hit: sources+engine unchanged, reusing ", bin, ")"],
             {tcc, cc} =
               AbsoluteTiming[
+(* A failed PCH build is NOT fatal: drop the flags and let the units use their textual includes. *)
+                If[pchCmd =!= None && Run[pchCmd] =!= 0,
+                  ntLog["[warn]  PCH build failed; falling back to textual includes (see ", clog, ")"];
+                  pcmd = StringReplace[pcmd, pchArg -> ""]];
                 Run[pcmd];
                 Run[lcmd]];
             If[cc === 0 && !cacheOff,
@@ -3912,7 +4168,8 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
         {trun, rc} =
           AbsoluteTiming[
             Run[
-              ntTcmallocPrefix[] <> "'" <> bin <> "' -n '" <> ns <> "' -d '" <> decor <> "'" <>
+              ntDeviceEnvPrefix[OptionValue["DeviceTarget"], decor] <> ntTcmallocPrefix[] <>
+                "'" <> bin <> "' -n '" <> ns <> "' -d '" <> decor <> "'" <>
                 If[OptionValue["FullParallel"],
                   " -p",
                   ""
@@ -3971,7 +4228,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic};
 
 MakeNTKernel::disconnectmix = "Diagram `1` disconnects into >= 2 Dirac/colour trace components (a product of independent Dirac traces, a genuine >=2-loop structure). The numeric backend handles a single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored), but does not yet multiply two or more independent Dirac traces.";
 

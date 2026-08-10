@@ -1,0 +1,22 @@
+# Frozen diagram counts per flow — the input-inflation watchdog (see regen_check.sh).
+# One line per flow: <generator>  <comma-joined NumTrace diagram counts, in log order>.
+# Re-record with: tests/gen/regen_check.sh --record
+gen_qcd_za3_numeric	6
+gen_qcd_za4_numeric	54
+gen_zaqbq1_numeric	6
+gen_zq_numeric	2
+gen_qcd_za_numeric	8
+gen_qcd_za3_147_numeric	6
+gen_qcd_za4_147_numeric	294
+gen_qcd_aqbq147_numeric	108,108,108
+gen_ym_zacbc_numeric	6
+gen_qcd_etapil_numeric	8
+gen_zq_collect	2
+gen_multiterm_proj_numeric	1,0,1,1,1,1,1,2,1,1
+gen_ortho_numeric	5,175
+gen_fixedcomp_numeric	1,1,1,1,1,1,1,1
+gen_fierz_ortho_numeric	110
+gen_qcd_za3_gpu	6
+gen_qcd_za4_gpu	54
+gen_zaaqbq1_small_numeric	6
+gen_ym_za4_numeric	51

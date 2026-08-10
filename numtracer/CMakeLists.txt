@@ -256,6 +256,8 @@ if(NUMTRACER_BUILD_TESTS)
   # right VALUE while quietly degenerating back into the left fold, which no value check can see).
   add_executable(test_trace_fold tests/test_trace_fold.cpp)
   target_link_libraries(test_trace_fold PRIVATE NumTracer::NumTracer)
+  add_executable(test_poly_cancel tests/test_poly_cancel.cpp)
+  target_link_libraries(test_poly_cancel PRIVATE NumTracer::NumTracer)
 
   # Phase-2 example 2: pion <- quark loop -> pion (Yukawa) — fundamental flavour x Dirac x colour.
   add_executable(compare_pion_quark tests/refshim/compare_pion_quark.cpp)
@@ -473,6 +475,7 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME col_numeric COMMAND test_col_numeric)
   add_test(NAME guards COMMAND test_guards)
   add_test(NAME trace_fold COMMAND test_trace_fold)
+  add_test(NAME poly_cancel COMMAND test_poly_cancel)
   add_test(NAME flow_zaaqbq1_small COMMAND compare_zaaqbq1_small)
   add_test(NAME flow_lambda3d_small COMMAND compare_lambda3d_small)
   add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)
@@ -499,10 +502,21 @@ if(NUMTRACER_BUILD_TESTS)
   # regenerates the kernels from source, rebuilds, and re-runs the flow tests. It needs Wolfram and
   # takes minutes, hence opt-in:
   #
-  #     cmake -B build -DNUMTRACER_TEST_CODEGEN=ON && ctest --test-dir build -L codegen
+  #     cmake -B build -DNUMTRACER_TEST_CODEGEN=ON
+  #     NT_RUN_CODEGEN=1 ctest --test-dir build -L codegen
   #
   # It carries the label `codegen` and re-invokes ctest with `-LE codegen`, so it cannot recurse into
   # itself; for the same reason the install-time run below excludes the label.
+  #
+  # NT_RUN_CODEGEN is what makes it opt-in AT RUN TIME, and it is load-bearing. Registering the test
+  # unconditionally put a tens-of-minutes Wolfram regeneration into a plain `ctest`, so the ordinary
+  # suite went from ~50 s to intractable and was persistently red for stale-oracle reasons unrelated
+  # to whatever was being tested. Without the variable the script exits SKIP_RETURN_CODE, so a plain
+  # run reports it `Skipped` in 0 s — visibly not-run rather than silently absent, which matters
+  # because this is the only test that can see a change to mathematica/.
+  # (CTEST_CUSTOM_TESTS_IGNORE was tried first and is wrong: it also hides the test from
+  # `ctest -L codegen`, making it unrunnable. CONFIGURATIONS does not exclude it from a plain run
+  # on a single-config generator.)
   option(NUMTRACER_TEST_CODEGEN
          "Add a ctest that regenerates the kernels via Wolfram and re-runs the flow tests (slow)" OFF)
   if(NUMTRACER_TEST_CODEGEN)
@@ -516,6 +530,7 @@ if(NUMTRACER_BUILD_TESTS)
       set_tests_properties(codegen_regen PROPERTIES
         LABELS codegen
         RUN_SERIAL TRUE          # regenerates in the source tree and rebuilds: must not race
+        SKIP_RETURN_CODE 77      # exit 77 == "not requested"; see NT_RUN_CODEGEN above
         TIMEOUT 5400)
       set_property(TEST codegen_regen PROPERTY ENVIRONMENT "NT_BUILD_DIR=${CMAKE_BINARY_DIR}")
     endif()

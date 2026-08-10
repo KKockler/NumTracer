@@ -1,0 +1,29 @@
+{
+  "class" : "ZAAqbq1_kernel",
+  "complex" : true,
+  "decorator" : "static KOKKOS_INLINE_FUNCTION",
+  "full_parallel" : false,
+  "gen_dir" : "../../gen",
+  "generated" : 1,
+  "generator" : "gen_zaaqbq1_qcd_num.cpp",
+  "kernels" : "kernels.hh",
+  "main_opt" : "-O1",
+  "maxw" : 8,
+  "maxw_b" : 0,
+  "name" : "ZAAqbq1",
+  "namespace" : "zaaqbq1_qcd",
+  "probe" : "probe_zaaqbq1_qcd.cpp",
+  "units" : 
+  [
+    "gen_zaaqbq1_qcd_num_u0.cpp",
+    "gen_zaaqbq1_qcd_num_u1.cpp",
+    "gen_zaaqbq1_qcd_num_u2.cpp",
+    "gen_zaaqbq1_qcd_num_u3.cpp",
+    "gen_zaaqbq1_qcd_num_u4.cpp",
+    "gen_zaaqbq1_qcd_num_u5.cpp",
+    "gen_zaaqbq1_qcd_num_u6.cpp",
+    "gen_zaaqbq1_qcd_num_u7.cpp"
+  ],
+  "verdict" : "numtrace_verdict.hh",
+  "verdict_macro" : "NT_ZAAQBQ1_QCD_VERDICT"
+}

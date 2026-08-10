@@ -50,6 +50,7 @@
 // measuring the wrong thing; these two measure the right thing and stay at machine precision.
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <random>
 #include <vector>
@@ -70,10 +71,15 @@ int main()
 
   for (int i = 0; i < Nt; ++i) {
     const double l1 = U(rng), c1 = Uc(rng), c2 = Uc(rng), ph = Up(rng), p = U(rng), k = U(rng);
-    const double a = Dedup::kernel(l1, c1, c2, ph, p, k, d.ZA3, d.ZAcbc, d.ZA4, d.ZAqbq1, d.ZAAqbq1, d.dtZc,
-                                   d.Zc, d.dtZA, d.ZA, d.dtZq, d.Zq, d.Mq);
-    const double b = Ref::kernel(l1, c1, c2, ph, p, k, d.ZA3, d.ZAcbc, d.ZA4, d.ZAqbq1, d.ZAAqbq1, d.dtZc,
-                                 d.Zc, d.dtZA, d.ZA, d.dtZq, d.Zq, d.Mq);
+    // std::real, not a bare double: whether this flow's kernel comes out real- or complex-TYPED
+    // depends on which traces survive (the i-bookkeeping — see PruneRealTraces), and that shifted
+    // when the generator gained its FMakeSymmetryList. The VALUE is unaffected: measured max |Im|
+    // exactly 0 over 20,000 random points, max |Re| 3.5e4. std::real is also a no-op on a double,
+    // so this compiles either way — same convention as compare_za4_147_num.cpp.
+    const double a = std::real(Dedup::kernel(l1, c1, c2, ph, p, k, d.ZA3, d.ZAcbc, d.ZA4, d.ZAqbq1, d.ZAAqbq1,
+                                             d.dtZc, d.Zc, d.dtZA, d.ZA, d.dtZq, d.Zq, d.Mq));
+    const double b = std::real(Ref::kernel(l1, c1, c2, ph, p, k, d.ZA3, d.ZAcbc, d.ZA4, d.ZAqbq1, d.ZAAqbq1,
+                                           d.dtZc, d.Zc, d.dtZA, d.ZA, d.dtZq, d.Zq, d.Mq));
 
     if (!std::isfinite(a) || !std::isfinite(b)) {
       std::printf("ZAAqbq1(small): NON-FINITE at l1=%g c1=%g c2=%g phi=%g p=%g k=%g (%g vs %g)\n", l1, c1, c2,

@@ -1,5 +1,12 @@
 # GPU integration tests (CUDA)
 
+> **Scope correction (2026-08-09).** Everything below was measured on sm_89, where fp64 is 1:64 and
+> slow arithmetic hides register pressure, spill and occupancy. **It does not transfer to A100
+> (sm_80) or H100 (sm_90), where fp64 is 1:2.** There the production flows sit at 12-18 % occupancy,
+> nf2 ZA4 spills 11.6 KB/thread on sm_90 (vs 1.6 KB on sm_89), and no launch-bounds or
+> `-maxrregcount` setting avoids it — only the per-function `__noinline__` gate does, at a threshold
+> (~300) different from the 500 tuned here. See `../../../NUMTRACER_GPU_INVESTIGATION.md` §4.
+
 Full 4D loop integrals of the generated ZA3/ZA4 invariant-basis kernels over a grid of 64
 log-spaced external momenta, run on the GPU as DiFfRG-style two-phase map/reduce
 (`tests/gpu/integrator.cuh`):

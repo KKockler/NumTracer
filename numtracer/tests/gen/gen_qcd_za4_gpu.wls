@@ -39,8 +39,11 @@ spAngles4 = {
   Global`cosl1p4 -> -(1/3) Sqrt[1 - Global`cos1^2] (Global`cos2 + Sqrt[2 - 2 Global`cos2^2] (Cos[Global`phi] + Sqrt[3] Sin[Global`phi]))};
 
 {tTrace, traceA4} = AbsoluteTiming[
-  Module[{fRG, proj},
-    fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}] // FTruncate // FPlot // FRoute // FPrint;
+  Module[{fRG, proj, sym},
+    (* Full Bose permutation group of the four gluon legs; AAAAClassTrans is covariant under it.
+       Must be stated by hand since FunKit 0bacdd1. Same choice as production QCD.wl. *)
+    sym  = FMakeSymmetryList[{A[i1], A[i2], A[i3], A[i4]}];
+    fRG  = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3], A[i4]}, "Symmetries" -> sym] // FTruncate // FPlot // FRoute // FPrint;
     proj = FTerm[TBGetProjector["AAAAClassTrans", 1, {i1, i2, i3, i4} /. fRG["1-Loop"]["ExternalIndices"]]];
     proj ** (fRG["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[])]];
 Print["[time] A4 trace build (shared): ", tTrace, " s"];

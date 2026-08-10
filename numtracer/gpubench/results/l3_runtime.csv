@@ -1,0 +1,13 @@
+# L3 runtime, sm_89 (RTX 4070 Laptop), production grid orders, median of 11
+# qcd-codes dd46312 / DiFfRG_KT 8eb41dc1a
+tag,flow,med_ms,min_ms,max_ms
+baseline,ZA,0.3182,0.3123,0.3265
+baseline,Zc,0.2933,0.2873,0.3028
+baseline,ZA3,2.8127,2.8092,2.8270
+baseline,ZAcbc,3.8813,3.8647,3.9525
+baseline,ZA4,31.6012,31.5656,31.6570
+interpshare,ZA,0.2683,0.2624,0.2695
+interpshare,Zc,0.2553,0.2517,0.2600
+interpshare,ZA3,2.2238,2.2203,2.2309
+interpshare,ZAcbc,3.1855,3.1748,3.1998
+interpshare,ZA4,28.0500,28.0073,40.4264

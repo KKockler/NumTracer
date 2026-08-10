@@ -1,0 +1,26 @@
+{
+  "class" : "Zq_kernel",
+  "complex" : false,
+  "decorator" : "static KOKKOS_INLINE_FUNCTION",
+  "full_parallel" : false,
+  "gen_dir" : "../../gen",
+  "generated" : 1,
+  "generator" : "gen_zq_qcd_num.cpp",
+  "kernels" : "kernels.hh",
+  "main_opt" : "-O1",
+  "maxw" : 8,
+  "maxw_b" : 0,
+  "name" : "Zq",
+  "namespace" : "zq_qcd",
+  "units" : 
+  [
+    "gen_zq_qcd_num_u0.cpp",
+    "gen_zq_qcd_num_u1.cpp",
+    "gen_zq_qcd_num_u2.cpp",
+    "gen_zq_qcd_num_u3.cpp",
+    "gen_zq_qcd_num_u4.cpp",
+    "gen_zq_qcd_num_u5.cpp",
+    "gen_zq_qcd_num_u6.cpp",
+    "gen_zq_qcd_num_u7.cpp"
+  ]
+}

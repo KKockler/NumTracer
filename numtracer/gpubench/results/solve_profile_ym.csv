@@ -1,0 +1,10 @@
+# nsys, full YangMills ODE solve (share variant). 494 RHS evaluations.
+# Flows identified by launch count: vertex flows once per RHS, eta-loop flows once per eta iteration.
+flow,gpu_seconds,share_pct,launches
+ZA4,13.611,86.9,494
+ZAcbc,0.953,6.1,494
+ZA3,0.697,4.4,494
+ZA,0.150,1.0,938
+Zc,0.145,0.9,938
+phase2_reduces,0.110,0.7,
+# eta iterations per RHS = 938/494 = 1.90, against eta_iter_max = 50

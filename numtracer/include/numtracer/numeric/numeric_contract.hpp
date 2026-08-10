@@ -101,11 +101,15 @@ namespace numtracer::numeric
                                                const std::vector<std::array<MPoly, 4>> &comp)
     {
       std::array<MPoly, 4> r = {MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym), MPolyFactory::zero(nsym)};
+      // `scaled`, not `constant(coeff) * cv[mu]`: same coefficient product in the same operand order,
+      // same monomials, no scratch and no sort. Four of these per `vlc` entry, and this runs for every
+      // Slash token and every projector/vector `elem_factor` — one of the hottest sites in the engine.
+      // The accumulate moves too: on the first entry `r[mu]` is empty, which is exactly the empty-side
+      // deep copy the rvalue `operator+` lever exists to kill.
       for (const auto &[coeff, vid] : vlc) {
         const auto &cv = comp[vid];
-        const MPoly s = MPolyFactory::constant(nsym, Cx{coeff, 0});
         for (int mu = 0; mu < 4; ++mu)
-          r[mu] = r[mu] + s * cv[mu];
+          r[mu] = std::move(r[mu]) + MPolyFactory::scaled(nsym, cv[mu], Cx{coeff, 0});
       }
       return r;
     }
@@ -582,7 +586,15 @@ namespace numtracer::numeric
         MPoly acc = MPolyFactory::zero(nsym);
         for (int elimVal = 0; elimVal < 4; ++elimVal) {
           idxVal[elimPos] = elimVal;
-          MPoly prod = MPolyFactory::constant(nsym, Cx{1, 0});
+          // Seed from the FIRST factor rather than from `constant(1)`: the old form put a one-term
+          // polynomial through the full `operator*` on the first iteration, paying an |e|-entry
+          // scratch and a `from_scratch` sort to compute what is just `1·e`. With 2-4 factors per
+          // group that identity multiply was a quarter to a half of all elimination multiplies, and
+          // this is the innermost loop of the innermost operation. `scaled(e, 1)` applies the very
+          // same coefficient product (`Cx{1,0} * c`) to the same monomials in the same order, so it is
+          // bit-identical — it just skips the scratch and the sort.
+          MPoly prod = MPolyFactory::zero(nsym);
+          bool seeded = false;
           bool zero = false;
           for (std::size_t fIdx = 0; fIdx < group.size() && !zero; ++fIdx) {
             int idx = 0;
@@ -593,8 +605,14 @@ namespace numtracer::numeric
               zero = true;
               break;
             }
-            prod = prod * e;
+            if (!seeded) {
+              prod = MPolyFactory::scaled(nsym, e, Cx{1, 0});
+              seeded = true;
+            } else
+              prod = prod * e;
           }
+          // an EMPTY group is the empty product = 1, exactly what the old constant(1) seed gave
+          if (!zero && !seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0});
           if (!zero) acc = std::move(acc) + std::move(prod); // rvalue +: first iteration MOVES prod
         }
         // Reduce the intermediate IN PLACE: cancel bare-loop atoms (sin²→1-cos² makes k²=l1² a monomial)
@@ -602,7 +620,11 @@ namespace numtracer::numeric
         // a long pure-gauge chain (the ZA4 monster nets) — only cleaning at the end is too late.
         if (!units.empty()) {
           NT_STAT_TIMER(t_cf_reduce);
-          acc = divThroughMonomialAtoms(reduce_units(acc, units), atomDen);
+          // Both reductions pass through on the large majority of calls, and on a `const MPoly&` a
+          // pass-through `return p` is a full DEEP COPY — two of them, per outFlat, per elimination
+          // step. Moving picks the rvalue overloads, which move instead. `acc` is overwritten by the
+          // very assignment whose RHS moves from it, so nothing reads the moved-from value.
+          acc = divThroughMonomialAtoms(reduce_units(std::move(acc), units), atomDen);
         }
         out.v[outFlat] = std::move(acc);
       }
@@ -684,10 +706,24 @@ namespace numtracer::numeric
         rest.push_back(eliminate(nsym, group, bestId, atomDen, units));
         facs = std::move(rest);
       }
-      // remaining factors are scalars (no ids): multiply their single entries.
-      MPoly prod = MPolyFactory::constant(nsym, Cx{1, 0});
-      for (const Factor &F : facs)
-        prod = prod * (F.v.empty() ? MPolyFactory::zero(nsym) : F.v[0]);
+      // remaining factors are scalars (no ids): multiply their single entries. Seeded from the first
+      // factor for the same reason as in `eliminate` above — `constant(1) * e` pays a scratch + sort
+      // for an identity. A zero factor absorbs, so stop there rather than multiplying zero through.
+      MPoly prod = MPolyFactory::zero(nsym);
+      bool seeded = false;
+      for (const Factor &F : facs) {
+        if (F.v.empty()) {
+          prod = MPolyFactory::zero(nsym);
+          seeded = true;
+          break;
+        }
+        if (!seeded) {
+          prod = MPolyFactory::scaled(nsym, F.v[0], Cx{1, 0});
+          seeded = true;
+        } else
+          prod = prod * F.v[0];
+      }
+      if (!seeded) prod = MPolyFactory::constant(nsym, Cx{1, 0}); // empty product = 1, as before
       return prod;
     }
 
@@ -933,12 +969,15 @@ namespace numtracer::numeric
       // contract_factors consumes its `facs` argument by value — move so the per-term
       // factor list is built once, not copied again into the call.
       MPoly term = ndetail::contract_factors(nsym, std::move(facs));
-      term = term * MPolyFactory::constant(nsym, co);
+      // `scaled`, not `* constant(co)`: same coefficient product (Cx multiply is commutative
+      // bit-for-bit), same monomials in the same order, but without the |term|-entry scratch and the
+      // `from_scratch` sort that multiplying by a one-term polynomial otherwise pays.
+      term = MPolyFactory::scaled(nsym, term, co);
       result = std::move(result) + std::move(term);
     }
     if (lorentz.empty())
       result = ndetail::close_loops(nsym, loops, atomDen);
-    return divThroughMonomialAtoms(result, atomDen);
+    return divThroughMonomialAtoms(std::move(result), atomDen);
   }
 
   /// @brief Map one inv-backend @ref network::Elem to a numeric @ref NElem. The projector's loop momentum
@@ -1020,9 +1059,26 @@ namespace numtracer::numeric
     }
     // pre-reduce the atom denominators (idempotent if the caller already did) so monomial-cancellation
     // detection works during the per-step intermediate reduction inside contract_factors.
-    std::vector<MPoly> aden = atomDen;
-    for (MPoly &a : aden)
-      a = reduce_units(a, units);
+    //
+    // The caller — the generated driver — already does exactly this once at setup, so on every trace
+    // the reduction is a NO-OP. It nevertheless used to cost a deep copy of the whole table plus one
+    // more deep copy per entry (reduce_units' pass-through returned `p` by value), on 10^5 traces ×
+    // combinations. So: test the pass-through predicate first and only materialise a reduced copy when
+    // an entry genuinely needs rewriting; otherwise alias the caller's table. When every entry passes
+    // through, `reduce_units` would have returned it unchanged, so aliasing is value-identical.
+    std::vector<MPoly> adenOwned;
+    bool needReduce = false;
+    for (const MPoly &a : atomDen)
+      if (!reduceUnitsIsNoop(a, units)) {
+        needReduce = true;
+        break;
+      }
+    if (needReduce) {
+      adenOwned = atomDen;
+      for (MPoly &a : adenOwned)
+        a = reduce_units(std::move(a), units);
+    }
+    const std::vector<MPoly> &aden = needReduce ? adenOwned : atomDen;
     MPoly result = MPolyFactory::zero(nsym);
     for (const network::PTerm &pt : lor) {
       // build the numeric element list, then fold same-momentum projector chains before expansion.
@@ -1048,7 +1104,9 @@ namespace numtracer::numeric
         NT_STAT_TIMER(t_contract);
         term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
       }
-      term = term * MPolyFactory::constant(nsym, co);
+      // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
+      // scratch + sort. This runs once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
+      term = MPolyFactory::scaled(nsym, term, co);
       result = std::move(result) + std::move(term);
     }
     if (lor.empty())
@@ -1057,11 +1115,11 @@ namespace numtracer::numeric
     // (so its atom cancels) and shrinks the polynomial to the FORM angular basis.
     {
       NT_STAT_TIMER(t_reduce);
-      result = reduce_units(result, units);
+      result = reduce_units(std::move(result), units); // pass-through MOVES the whole trace polynomial
     }
     {
       NT_STAT_TIMER(t_divmono);
-      result = divThroughMonomialAtoms(result, aden);
+      result = divThroughMonomialAtoms(std::move(result), aden);
     }
     // Then cancel the MULTI-TERM (shifted-line) denominators by exact polynomial division — the case
     // divThroughMonomialAtoms structurally cannot reach. Off via NT_GEN_NO_POLYDIV=1 for A/B.

@@ -30,7 +30,12 @@ frame = NumTracer`sp3Frame[Global`p, Global`l1, Global`cos1, Global`cos2,
 args  = {Global`l1, Global`cos1, Global`cos2, Global`p, Global`k};
 dress = {ZA3, ZAcbc, ZA4, ZAqbq1, ZAqbq4, ZAqbq7, dtZc, Zc, dtZA, ZA, dtZq, Zq, Mq};
 
-fRGA3 = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3]}] // FTruncate // FPlot // FRoute // FPrint;
+(* AAAClassTrans is Bose-symmetric in all three gluon legs at generic momenta, so the FULL
+   permutation group may be used — the projector below is covariant under every element. Since
+   FunKit 0bacdd1 symmetries must be stated by hand; without this the derivative produces every
+   leg ordering as its own diagram. Same choice as production QCD.wl. *)
+symA3 = FMakeSymmetryList[{A[i1], A[i2], A[i3]}];
+fRGA3 = FTakeDerivatives[WetterichEquation, {A[i1], A[i2], A[i3]}, "Symmetries" -> symA3] // FTruncate // FPlot // FRoute // FPrint;
 projA3 = FTerm[TBGetProjector["AAAClassTrans", 1, {i1, i2, i3} /. fRGA3["1-Loop"]["ExternalIndices"]]];
 traceA3 = projA3 ** (fRGA3["1-Loop"]["Expression"] /. FMakeDiagrammaticRules[]);
 spAngles = {

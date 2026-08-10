@@ -1,5 +1,11 @@
 # NumTracer — performance summary
 
+> **GPU (2026-08-09).** A full investigation of GPU kernel performance for the two production QCD
+> codes lives in `../NUMTRACER_GPU_INVESTIGATION.md`, with the harness and raw data in
+> `gpubench/`. Headline: NumTracer's emitted arithmetic is only 1.5-17 % of the fp64 in a
+> YangMills kernel; the one large win (1.12-1.24x) was sharing the interpolator coordinate
+> transform in DiFfRG, not a codegen change.
+
 Generated numeric kernels vs their FormTracer (FORM) reference, on this machine
 (`-O3 -march=native`, `bench_aqbq147` over 200k random points). `num/FORM` is the ratio of
 kernel evaluation time; correctness is the max relative error against FORM.

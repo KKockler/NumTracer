@@ -306,6 +306,11 @@ namespace numtracer::numeric
     friend MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen);
     friend MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups);
     friend MPoly divThroughPolyAtoms(const MPoly &p, const std::vector<MPoly> &atomDen);
+    // The rebuild halves of the two reductions above, split out so their `const&` and `&&` overloads
+    // share one body. Same trust level as the functions they were extracted from — the `&&` overloads
+    // themselves need no friendship, since they only move and read public members.
+    friend MPoly dmaRebuild(const MPoly &p, const std::vector<MPoly> &atomDen);
+    friend MPoly reduceUnitsRebuild(const MPoly &p, const std::vector<std::vector<int>> &groups);
 
     MPoly() = default;
 
@@ -595,23 +600,23 @@ namespace numtracer::numeric
   /// per atom occurrence. Atoms with a non-monomial denominator (shifted lines) are left intact here
   /// and handed to @ref divThroughPolyAtoms, which trial-divides them into the numerator; only an atom
   /// surviving both passes reaches the lowering as an `inv` env slot. Value-preserving, frame-agnostic.
-  inline MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
+  ///
+  /// Split into a no-op TEST + a REBUILD so the `const MPoly&` and `MPoly&&` overloads below can share
+  /// both and cannot drift apart. The `&&` overload exists because the pass-through case fires on ~95%
+  /// of calls and `return p` on a `const&` is a full DEEP COPY of the polynomial — on the
+  /// `eliminate` in-step reduction that is one copy per output index of every elimination step, which
+  /// is the hottest loop in the engine. Same shape as the landed rvalue `operator+` lever.
+  /// @brief The @ref divThroughMonomialAtoms pass-through test. True ⇒ the rebuild is the identity.
+  inline bool dmaIsNoop(const MPoly &p, const std::vector<MPoly> &atomDen)
   {
-    NT_STAT_ADD(dma_calls, 1);
-    // Pass-through early-exit: with no atom on any term (the common state after cancellation)
-    // nothing can cancel and the rebuild below is the identity — skip the scratch + sort.
-    {
-      bool anyAtoms = false;
-      for (const auto &kv : p.t)
-        if (!kv.first.atoms.empty()) {
-          anyAtoms = true;
-          break;
-        }
-      if (!anyAtoms || atomDen.empty()) {
-        NT_STAT_ADD(dma_noop, 1);
-        return p;
-      }
-    }
+    if (atomDen.empty()) return true;
+    for (const auto &kv : p.t)
+      if (!kv.first.atoms.empty()) return false;
+    return true; // no atom on any term (the common state after cancellation) ⇒ nothing can cancel
+  }
+
+  inline MPoly dmaRebuild(const MPoly &p, const std::vector<MPoly> &atomDen)
+  {
     MPolyScratch out;
     out.reserve(p.t.size());
     for (const auto &[m, c] : p.t) {
@@ -649,6 +654,27 @@ namespace numtracer::numeric
     return MPoly::from_scratch(p.nsym, std::move(out));
   }
 
+  inline MPoly divThroughMonomialAtoms(const MPoly &p, const std::vector<MPoly> &atomDen)
+  {
+    NT_STAT_ADD(dma_calls, 1);
+    if (dmaIsNoop(p, atomDen)) {
+      NT_STAT_ADD(dma_noop, 1);
+      return p;
+    }
+    return dmaRebuild(p, atomDen);
+  }
+
+  /// Rvalue overload: identical decision, but the pass-through case MOVES instead of deep-copying.
+  inline MPoly divThroughMonomialAtoms(MPoly &&p, const std::vector<MPoly> &atomDen)
+  {
+    NT_STAT_ADD(dma_calls, 1);
+    if (dmaIsNoop(p, atomDen)) {
+      NT_STAT_ADD(dma_noop, 1);
+      return std::move(p);
+    }
+    return dmaRebuild(p, atomDen);
+  }
+
   /// @brief Apply unit-vector constraints `Σ_μ Uμ² = 1` to reduce each unit group's LAST component to
   ///        power ≤ 1: `U_last² → 1 − Σ_{μ<last} Uμ²`. A `group` is the list of symbol indices of one
   ///        unit direction's components (e.g. the loop direction `{U0,U1,U2}` with `U0²+U1²+U2²=1`, or a
@@ -657,33 +683,24 @@ namespace numtracer::numeric
   ///        the **monomial `l1²`** so @ref divThroughMonomialAtoms cancels it (like inv's `rel`), and
   ///        (b) collapses the `U·U` factors transverse projectors generate. Value-preserving;
   ///        terminates because each rewrite strictly lowers the last component's exponent.
-  inline MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups)
+  ///
+  /// Split into a no-op TEST + a REBUILD so the `const MPoly&` and `MPoly&&` overloads below share
+  /// both. The `&&` overload matters because the pass-through fires on ~88% of calls and `return p`
+  /// on a `const&` deep-copies the whole polynomial; see @ref divThroughMonomialAtoms.
+  /// @brief The @ref reduce_units pass-through test: no term carries any group's LAST component at
+  ///        power >= 2, so the work-stack rebuild would be the identity (`p` is already sorted and
+  ///        combined). Fires constantly — `eliminate`'s in-step reduction calls this on every
+  ///        intermediate, most of which are already reduced.
+  inline bool reduceUnitsIsNoop(const MPoly &p, const std::vector<std::vector<int>> &groups)
   {
-    if (groups.empty()) return p;
-    NT_STAT_ADD(ru_calls, 1);
-    // every group entry is a symbol index, so it must address a valid component slot `e[idx]`
-    for (const auto &g : groups)
-      for ([[maybe_unused]] int idx : g)
-        assert(idx >= 0 && idx < p.nsym);
-    // Pass-through early-exit: if no term carries any group's LAST component at power >= 2 there
-    // is nothing to rewrite and the work-stack rebuild below is the identity (p is already sorted
-    // and combined) — skip the scratch + sort. Fires constantly: the in-step reduction inside
-    // `eliminate` calls this on every intermediate, most of which are already reduced.
-    {
-      bool any = false;
-      for (const auto &kv : p.t) {
-        for (const auto &g : groups)
-          if (!g.empty() && kv.first.e[g.back()] >= 2) {
-            any = true;
-            break;
-          }
-        if (any) break;
-      }
-      if (!any) {
-        NT_STAT_ADD(ru_noop, 1);
-        return p;
-      }
-    }
+    for (const auto &kv : p.t)
+      for (const auto &g : groups)
+        if (!g.empty() && kv.first.e[g.back()] >= 2) return false;
+    return true;
+  }
+
+  inline MPoly reduceUnitsRebuild(const MPoly &p, const std::vector<std::vector<int>> &groups)
+  {
     MPolyScratch out;
     std::vector<std::tuple<MonoExp, MonoAtoms, Cx>> work;
     for (const auto &[m, c] : p.t)
@@ -715,6 +732,42 @@ namespace numtracer::numeric
       }
     }
     return MPoly::from_scratch(p.nsym, std::move(out));
+  }
+
+  /// Shared preamble of both @ref reduce_units overloads: the debug-only index validation. Kept as a
+  /// separate function so the assert loop is written once; compiles away in release builds.
+  inline void reduceUnitsCheckGroups([[maybe_unused]] const MPoly &p,
+                                     [[maybe_unused]] const std::vector<std::vector<int>> &groups)
+  {
+    // every group entry is a symbol index, so it must address a valid component slot `e[idx]`
+    for (const auto &g : groups)
+      for ([[maybe_unused]] int idx : g)
+        assert(idx >= 0 && idx < p.nsym);
+  }
+
+  inline MPoly reduce_units(const MPoly &p, const std::vector<std::vector<int>> &groups)
+  {
+    if (groups.empty()) return p; // NOT counted as a call, exactly as before
+    NT_STAT_ADD(ru_calls, 1);
+    reduceUnitsCheckGroups(p, groups);
+    if (reduceUnitsIsNoop(p, groups)) {
+      NT_STAT_ADD(ru_noop, 1);
+      return p;
+    }
+    return reduceUnitsRebuild(p, groups);
+  }
+
+  /// Rvalue overload: identical decision, but both pass-through cases MOVE instead of deep-copying.
+  inline MPoly reduce_units(MPoly &&p, const std::vector<std::vector<int>> &groups)
+  {
+    if (groups.empty()) return std::move(p); // NOT counted as a call, exactly as before
+    NT_STAT_ADD(ru_calls, 1);
+    reduceUnitsCheckGroups(p, groups);
+    if (reduceUnitsIsNoop(p, groups)) {
+      NT_STAT_ADD(ru_noop, 1);
+      return std::move(p);
+    }
+    return reduceUnitsRebuild(p, groups);
   }
 
   /// @brief Cancel a MULTI-TERM inverse atom `1/D` against the numerator by exact polynomial division.

@@ -30,6 +30,14 @@
 #ifndef KOKKOS_INLINE_FUNCTION
 #define KOKKOS_INLINE_FUNCTION NT_DH inline
 #endif
+// The size-gated out-of-lining (gen.hpp's eff_decor) swaps KOKKOS_INLINE_FUNCTION for
+// KOKKOS_FUNCTION on the oversized traces, because the INLINE macros expand to __forceinline__ and
+// would contradict the __attribute__((noinline)) appended next to them. Real Kokkos defines this;
+// this TU is not a Kokkos build, so supply it here too — without it every out-of-lined trace loses
+// its declaration and the body reports each SSA temporary as an undefined identifier.
+#ifndef KOKKOS_FUNCTION
+#define KOKKOS_FUNCTION NT_DH
+#endif
 
 // ---- the regulators the generated kernels call UNQUALIFIED -------------------
 // NumTracer emits a plain kernel class; the consumer supplies RB/RF/... . Global scope,
