@@ -91,7 +91,7 @@ The network mentions only momentum *tags* and index labels — it contains no ki
 is the separation the DSL is built around: the network is the algebra, the frame is the kinematics,
 and you can swap either without touching the other. Everything below reuses `net` verbatim.
 
-```{admonition} Those parentheses are load-bearing
+````{admonition} Those parentheses are load-bearing
 :class: warning
 In a `.wls` script a line that is already a complete expression **ends there**, so
 
@@ -104,7 +104,7 @@ assigns only `termA` and silently discards the rest — producing a kernel that 
 computes the wrong network. This script hit exactly that while being written. The guard is the
 `expected 2 diagrams` assertion in the emit helper below; assert the count you expect, not merely a
 nonzero one. [step-09](step-09.md) discusses it further.
-```
+````
 
 Note the `"Args"` lists differ. `sp3Frame` needs four runtime scalars, `gen3Frame` six. The `"Args"`
 list is exactly the generated C++ signature, in order.

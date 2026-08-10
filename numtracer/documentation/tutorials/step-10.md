@@ -3,7 +3,7 @@
 *Builds on: [step-07](step-07.md) · Built on by: [step-12](step-12.md) · Tags: `funkit`, `frg` ·
 **Tier C** (the full fRG toolchain)*
 
-```{admonition} What this step needs
+````{admonition} What this step needs
 :class: important
 [FunKit](https://github.com/satfra/FunKit), TensorBases, DiFfRG **and** FORM, in addition to a
 Wolfram kernel. This is the first step that needs the whole toolchain, and it is therefore **not**
@@ -17,7 +17,7 @@ It writes only to `NT_TUTORIAL_OUT` and modifies nothing in the repository.
 
 FORM appears here because TensorBases uses it to compute the tensor *bases* — never to do
 NumTracer's trace.
-```
+````
 
 ## Introduction
 
@@ -156,7 +156,7 @@ dressing[InverseProp, {A, A}, 1, {p1_, p2_}] :>
     ZA[Sqrt[sp[p2, p2]]] sp[p2, p2] + RB[k^2, sp[p2, p2]] ZA[evP],
 ```
 
-```{admonition} An unmatched dressing rule does not fail — it leaks
+````{admonition} An unmatched dressing rule does not fail — it leaks
 :class: warning
 A `dressing[…]` head that no rule matches is **not** an error. It survives the substitution, rides
 through `FromFunKit` as an opaque scalar, and is emitted into the kernel as a call to an undefined
@@ -170,7 +170,7 @@ The production `QCD_Nf2` code documents the classic instance: FunKit's `FOrderFi
 a four-fermi vertex to `{qb, qb, q, q}`, so a rule written for the `{qb, q, qb, q}` spelling **never
 fires**. A `dressing(...)` in a generated file always means a rule that did not match — see
 [step-22](step-22.md).
-```
+````
 
 **`PropParam`** does the scalar kinematic reduction: `sp[l1, p1] -> l1 p cos1` and friends. This is
 the **scalar half only**. The tensor half gets its kinematics from the frame, and the two must

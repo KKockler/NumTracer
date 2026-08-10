@@ -14,7 +14,8 @@ namespace numtracer_kernels
       using namespace numtracer;
       using namespace numtracer::compute;
       double fenv[(numtracer_kernels::discdirac_num::nenv) > 0 ? (numtracer_kernels::discdirac_num::nenv) : 1];
-      numtracer_kernels::discdirac_num::fill(fenv, l1, cos1, cos2, p);  return fma(numtracer_kernels::discdirac_num::tr0(fenv), numtracer_kernels::discdirac_num::tr3(fenv) * numtracer_kernels::discdirac_num::tr4(fenv), fma(numtracer_kernels::discdirac_num::tr1(fenv), numtracer_kernels::discdirac_num::tr5(fenv) * numtracer_kernels::discdirac_num::tr6(fenv), fma(numtracer_kernels::discdirac_num::tr2(fenv), numtracer_kernels::discdirac_num::tr7(fenv) * numtracer_kernels::discdirac_num::tr8(fenv), 0.)));
+      numtracer_kernels::discdirac_num::fill(fenv, l1, cos1, cos2, p);
+      return fma(numtracer_kernels::discdirac_num::tr0(fenv), numtracer_kernels::discdirac_num::tr3(fenv) * numtracer_kernels::discdirac_num::tr4(fenv), fma(numtracer_kernels::discdirac_num::tr1(fenv), numtracer_kernels::discdirac_num::tr5(fenv) * numtracer_kernels::discdirac_num::tr6(fenv), fma(numtracer_kernels::discdirac_num::tr2(fenv), numtracer_kernels::discdirac_num::tr7(fenv) * numtracer_kernels::discdirac_num::tr8(fenv), 0.)));
     }
 
     static inline auto constant(const double& p)

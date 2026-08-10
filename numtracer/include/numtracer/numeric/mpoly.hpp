@@ -26,6 +26,7 @@
 /// γ/slash builders that consume it live in `numeric/spinor_mat.hpp`.
 #pragma once
 
+#include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
 #include "numtracer/core/cx.hpp"
 #include "numtracer/numeric/stats.hpp"
 #include "numtracer/third_party/gch/small_vector.hpp"
@@ -35,7 +36,9 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 #include <map>
@@ -386,8 +389,18 @@ namespace numtracer::numeric
       return p;
     }
     /// A bare inverse atom `1/D` (atom id `aid`), coefficient 1.
+    ///
+    /// The narrowing to @ref MonoAtomT (`int16_t`) is the ONE place an atom id enters the monomial
+    /// key, and it was unguarded: `aid >= 32768` wraps to a different — possibly negative — id, so
+    /// the term then carries somebody else's denominator and @ref divThroughMonomialAtoms cancels
+    /// against the wrong `atomDen` entry. Silent, and value-wrong. The id space is small by
+    /// construction (one per projector denominator in the flow), so tripping this means the front
+    /// end changed, not that the bound is too tight.
     static MPoly atom(int ns, int aid)
     {
+      if (aid < 0 || aid > static_cast<int>(std::numeric_limits<MonoAtomT>::max()))
+        NT_THROW(std::runtime_error, "MPoly::atom: atom id out of MonoAtomT (int16) range — it would "
+                                     "wrap silently and alias another denominator");
       MPoly p(ns);
       p.t.push_back({Mono{MonoExp(ns, 0), MonoAtoms{static_cast<MonoAtomT>(aid)}}, Cx{1, 0}});
       return p;

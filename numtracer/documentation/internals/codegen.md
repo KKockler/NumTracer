@@ -182,11 +182,13 @@ global. The in-repo tests do exactly this — see `tests/refshim/nt_regulators.h
 `"RegulatorAlias" -> True`, which emits `using Regulator = REG;` and implies it), because DiFfRG's
 scaffold forward-declares the kernel as a template and instantiates it as `KERNEL<Regulator>`.
 
-A few further `MakeNTKernel` options shape the emitted kernel: `"GlobalCollect"` (default
-`True`) folds fundamental colour numerically so diagrams sharing a dressing coefficient merge
-into one trace; `"ScalarParams"` threads extra loop-independent doubles into the signature;
-`"Constant"` flat-adds a loop-independent term (DiFfRG's `constant(...)`); and `"Components"`
-restricts which external-projection components are emitted.
+Folding fundamental colour numerically — so that diagrams sharing a dressing coefficient merge into
+one trace — is unconditional; there is no option for it.
+
+A few further `MakeNTKernel` options shape the emitted kernel: `"ScalarParams"` threads extra
+loop-independent doubles into the signature; `"Constant"` flat-adds a loop-independent term
+(DiFfRG's `constant(...)`); and `"Components"` restricts which external-projection components are
+emitted.
 
 ## Generation knobs (environment variables)
 

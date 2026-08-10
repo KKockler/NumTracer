@@ -6,6 +6,25 @@
    Loaded inside NumTracer`Private` by NumTracer.m — public symbols (NumTrace, the
    nt* heads) already exist in the NumTracer` context. *)
 
+(* ---- environment flags ------------------------------------------------------- *)
+
+(* The ONE truth test for every NT_* boolean env flag, in DSL.m because it loads first and Codegen.m
+   shares this private context.
+
+   Three mutually incompatible conventions used to coexist: presence-only (`=!= $Failed`, value
+   ignored), exact-string (`=!= "1"`), and non-empty-string. So `NT_GEN_VERBOSE=0` turned verbosity
+   ON, and — the one that actually mattered — `NT_NO_LABEL_CHECK=0` DISABLED the per-diagram label
+   census, the guard that catches a Lorentz label occurring more than twice. That is not a knob: an
+   uncaught repeated label is a silently wrong contraction, and the variable's own comment said
+   "=1 disables", so setting it to 0 to be explicit did the opposite of what it read like.
+
+   `SetEnvironment["VAR" -> None]` (the reset idiom the fixture generators use, e.g.
+   gen_zaaqbq1_small_numeric.wls) makes Environment[] return $Failed, which must read as OFF — a
+   naive `v =!= "0"` would call that truthy and leave the flag stuck ON for the rest of the session. *)
+ntEnvFlag[name_String] :=
+  With[{v = Environment[name]},
+    StringQ[v] && MemberQ[{"1", "true", "yes", "on"}, ToLowerCase[StringTrim[v]]]];
+
 (* ---- head classification ---------------------------------------------------- *)
 
 (* A factor that participates in the tensor contraction (vs. a scalar coefficient).
@@ -247,7 +266,7 @@ diracNumeratorSumQ[p_Plus] := Module[{terms = List @@ p, opens},
    pre-plan behaviour). The pre-existing PROPAGATOR collection (k=0) is bounded (2 options/propagator)
    and stays ON unconditionally. Enable the vertex path with NT_VERTEX_COLLECT=1 (or set
    $ntVertexCollect=True) on the small-P flows where it wins (e.g. za3_147: 8.9 s vs 13.3 s). *)
-$ntVertexCollect = (Environment["NT_VERTEX_COLLECT"] =!= $Failed);
+$ntVertexCollect = ntEnvFlag["NT_VERTEX_COLLECT"];
 collectibleDiracSumQ[p_Plus] := ! sectorBridgeQ[p] && dressedStructureSumQ[p] &&
   ((diracNumeratorSumQ[p] && dressedNumDecompose[p] =!= $Failed) ||
    (TrueQ[$ntVertexCollect] && diracSlotSumQ[p] && diracSlotDecompose[p] =!= $Failed));
@@ -689,7 +708,7 @@ canonSlashPairs[vlc_List] :=
   Replace[vlc, {c_, q_} /; negMomQ[q] :> {-c, Expand[-q]}, {1}];
 
 canonicalizeMomentumSigns[net_] :=
-  If[Environment["NT_NO_SIGN_CANON"] =!= $Failed,
+  If[ntEnvFlag["NT_NO_SIGN_CANON"],
     net,
     net /. {
       ntVec[q_, l_] /; negMomQ[q] :> -ntVec[Expand[-q], l],
@@ -954,8 +973,10 @@ labelCensus[e_] := Which[
 
   True, {{}, {}, {}}];
 
-(* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). *)
-$ntCheckLabels = (Environment["NT_NO_LABEL_CHECK"] === $Failed);
+(* Escape hatch: NT_NO_LABEL_CHECK=1 disables (the census is O(net), not a hot path). Anything
+   falsy — unset, "", "0", "false" — leaves the check ON, which is the safe direction: this guard
+   catches a label occurring more than twice, which otherwise becomes a silently wrong contraction. *)
+$ntCheckLabels = !ntEnvFlag["NT_NO_LABEL_CHECK"];
 
 (* Validate a PRECOMPUTED census and return the diagram's free-index set. Split from labelCensus so
    the pure counting stays free of side effects and this half owns the diagnostics; `diagram` is

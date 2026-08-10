@@ -118,81 +118,81 @@ static inline auto probe_full(const double& l1, const double& cos1, const double
     // clang-format on
   }
   { // subkernel 2
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k2 = powr<-1>(l1);
+    const auto _cse2_k2 = -_cse1_k2 * _interp5 * _interp6;
+    const auto _cse3_k2 = -_interp6;
+    const auto _cse4_k2 = _cse3_k2 + _interp9;
+    const auto _cse5_k2 = 50. * _cse4_k2;
+    const auto _cse6_k2 = _cse5_k2 + _interp8;
+    const auto _cse7_k2 = -_cse1_k2 * _cse6_k2 * _interp7;
+    const auto _cse8_k2 = _cse2_k2 + _cse7_k2;
     // clang-format off
-    _acc += 0.002551020408163265 * fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr56(fenv) * _interp23 * _interp24 * _interp25 * _interp26, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr43(fenv) * _interp1 * _interp2 * _interp24 * _interp27, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr50(fenv) * _interp2 * _interp21 * _interp24 * _interp27, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr79(fenv) * _interp1 * _interp22 * _interp24 * _interp27, fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr82(fenv) * _interp21 * _interp22 * _interp24 * _interp27, fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr44(fenv) * _interp2 * _interp24 * _interp25 * _interp27, fma(complex<double>(0.,2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr80(fenv) * _interp22 * _interp24 * _interp25 * _interp27, fma(complex<double>(0.,-4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr47(fenv) * _interp1 * _interp24 * _interp26 * _interp27, fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr52(fenv) * _interp21 * _interp24 * _interp26 * _interp27, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr48(fenv) * _interp24 * _interp25 * _interp26 * _interp27, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr31(fenv) * _interp1 * _interp2 * _interp23 * _interp28, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr38(fenv) * _interp2 * _interp21 * _interp23 * _interp28, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr73(fenv) * _interp1 * _interp22 * _interp23 * _interp28, 0.)))))))))))));
+    _acc += 0.002551020408163265 * fma(complex<double>(0.,-2.), _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr56(fenv) * _interp23 * _interp24 * _interp25 * _interp26, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr43(fenv) * _interp1 * _interp2 * _interp24 * _interp27, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr50(fenv) * _interp2 * _interp21 * _interp24 * _interp27, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr79(fenv) * _interp1 * _interp22 * _interp24 * _interp27, fma(-1., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr82(fenv) * _interp21 * _interp22 * _interp24 * _interp27, fma(complex<double>(0.,4.), _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr44(fenv) * _interp2 * _interp24 * _interp25 * _interp27, fma(complex<double>(0.,2.), _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr80(fenv) * _interp22 * _interp24 * _interp25 * _interp27, fma(complex<double>(0.,-4.), _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr47(fenv) * _interp1 * _interp24 * _interp26 * _interp27, fma(complex<double>(0.,-2.), _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr52(fenv) * _interp21 * _interp24 * _interp26 * _interp27, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr48(fenv) * _interp24 * _interp25 * _interp26 * _interp27, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr31(fenv) * _interp1 * _interp2 * _interp23 * _interp28, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr38(fenv) * _interp2 * _interp21 * _interp23 * _interp28, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr73(fenv) * _interp1 * _interp22 * _interp23 * _interp28, 0.)))))))))))));
     // clang-format on
   }
   { // subkernel 3
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k3 = powr<-1>(l1);
+    const auto _cse2_k3 = -_cse1_k3 * _interp5 * _interp6;
+    const auto _cse3_k3 = -_interp6;
+    const auto _cse4_k3 = _cse3_k3 + _interp9;
+    const auto _cse5_k3 = 50. * _cse4_k3;
+    const auto _cse6_k3 = _cse5_k3 + _interp8;
+    const auto _cse7_k3 = -_cse1_k3 * _cse6_k3 * _interp7;
+    const auto _cse8_k3 = _cse2_k3 + _cse7_k3;
     // clang-format off
-    _acc += complex<double>(0.,0.002551020408163265) * fma(complex<double>(0.,1.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr76(fenv) * _interp21 * _interp22 * _interp23 * _interp28, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr32(fenv) * _interp2 * _interp23 * _interp25 * _interp28, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr74(fenv) * _interp22 * _interp23 * _interp25 * _interp28, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr35(fenv) * _interp1 * _interp23 * _interp26 * _interp28, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr40(fenv) * _interp21 * _interp23 * _interp26 * _interp28, fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr36(fenv) * _interp23 * _interp25 * _interp26 * _interp28, fma(8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr11(fenv) * _interp1 * _interp2 * _interp27 * _interp28, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr24(fenv) * _interp2 * _interp21 * _interp27 * _interp28, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr65(fenv) * _interp1 * _interp22 * _interp27 * _interp28, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr70(fenv) * _interp21 * _interp22 * _interp27 * _interp28, fma(complex<double>(0.,-8.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr12(fenv) * _interp2 * _interp25 * _interp27 * _interp28, fma(complex<double>(0.,-4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr66(fenv) * _interp22 * _interp25 * _interp27 * _interp28, fma(complex<double>(0.,8.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr19(fenv) * _interp1 * _interp26 * _interp27 * _interp28, 0.)))))))))))));
+    _acc += complex<double>(0.,0.002551020408163265) * fma(complex<double>(0.,1.), _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr76(fenv) * _interp21 * _interp22 * _interp23 * _interp28, fma(4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr32(fenv) * _interp2 * _interp23 * _interp25 * _interp28, fma(2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr74(fenv) * _interp22 * _interp23 * _interp25 * _interp28, fma(-4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr35(fenv) * _interp1 * _interp23 * _interp26 * _interp28, fma(-2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr40(fenv) * _interp21 * _interp23 * _interp26 * _interp28, fma(complex<double>(0.,4.), _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr36(fenv) * _interp23 * _interp25 * _interp26 * _interp28, fma(8., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr11(fenv) * _interp1 * _interp2 * _interp27 * _interp28, fma(4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr24(fenv) * _interp2 * _interp21 * _interp27 * _interp28, fma(4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr65(fenv) * _interp1 * _interp22 * _interp27 * _interp28, fma(2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr70(fenv) * _interp21 * _interp22 * _interp27 * _interp28, fma(complex<double>(0.,-8.), _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr12(fenv) * _interp2 * _interp25 * _interp27 * _interp28, fma(complex<double>(0.,-4.), _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr66(fenv) * _interp22 * _interp25 * _interp27 * _interp28, fma(complex<double>(0.,8.), _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr19(fenv) * _interp1 * _interp26 * _interp27 * _interp28, 0.)))))))))))));
     // clang-format on
   }
   { // subkernel 4
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k4 = powr<-1>(l1);
+    const auto _cse2_k4 = -_cse1_k4 * _interp5 * _interp6;
+    const auto _cse3_k4 = -_interp6;
+    const auto _cse4_k4 = _cse3_k4 + _interp9;
+    const auto _cse5_k4 = 50. * _cse4_k4;
+    const auto _cse6_k4 = _cse5_k4 + _interp8;
+    const auto _cse7_k4 = -_cse1_k4 * _cse6_k4 * _interp7;
+    const auto _cse8_k4 = _cse2_k4 + _cse7_k4;
     // clang-format off
-    _acc += complex<double>(0.,0.002551020408163265) * fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr28(fenv) * _interp21 * _interp26 * _interp27 * _interp28, fma(8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr20(fenv) * _interp25 * _interp26 * _interp27 * _interp28, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr41(fenv) * _interp1 * _interp2 * _interp24 * _interp3, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr49(fenv) * _interp2 * _interp21 * _interp24 * _interp3, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr77(fenv) * _interp1 * _interp22 * _interp24 * _interp3, fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr81(fenv) * _interp21 * _interp22 * _interp24 * _interp3, fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr42(fenv) * _interp2 * _interp24 * _interp25 * _interp3, fma(complex<double>(0.,2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr78(fenv) * _interp22 * _interp24 * _interp25 * _interp3, fma(complex<double>(0.,-4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr45(fenv) * _interp1 * _interp24 * _interp26 * _interp3, fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr51(fenv) * _interp21 * _interp24 * _interp26 * _interp3, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr46(fenv) * _interp24 * _interp25 * _interp26 * _interp3, fma(complex<double>(0.,8.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr9(fenv) * _interp1 * _interp2 * _interp28 * _interp3, fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr23(fenv) * _interp2 * _interp21 * _interp28 * _interp3, 0.)))))))))))));
+    _acc += complex<double>(0.,0.002551020408163265) * fma(complex<double>(0.,4.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr28(fenv) * _interp21 * _interp26 * _interp27 * _interp28, fma(8., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr20(fenv) * _interp25 * _interp26 * _interp27 * _interp28, fma(-4., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr41(fenv) * _interp1 * _interp2 * _interp24 * _interp3, fma(-2., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr49(fenv) * _interp2 * _interp21 * _interp24 * _interp3, fma(-2., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr77(fenv) * _interp1 * _interp22 * _interp24 * _interp3, fma(-1., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr81(fenv) * _interp21 * _interp22 * _interp24 * _interp3, fma(complex<double>(0.,4.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr42(fenv) * _interp2 * _interp24 * _interp25 * _interp3, fma(complex<double>(0.,2.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr78(fenv) * _interp22 * _interp24 * _interp25 * _interp3, fma(complex<double>(0.,-4.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr45(fenv) * _interp1 * _interp24 * _interp26 * _interp3, fma(complex<double>(0.,-2.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr51(fenv) * _interp21 * _interp24 * _interp26 * _interp3, fma(-4., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr46(fenv) * _interp24 * _interp25 * _interp26 * _interp3, fma(complex<double>(0.,8.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr9(fenv) * _interp1 * _interp2 * _interp28 * _interp3, fma(complex<double>(0.,4.), _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr23(fenv) * _interp2 * _interp21 * _interp28 * _interp3, 0.)))))))))))));
     // clang-format on
   }
   { // subkernel 5
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k5 = powr<-1>(l1);
+    const auto _cse2_k5 = -_cse1_k5 * _interp5 * _interp6;
+    const auto _cse3_k5 = -_interp6;
+    const auto _cse4_k5 = _cse3_k5 + _interp9;
+    const auto _cse5_k5 = 50. * _cse4_k5;
+    const auto _cse6_k5 = _cse5_k5 + _interp8;
+    const auto _cse7_k5 = -_cse1_k5 * _cse6_k5 * _interp7;
+    const auto _cse8_k5 = _cse2_k5 + _cse7_k5;
     // clang-format off
-    _acc += complex<double>(0.,0.002551020408163265) * fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr63(fenv) * _interp1 * _interp22 * _interp28 * _interp3, fma(complex<double>(0.,2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr69(fenv) * _interp21 * _interp22 * _interp28 * _interp3, fma(8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr10(fenv) * _interp2 * _interp25 * _interp28 * _interp3, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr64(fenv) * _interp22 * _interp25 * _interp28 * _interp3, fma(-8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr17(fenv) * _interp1 * _interp26 * _interp28 * _interp3, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr27(fenv) * _interp21 * _interp26 * _interp28 * _interp3, fma(complex<double>(0.,8.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr18(fenv) * _interp25 * _interp26 * _interp28 * _interp3, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr29(fenv) * _interp1 * _interp2 * _interp23 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr37(fenv) * _interp2 * _interp21 * _interp23 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr71(fenv) * _interp1 * _interp22 * _interp23 * _interp4, fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr75(fenv) * _interp21 * _interp22 * _interp23 * _interp4, fma(complex<double>(0.,4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr30(fenv) * _interp2 * _interp23 * _interp25 * _interp4, fma(complex<double>(0.,2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr72(fenv) * _interp22 * _interp23 * _interp25 * _interp4, 0.)))))))))))));
+    _acc += complex<double>(0.,0.002551020408163265) * fma(complex<double>(0.,4.), _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr63(fenv) * _interp1 * _interp22 * _interp28 * _interp3, fma(complex<double>(0.,2.), _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr69(fenv) * _interp21 * _interp22 * _interp28 * _interp3, fma(8., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr10(fenv) * _interp2 * _interp25 * _interp28 * _interp3, fma(4., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr64(fenv) * _interp22 * _interp25 * _interp28 * _interp3, fma(-8., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr17(fenv) * _interp1 * _interp26 * _interp28 * _interp3, fma(-4., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr27(fenv) * _interp21 * _interp26 * _interp28 * _interp3, fma(complex<double>(0.,8.), _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr18(fenv) * _interp25 * _interp26 * _interp28 * _interp3, fma(-4., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr29(fenv) * _interp1 * _interp2 * _interp23 * _interp4, fma(-2., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr37(fenv) * _interp2 * _interp21 * _interp23 * _interp4, fma(-2., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr71(fenv) * _interp1 * _interp22 * _interp23 * _interp4, fma(-1., _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr75(fenv) * _interp21 * _interp22 * _interp23 * _interp4, fma(complex<double>(0.,4.), _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr30(fenv) * _interp2 * _interp23 * _interp25 * _interp4, fma(complex<double>(0.,2.), _cse8_k5 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr72(fenv) * _interp22 * _interp23 * _interp25 * _interp4, 0.)))))))))))));
     // clang-format on
   }
   { // subkernel 6
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k6 = powr<-1>(l1);
+    const auto _cse2_k6 = -_cse1_k6 * _interp5 * _interp6;
+    const auto _cse3_k6 = -_interp6;
+    const auto _cse4_k6 = _cse3_k6 + _interp9;
+    const auto _cse5_k6 = 50. * _cse4_k6;
+    const auto _cse6_k6 = _cse5_k6 + _interp8;
+    const auto _cse7_k6 = -_cse1_k6 * _cse6_k6 * _interp7;
+    const auto _cse8_k6 = _cse2_k6 + _cse7_k6;
     // clang-format off
-    _acc += complex<double>(0.,-0.00510204081632653) * fma(complex<double>(0.,2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr33(fenv) * _interp1 * _interp23 * _interp26 * _interp4, fma(complex<double>(0.,1.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr39(fenv) * _interp21 * _interp23 * _interp26 * _interp4, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr34(fenv) * _interp23 * _interp25 * _interp26 * _interp4, fma(complex<double>(0.,-4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr7(fenv) * _interp1 * _interp2 * _interp27 * _interp4, fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr22(fenv) * _interp2 * _interp21 * _interp27 * _interp4, fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr61(fenv) * _interp1 * _interp22 * _interp27 * _interp4, fma(complex<double>(0.,-1.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr68(fenv) * _interp21 * _interp22 * _interp27 * _interp4, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr8(fenv) * _interp2 * _interp25 * _interp27 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr62(fenv) * _interp22 * _interp25 * _interp27 * _interp4, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr15(fenv) * _interp1 * _interp26 * _interp27 * _interp4, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr26(fenv) * _interp21 * _interp26 * _interp27 * _interp4, fma(complex<double>(0.,-4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr16(fenv) * _interp25 * _interp26 * _interp27 * _interp4, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr5(fenv) * _interp1 * _interp2 * _interp3 * _interp4, 0.)))))))))))));
+    _acc += complex<double>(0.,-0.00510204081632653) * fma(complex<double>(0.,2.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr33(fenv) * _interp1 * _interp23 * _interp26 * _interp4, fma(complex<double>(0.,1.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr39(fenv) * _interp21 * _interp23 * _interp26 * _interp4, fma(2., _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr34(fenv) * _interp23 * _interp25 * _interp26 * _interp4, fma(complex<double>(0.,-4.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr7(fenv) * _interp1 * _interp2 * _interp27 * _interp4, fma(complex<double>(0.,-2.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr22(fenv) * _interp2 * _interp21 * _interp27 * _interp4, fma(complex<double>(0.,-2.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr61(fenv) * _interp1 * _interp22 * _interp27 * _interp4, fma(complex<double>(0.,-1.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr68(fenv) * _interp21 * _interp22 * _interp27 * _interp4, fma(-4., _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr8(fenv) * _interp2 * _interp25 * _interp27 * _interp4, fma(-2., _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr62(fenv) * _interp22 * _interp25 * _interp27 * _interp4, fma(4., _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr15(fenv) * _interp1 * _interp26 * _interp27 * _interp4, fma(2., _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr26(fenv) * _interp21 * _interp26 * _interp27 * _interp4, fma(complex<double>(0.,-4.), _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr16(fenv) * _interp25 * _interp26 * _interp27 * _interp4, fma(4., _cse8_k6 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr5(fenv) * _interp1 * _interp2 * _interp3 * _interp4, 0.)))))))))))));
     // clang-format on
   }
   { // subkernel 7
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k7 = powr<-1>(l1);
+    const auto _cse2_k7 = -_cse1_k7 * _interp5 * _interp6;
+    const auto _cse3_k7 = -_interp6;
+    const auto _cse4_k7 = _cse3_k7 + _interp9;
+    const auto _cse5_k7 = 50. * _cse4_k7;
+    const auto _cse6_k7 = _cse5_k7 + _interp8;
+    const auto _cse7_k7 = -_cse1_k7 * _cse6_k7 * _interp7;
+    const auto _cse8_k7 = _cse2_k7 + _cse7_k7;
     // clang-format off
-    _acc += 0.00510204081632653 * fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr21(fenv) * _interp2 * _interp21 * _interp3 * _interp4, fma(complex<double>(0.,-2.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr59(fenv) * _interp1 * _interp22 * _interp3 * _interp4, fma(complex<double>(0.,-1.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr67(fenv) * _interp21 * _interp22 * _interp3 * _interp4, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr6(fenv) * _interp2 * _interp25 * _interp3 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr60(fenv) * _interp22 * _interp25 * _interp3 * _interp4, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr13(fenv) * _interp1 * _interp26 * _interp3 * _interp4, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr25(fenv) * _interp21 * _interp26 * _interp3 * _interp4, fma(complex<double>(0.,-4.), _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr14(fenv) * _interp25 * _interp26 * _interp3 * _interp4, 0.))))))));
+    _acc += 0.00510204081632653 * fma(complex<double>(0.,-2.), _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr21(fenv) * _interp2 * _interp21 * _interp3 * _interp4, fma(complex<double>(0.,-2.), _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr59(fenv) * _interp1 * _interp22 * _interp3 * _interp4, fma(complex<double>(0.,-1.), _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr67(fenv) * _interp21 * _interp22 * _interp3 * _interp4, fma(-4., _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr6(fenv) * _interp2 * _interp25 * _interp3 * _interp4, fma(-2., _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr60(fenv) * _interp22 * _interp25 * _interp3 * _interp4, fma(4., _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr13(fenv) * _interp1 * _interp26 * _interp3 * _interp4, fma(2., _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr25(fenv) * _interp21 * _interp26 * _interp3 * _interp4, fma(complex<double>(0.,-4.), _cse8_k7 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr14(fenv) * _interp25 * _interp26 * _interp3 * _interp4, 0.))))))));
     // clang-format on
   }
   return _acc;
@@ -301,42 +301,42 @@ static inline auto probe_proj(const double& l1, const double& cos1, const double
     // clang-format on
   }
   { // subkernel 2
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k2 = powr<-1>(l1);
+    const auto _cse2_k2 = -_cse1_k2 * _interp5 * _interp6;
+    const auto _cse3_k2 = -_interp6;
+    const auto _cse4_k2 = _cse3_k2 + _interp9;
+    const auto _cse5_k2 = 50. * _cse4_k2;
+    const auto _cse6_k2 = _cse5_k2 + _interp8;
+    const auto _cse7_k2 = -_cse1_k2 * _cse6_k2 * _interp7;
+    const auto _cse8_k2 = _cse2_k2 + _cse7_k2;
     // clang-format off
-    _acc += 0.002551020408163265 * fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr82(fenv) * _interp21 * _interp23 * _interp26 * _interp27, fma(-8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr9(fenv) * _interp1 * _interp2 * _interp24 * _interp28, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr63(fenv) * _interp2 * _interp21 * _interp24 * _interp28, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr31(fenv) * _interp1 * _interp22 * _interp24 * _interp28, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr73(fenv) * _interp21 * _interp22 * _interp24 * _interp28, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr23(fenv) * _interp1 * _interp2 * _interp26 * _interp28, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr69(fenv) * _interp2 * _interp21 * _interp26 * _interp28, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr38(fenv) * _interp1 * _interp22 * _interp26 * _interp28, fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr76(fenv) * _interp21 * _interp22 * _interp26 * _interp28, fma(-8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr19(fenv) * _interp24 * _interp25 * _interp27 * _interp28, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr28(fenv) * _interp25 * _interp26 * _interp27 * _interp28, fma(8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr13(fenv) * _interp2 * _interp24 * _interp25 * _interp3, 0.))))))))))));
+    _acc += 0.002551020408163265 * fma(-1., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr82(fenv) * _interp21 * _interp23 * _interp26 * _interp27, fma(-8., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr9(fenv) * _interp1 * _interp2 * _interp24 * _interp28, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr63(fenv) * _interp2 * _interp21 * _interp24 * _interp28, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr31(fenv) * _interp1 * _interp22 * _interp24 * _interp28, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr73(fenv) * _interp21 * _interp22 * _interp24 * _interp28, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr23(fenv) * _interp1 * _interp2 * _interp26 * _interp28, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr69(fenv) * _interp2 * _interp21 * _interp26 * _interp28, fma(-2., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr38(fenv) * _interp1 * _interp22 * _interp26 * _interp28, fma(-1., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr76(fenv) * _interp21 * _interp22 * _interp26 * _interp28, fma(-8., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr19(fenv) * _interp24 * _interp25 * _interp27 * _interp28, fma(-4., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr28(fenv) * _interp25 * _interp26 * _interp27 * _interp28, fma(8., _cse8_k2 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr13(fenv) * _interp2 * _interp24 * _interp25 * _interp3, 0.))))))))))));
     // clang-format on
   }
   { // subkernel 3
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k3 = powr<-1>(l1);
+    const auto _cse2_k3 = -_cse1_k3 * _interp5 * _interp6;
+    const auto _cse3_k3 = -_interp6;
+    const auto _cse4_k3 = _cse3_k3 + _interp9;
+    const auto _cse5_k3 = 50. * _cse4_k3;
+    const auto _cse6_k3 = _cse5_k3 + _interp8;
+    const auto _cse7_k3 = -_cse1_k3 * _cse6_k3 * _interp7;
+    const auto _cse8_k3 = _cse2_k3 + _cse7_k3;
     // clang-format off
-    _acc += 0.002551020408163265 * fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr33(fenv) * _interp22 * _interp24 * _interp25 * _interp3, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr25(fenv) * _interp2 * _interp25 * _interp26 * _interp3, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr39(fenv) * _interp22 * _interp25 * _interp26 * _interp3, fma(-8., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr7(fenv) * _interp1 * _interp24 * _interp27 * _interp3, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr61(fenv) * _interp21 * _interp24 * _interp27 * _interp3, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr22(fenv) * _interp1 * _interp26 * _interp27 * _interp3, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr68(fenv) * _interp21 * _interp26 * _interp27 * _interp3, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr42(fenv) * _interp1 * _interp2 * _interp23 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr78(fenv) * _interp2 * _interp21 * _interp23 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr54(fenv) * _interp1 * _interp22 * _interp23 * _interp4, fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr84(fenv) * _interp21 * _interp22 * _interp23 * _interp4, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr48(fenv) * _interp23 * _interp25 * _interp27 * _interp4, 0.))))))))))));
+    _acc += 0.002551020408163265 * fma(4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr33(fenv) * _interp22 * _interp24 * _interp25 * _interp3, fma(4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr25(fenv) * _interp2 * _interp25 * _interp26 * _interp3, fma(2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr39(fenv) * _interp22 * _interp25 * _interp26 * _interp3, fma(-8., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr7(fenv) * _interp1 * _interp24 * _interp27 * _interp3, fma(-4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr61(fenv) * _interp21 * _interp24 * _interp27 * _interp3, fma(-4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr22(fenv) * _interp1 * _interp26 * _interp27 * _interp3, fma(-2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr68(fenv) * _interp21 * _interp26 * _interp27 * _interp3, fma(-4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr42(fenv) * _interp1 * _interp2 * _interp23 * _interp4, fma(-2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr78(fenv) * _interp2 * _interp21 * _interp23 * _interp4, fma(-2., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr54(fenv) * _interp1 * _interp22 * _interp23 * _interp4, fma(-1., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr84(fenv) * _interp21 * _interp22 * _interp23 * _interp4, fma(-4., _cse8_k3 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr48(fenv) * _interp23 * _interp25 * _interp27 * _interp4, 0.))))))))))));
     // clang-format on
   }
   { // subkernel 4
-    const auto _cse1 = powr<-1>(l1);
-    const auto _cse2 = -_cse1 * _interp5 * _interp6;
-    const auto _cse3 = -_interp6;
-    const auto _cse4 = _cse3 + _interp9;
-    const auto _cse5 = 50. * _cse4;
-    const auto _cse6 = _cse5 + _interp8;
-    const auto _cse7 = -_cse1 * _cse6 * _interp7;
-    const auto _cse8 = _cse2 + _cse7;
+    const auto _cse1_k4 = powr<-1>(l1);
+    const auto _cse2_k4 = -_cse1_k4 * _interp5 * _interp6;
+    const auto _cse3_k4 = -_interp6;
+    const auto _cse4_k4 = _cse3_k4 + _interp9;
+    const auto _cse5_k4 = 50. * _cse4_k4;
+    const auto _cse6_k4 = _cse5_k4 + _interp8;
+    const auto _cse7_k4 = -_cse1_k4 * _cse6_k4 * _interp7;
+    const auto _cse8_k4 = _cse2_k4 + _cse7_k4;
     // clang-format off
-    _acc += 0.00510204081632653 * fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr18(fenv) * _interp2 * _interp25 * _interp28 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr36(fenv) * _interp22 * _interp25 * _interp28 * _interp4, fma(4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr12(fenv) * _interp1 * _interp27 * _interp28 * _interp4, fma(2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr66(fenv) * _interp21 * _interp27 * _interp28 * _interp4, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr6(fenv) * _interp1 * _interp2 * _interp3 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr60(fenv) * _interp2 * _interp21 * _interp3 * _interp4, fma(-2., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr30(fenv) * _interp1 * _interp22 * _interp3 * _interp4, fma(-1., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr72(fenv) * _interp21 * _interp22 * _interp3 * _interp4, fma(-4., _cse8 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr16(fenv) * _interp25 * _interp27 * _interp3 * _interp4, 0.)))))))));
+    _acc += 0.00510204081632653 * fma(-4., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr18(fenv) * _interp2 * _interp25 * _interp28 * _interp4, fma(-2., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr36(fenv) * _interp22 * _interp25 * _interp28 * _interp4, fma(4., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr12(fenv) * _interp1 * _interp27 * _interp28 * _interp4, fma(2., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr66(fenv) * _interp21 * _interp27 * _interp28 * _interp4, fma(-4., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr6(fenv) * _interp1 * _interp2 * _interp3 * _interp4, fma(-2., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr60(fenv) * _interp2 * _interp21 * _interp3 * _interp4, fma(-2., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr30(fenv) * _interp1 * _interp22 * _interp3 * _interp4, fma(-1., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr72(fenv) * _interp21 * _interp22 * _interp3 * _interp4, fma(-4., _cse8_k4 * _den13 * _den14 * _den15 * _den7 * DiFfRG::za4_147_num::tr16(fenv) * _interp25 * _interp27 * _interp3 * _interp4, 0.)))))))));
     // clang-format on
   }
   return _acc;

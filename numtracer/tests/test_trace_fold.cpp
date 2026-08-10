@@ -294,7 +294,25 @@ int main()
 
     // The partition checker must actually fire — it is the guard against a future Codegen.m grouping
     // change silently dropping or double-folding a net, and a checker that never reports is no guard.
-    check_group_partition(groups, static_cast<long>(nNet)); // clean: prints nothing
+    check_group_partition(groups, static_cast<long>(nNet)); // clean: does not exit
+
+    // ...and it must fire on each way a grouping can be wrong. Assert on the PREDICATE, not on the
+    // process: check_group_partition is fatal by design (a non-partition is a silently wrong kernel),
+    // so it cannot be called with bad input from inside a test.
+    {
+      long d = 0, g = 0, o = 0;
+      check(group_partition_stats({{0, 1}, {2}}, 3, d, g, o) && d == 0 && g == 0 && o == 0,
+            "partition: exact cover is clean");
+      check(!group_partition_stats({{0, 1}, {1, 2}}, 3, d, g, o) && d == 1,
+            "partition: a net folded TWICE is caught");
+      check(!group_partition_stats({{0}, {2}}, 3, d, g, o) && g == 1,
+            "partition: a net DROPPED from the kernel is caught");
+      check(!group_partition_stats({{0}, {5}}, 3, d, g, o) && o == 1,
+            "partition: an out-of-range net index is caught");
+      // A gap and a duplicate at once must report both, not stop at the first.
+      check(!group_partition_stats({{0, 0}}, 2, d, g, o) && d == 1 && g == 1,
+            "partition: duplicate AND gap both reported");
+    }
   }
 
   // poly_bytes must actually track size — it is what the generator reports as the trace table's RAM

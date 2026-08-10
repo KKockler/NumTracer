@@ -21,7 +21,7 @@ namespace numtracer_kernels
       const auto _interp3 = RFdot(powr<2>(k), powr<2>(l1));
       const auto _den1 = powr<-2>(_interp1 + powr<2>(l1));
       const auto _den2 = powr<-1>(_interp2 + powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p));
-      return -0.1666666666666667 * _den1 * _den2 * _interp3 * numtracer_kernels::glu_quark_num::tr0(fenv);
+      return 0.0833333333333333 * fma(-1., _den1 * _den2 * _interp3 * numtracer_kernels::glu_quark_num::tr0(fenv), fma(_den1, _den2 * _interp3 * numtracer_kernels::glu_quark_num::tr1(fenv), 0.));
     }
 
     static inline auto constant(const double& p, const double& k)

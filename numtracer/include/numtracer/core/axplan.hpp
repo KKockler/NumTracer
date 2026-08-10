@@ -12,8 +12,11 @@
 /// lives in the consuming tensor (the dense `contract`, ...).
 #pragma once
 
+#include "numtracer/core/config.hpp" // NT_THROW (exception-optional guard for -fno-exceptions builds)
+
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 #include <utility>
 
 namespace numtracer::core
@@ -26,6 +29,28 @@ namespace numtracer::core
   /// just the final rank. Larger networks (the 3-gluon Lorentz chains) need headroom
   /// here; an overflow silently corrupts the contraction.
   inline constexpr int kER = 16;
+
+  /// @brief Guard every @ref kER-sized scratch write in the planners below.
+  ///
+  /// The doc on @ref kER says an overflow "silently corrupts the contraction", and it used to: not
+  /// one of the `[kER]` arrays was bounds-checked. This is the *validation oracle*'s planner
+  /// (@ref numtracer::dense::DTensor), so a silent corruption here does not merely produce a wrong
+  /// number — it produces a wrong number that then CONFIRMS a wrong engine result. Loud is the only
+  /// acceptable behaviour.
+  ///
+  /// Checking the operand ranks alone is NOT enough, which is the whole reason this exists as a
+  /// named helper rather than two `if (RA > kER)` lines: the result rank is `nFreeA + nFreeB`, so
+  /// two perfectly in-range rank-10 operands **with no shared axis** produce `RR = 20 > kER` and
+  /// overrun `rid`/`rdim`. That is exactly the "transient outer-product growth" the @ref kER doc
+  /// warns about, and it is reachable from in-range inputs.
+  ///
+  /// `constexpr`-friendly: in a constant-evaluated call (@ref numtracer::dense::contract) a thrown
+  /// exception is simply not a constant expression, so the overflow becomes a COMPILE error at the
+  /// offending call site. At runtime (the `DynTensor` fold, `dense/dtensor.hpp`) it throws.
+  constexpr void ax_check_rank(int r, const char *what)
+  {
+    if (r < 0 || r > kER) NT_THROW(std::runtime_error, what);
+  }
 
   /// @brief One tensor axis: a contraction identity and an extent.
   /// @tparam Id The contraction identity (axes with equal `Id` contract).
@@ -118,6 +143,10 @@ namespace numtracer::core
                              const std::array<int, Nb> &idb, const std::array<int, Nb> &bdim, int RB)
   {
     EPlan p;
+    // Guard BEFORE any [kER] write. RA/RB bound the b_is_shared / faAxis / fbAxis / strA / strB
+    // writes; p.RR (checked after it is known, below) bounds rid/rdim.
+    ax_check_rank(RA, "make_eplan: operand A rank exceeds kER (core/axplan.hpp)");
+    ax_check_rank(RB, "make_eplan: operand B rank exceeds kER (core/axplan.hpp)");
     p.RA = RA;
     p.RB = RB;
     bool b_is_shared[kER] = {};
@@ -129,7 +158,12 @@ namespace numtracer::core
           break;
         }
       if (m >= 0) {
-        // shared axes must agree on dimension
+        // shared axes must agree on dimension — this was a COMMENT asserting an invariant nothing
+        // checked (the `// == bdim[m]` below). A disagreeing pair silently contracts over A's
+        // extent, reading past B or truncating it.
+        if (adim[a] != bdim[m])
+          NT_THROW(std::runtime_error,
+                   "make_eplan: axes sharing an identity disagree on extent (core/axplan.hpp)");
         p.saAxis[p.nSh] = a;
         p.sbAxis[p.nSh] = m;
         p.sdim[p.nSh] = adim[a]; // == bdim[m]
@@ -142,6 +176,10 @@ namespace numtracer::core
     for (int b = 0; b < RB; ++b)
       if (!b_is_shared[b]) p.fbAxis[p.nFreeB++] = b;
     p.RR = p.nFreeA + p.nFreeB;
+    // THE case rank-checking the operands misses: two in-range operands sharing NO axis
+    // outer-product to RR = RA + RB. Two rank-10 operands give RR = 20 > kER and overrun rid/rdim.
+    ax_check_rank(p.RR, "make_eplan: result rank nFreeA+nFreeB exceeds kER — the chain "
+                        "outer-products before a shared axis closes it (core/axplan.hpp)");
     for (int t = 0; t < p.nFreeA; ++t) {
       p.rid[t] = ida[p.faAxis[t]];
       p.rdim[t] = adim[p.faAxis[t]];
@@ -230,6 +268,7 @@ namespace numtracer::core
                                    const std::array<int, Nb> &idb, const std::array<int, Nb> &bdim)
   {
     EAddPlan p;
+    ax_check_rank(R, "make_eaddplan: rank exceeds kER (core/axplan.hpp)");
     p.R = R;
     int b_dims_local[kER] = {};
     std::size_t bstrideAll[kER] = {};

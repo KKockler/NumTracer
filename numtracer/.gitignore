@@ -18,3 +18,8 @@ tests/gen/gen_*.cpp
 tests/gen/gen_*_nets.hh
 # ...and the per-flow precompiled-header source the unit TUs compile against (see NT_GEN_PCH).
 tests/gen/gen_*_pch.hh
+# The lambda3d fixtures DELIBERATELY track their emitted generator sources (they are the fixture, see
+# tests/gen/lambda3d/), so the blanket gen_*.cpp / gen_*_nets.hh rules above must not be extended to
+# the subdirectories. The precompiled header is different: it is a pure build artifact with no
+# fixture value, and it is regenerated on every run — so ignore it there too.
+tests/gen/*/gen_*_pch.hh

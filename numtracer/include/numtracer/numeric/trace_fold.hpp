@@ -347,31 +347,55 @@ namespace numtracer::numeric
     return std::min(nNet, std::max<long>(64, 8L * static_cast<long>(W)));
   }
 
-  /// @brief Report any net that `groups` does not cover exactly once (profile builds only).
+  /// @brief Does `groups` cover every net exactly once? Pure predicate, so it is unit-testable
+  ///        without running a generator; @ref check_group_partition is the reporting wrapper.
   ///
   /// @ref fold_groups_streaming folds each group's members on demand, so it is only equivalent to
   /// `fold_nets` + an eager group loop if `groups` PARTITIONS the nets — which Codegen.m guarantees by
   /// construction (`Complement`/`GatherBy` over all net indices). A duplicate would mean silently
   /// folding a net twice; a gap would mean silently dropping one from the kernel. Both are cheap to
   /// detect here and expensive to debug downstream.
-  inline void check_group_partition(const std::vector<std::vector<int>> &groups, long nNet)
+  inline bool group_partition_stats(const std::vector<std::vector<int>> &groups, long nNet, long &dup,
+                                    long &gap, long &oob)
   {
     std::vector<int> cov(static_cast<std::size_t>(std::max(0L, nNet)), 0);
-    long oob = 0;
+    dup = gap = oob = 0;
     for (const auto &grp : groups)
       for (int d : grp) {
         if (d < 0 || d >= nNet) ++oob;
         else ++cov[static_cast<std::size_t>(d)];
       }
-    long dup = 0, gap = 0;
     for (int c : cov) {
       if (c > 1) ++dup;
       else if (c == 0) ++gap;
     }
-    if (dup || gap || oob)
-      std::fprintf(stderr,
-                   "[num] WARNING groups is not a partition: %ld duplicated, %ld uncovered, %ld out-of-range (of %ld nets)\n",
-                   dup, gap, oob, nNet);
+    return dup == 0 && gap == 0 && oob == 0;
+  }
+
+  /// @brief Abort the generation if `groups` does not partition the nets.
+  ///
+  /// FATAL, and run on EVERY generation. It used to be emitted behind `if(ntprof)` — i.e. gated on
+  /// NT_GEN_PROFILE, which no production regeneration sets — and it only warned to stderr, where the
+  /// line was lost in the generator log. So the one guard standing between a mis-built group list and
+  /// a silently wrong kernel had, in practice, never run at all. It is O(nNet) once per generation
+  /// (nets are tens to low thousands) against a build measured in seconds to minutes.
+  ///
+  /// Verified before being made fatal: a full regeneration of all 29 flows in DEFAULT_FLOWS reported
+  /// zero violations, so no committed flow legitimately produces a non-partition.
+  ///
+  /// Exits rather than throwing: a nonzero exit is already the generator's wired-up failure signal
+  /// (`MakeNTKernel::genfail`, which tests/gen/regen_check.sh greps for), and parts of the generator
+  /// are compiled `-fno-exceptions`.
+  inline void check_group_partition(const std::vector<std::vector<int>> &groups, long nNet)
+  {
+    long dup = 0, gap = 0, oob = 0;
+    if (group_partition_stats(groups, nNet, dup, gap, oob)) return;
+    std::fprintf(stderr,
+                 "[num] FATAL groups is not a partition: %ld duplicated, %ld uncovered, %ld "
+                 "out-of-range (of %ld nets) — a duplicate folds a net into the kernel twice, a gap "
+                 "drops one; either is a silently wrong kernel\n",
+                 dup, gap, oob, nNet);
+    std::exit(1);
   }
 
   /// @brief PHASE B, streaming driver — fold nets in bounded waves and hand each group's accumulator

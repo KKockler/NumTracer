@@ -1,13 +1,13 @@
 {
 	"name":"gen",
-	"class":"YM_ZA4_num_kernel",
-	"namespace":"ym_za4_num",
+	"class":"Sigl_dirac_num_kernel",
+	"namespace":"sigl_dirac_num",
 	"gen_dir":".",
-	"generator":"gen_ym_za4_num.cpp",
+	"generator":"gen_sigl_dirac_num.cpp",
 	"units":[
-		"gen_ym_za4_num_u0.cpp",
-		"gen_ym_za4_num_u1.cpp",
-		"gen_ym_za4_num_u2.cpp"
+		"gen_sigl_dirac_num_u0.cpp",
+		"gen_sigl_dirac_num_u1.cpp",
+		"gen_sigl_dirac_num_u2.cpp"
 	],
 	"decorator":"static inline",
 	"main_opt":"-O1",
@@ -15,6 +15,6 @@
 	"maxw":0,
 	"maxw_b":0,
 	"complex":false,
-	"kernels":"YM_ZA4_num_kernels.hh",
+	"kernels":"Sigl_dirac_num_kernels.hh",
 	"generated":1
 }

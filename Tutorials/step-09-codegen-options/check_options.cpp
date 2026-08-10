@@ -8,7 +8,6 @@
 // the separate constant() entry point — and confirms it leaves kernel() alone.
 #include "Opt_const_kernel.hh"
 #include "Opt_default_kernel.hh"
-#include "Opt_nocollect_kernel.hh"
 #include "Opt_ns_kernel.hh"
 #include "Opt_xcse_kernel.hh"
 
@@ -39,14 +38,13 @@ int main() {
   const double want = myZ(l1) * p * p + (p * l1 * cos1) * p * p;
   const double ref = Opt_default_kernel::kernel(l1, cos1, p, myZ);
 
-  std::printf("one network, five emissions, at (p, l1, cos1) = (%g, %g, %g)\n", p, l1, cos1);
+  std::printf("one network, four emissions, at (p, l1, cos1) = (%g, %g, %g)\n", p, l1, cos1);
   std::printf("  %-28s = %14.10g   (closed form %.10g)\n", "default", ref, want);
   if (std::fabs(ref - want) > 1e-12 * std::max(1.0, std::fabs(want))) {
     ++failures;
     std::printf("  default kernel disagrees with the closed form!\n");
   }
 
-  same("GlobalCollect -> False", Opt_nocollect_kernel::kernel(l1, cos1, p, myZ), ref);
   same("CrossTraceCSE -> True", Opt_xcse_kernel::kernel(l1, cos1, p, myZ), ref);
   same("Constant -> myZ[p]", Opt_const_kernel::kernel(l1, cos1, p, myZ), ref);
   same("renamed namespaces", Opt_ns_kernel::kernel(l1, cos1, p, myZ), ref);

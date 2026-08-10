@@ -1387,6 +1387,33 @@ namespace numtracer::numeric
             if (e.invS > maxId) maxId = e.invS; // spatial 1/|k⃗|² atom (ProjE/ProjM)
           }
     std::vector<MPoly> atomDen(maxId + 1, MPolyFactory::zero(nsym));
+    // An atom id names ONE denominator. The front end is supposed to guarantee that, but the writes
+    // below were unconditional `atomDen[id] = ...`, so two projectors sharing an id while carrying
+    // different momenta silently gave the second one's k² to both — every cancellation against that
+    // id then divides by the wrong polynomial. Record which ids have been written so a genuine
+    // rewrite (same id, DIFFERENT denominator) is caught; a repeat of the identical denominator is
+    // the normal case (the same projector appearing in many terms) and must stay silent.
+    std::vector<char> written(static_cast<std::size_t>(maxId + 1), 0);
+    // Exact term-wise equality is the right test here (there is no MPoly::operator==): both sides
+    // are built by the same deterministic Σ_μ comp[μ]² over the same component table, so equal
+    // momenta give bit-equal polynomials and any difference means genuinely different momenta.
+    const auto sameDen = [](const MPoly &x, const MPoly &y) {
+      if (x.t.size() != y.t.size()) return false;
+      for (std::size_t i = 0; i < x.t.size(); ++i)
+        if (!(x.t[i].first == y.t[i].first) || x.t[i].second.re != y.t[i].second.re ||
+            x.t[i].second.im != y.t[i].second.im)
+          return false;
+      return true;
+    };
+    const auto claim = [&](int id, MPoly &&den, const char *what) {
+      auto &slot = atomDen[static_cast<std::size_t>(id)];
+      if (written[static_cast<std::size_t>(id)]) {
+        if (!sameDen(slot, den)) NT_THROW(std::runtime_error, what);
+        return;
+      }
+      written[static_cast<std::size_t>(id)] = 1;
+      slot = std::move(den);
+    };
     for (const network::NetVal &nv : lors)
       for (const network::PTerm &pt : nv)
         for (const network::Elem &e : pt.e)
@@ -1396,13 +1423,17 @@ namespace numtracer::numeric
               MPoly k2 = MPolyFactory::zero(nsym);
               for (int mu = 0; mu < 4; ++mu)
                 k2 = k2 + cv[mu] * cv[mu];
-              atomDen[e.inv] = std::move(k2);
+              claim(e.inv, std::move(k2),
+                    "collect_atom_denoms: two projectors share an `inv` atom id but carry different "
+                    "momenta — one denominator would silently overwrite the other");
             }
             if (e.invS >= 0) { // spatial |k⃗|² = Σ_{μ=1..3} comp[μ]² (component 0 = temporal)
               MPoly ks2 = MPolyFactory::zero(nsym);
               for (int mu = 1; mu < 4; ++mu)
                 ks2 = ks2 + cv[mu] * cv[mu];
-              atomDen[e.invS] = std::move(ks2);
+              claim(e.invS, std::move(ks2),
+                    "collect_atom_denoms: two projectors share an `invS` spatial atom id but carry "
+                    "different momenta — one denominator would silently overwrite the other");
             }
           }
     return atomDen;
@@ -1448,6 +1479,15 @@ namespace numtracer::numeric
   /// AFTER all polynomial arithmetic and after the noise-prune above — so it cannot perturb a
   /// cancellation, only canonicalise what survived. Perturbation is ~1e-12 relative, three orders
   /// below the numeric-vs-FORM correctness gate.
+  ///
+  /// It is also the chokepoint where a NON-FINITE coefficient is caught. This function used to pass
+  /// NaN/Inf through untouched, and nothing downstream stopped them: `RBuilder::ieq`
+  /// (`codegen/real_cse.hpp`) compares constants with `k == k`, so a NaN never compares equal to
+  /// itself and `find_or_add` appends a fresh SSA slot on every single call — unbounded duplicate
+  /// instructions — and the printer then writes a literal `nan` into a COMMITTED kernel header. A
+  /// non-finite coefficient is always an upstream bug (a division by an identically-zero denominator,
+  /// an uninitialised component), never something to round, so it aborts here where the trace is
+  /// still identifiable rather than becoming a mysterious `nan` in generated source.
   inline double snap_coeff(double v)
   {
     static const int digits = [] {
@@ -1457,7 +1497,11 @@ namespace numtracer::numeric
       }
       return kCoeffSnapDigits;
     }();
-    if (digits == 0 || v == 0.0 || !std::isfinite(v)) return v;
+    if (!std::isfinite(v))
+      NT_THROW(std::runtime_error,
+               "snap_coeff: non-finite (NaN/Inf) polynomial coefficient reached the lowering — it "
+               "would be emitted as a literal `nan` and would defeat the SSA constant CSE");
+    if (digits == 0 || v == 0.0) return v;
     char buf[40];
     std::snprintf(buf, sizeof(buf), "%.*e", digits - 1, v);
     return std::strtod(buf, nullptr);

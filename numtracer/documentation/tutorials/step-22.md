@@ -1,23 +1,196 @@
 # step-22: Validating and debugging a kernel
 
-*Builds on: [step-15](step-15.md), [step-20](step-20.md) · Built on by: — · Tags: `testing`, `debugging` · **Tier C***
+*Builds on: [step-15](step-15.md), [step-20](step-20.md) · Built on by: — ·
+Tags: `testing`, `debugging` · **Tier C** (the full fRG toolchain)*
 
-```{admonition} This page is not written yet
-:class: warning
-The tutorial series is being written in order. This step is planned and its scope is
-fixed, but the narrative below is an outline rather than a finished page.
+## Introduction
+
+Everything in this series produces a number, and almost nothing in it produces an error when that
+number is wrong. A transposed projector, a flipped sign, a truncated network, a permuted parameter
+list — every one of them compiles, runs, and returns plausible doubles.
+
+So this last step is the one that makes the rest usable: how you find out.
+
+## The one thing to know
+
+```{admonition} Plain `ctest` is BLIND to codegen
+:class: danger
+The default test suite compiles the **pre-generated** headers in `tests/gen/` and runs them against
+the FORM oracles. **Wolfram is never invoked.** A green `ctest` therefore says *nothing whatsoever*
+about a change to `numtracer/mathematica/` — you can break code generation completely and still see
+every test pass.
+
+This is not a theoretical concern. It has been verified to bite: injecting a $10^{-7}$ relative
+error into an emitted coefficient in `Codegen.m` leaves plain `ctest` **green** while
+`ctest -L codegen` fails.
+
+The real gate is opt-in, needs Wolfram, and takes about eight minutes:
+
+```bash
+cmake -B build -DNUMTRACER_TEST_CODEGEN=ON
+ctest --test-dir build -L codegen     # just the codegen test
+ctest --test-dir build                # everything, codegen last
+ctest --test-dir build -LE codegen    # everything EXCEPT it — the fast path
+```
 ```
 
-## What this step will cover
+Outside ctest the same thing is `tests/gen/regen_check.sh` (and `--restore` to discard the
+regenerated kernels). On success it restores `tests/gen/` to HEAD; on failure it leaves the
+regenerated kernels in place so you can look at them.
 
-* **Plain `ctest` is blind to codegen.** It compiles pre-generated headers and never invokes Wolfram, so you can break the generator completely and still see all tests pass. `-DNUMTRACER_TEST_CODEGEN=ON` and `ctest -L codegen` is the real gate.
-* Oracles: what `tests/gen/` freezes, and the rule that both sides must be frozen from the same run.
-* Identity checks that need no oracle: projector orthonormality, $P^T + P^L = \delta$, a general frame reducing to a special one.
-* Reading a failure — the signatures worth recognising: a ratio of exactly 0.25 (a collapsed Dirac loop), a leaked `dressing(...)` call, a `$`-suffixed symbol in generated code, a stale archive giving an ODR mismatch.
+**The rule:** if you touched `mathematica/`, `-L codegen` is the only test that means anything. If
+you touched `include/`, the fast path is enough.
 
-## Where the material lives in the meantime
+## Four kinds of check, in order of strength
 
-Until this page is written, read these directly:
+### 1. Identity checks — no oracle at all
 
-* `numtracer/tests/gen/README.md`
-* `STALE_TEST_ORACLES.md`
+The strongest checks compare the engine against *itself*, because they cannot be fooled by a
+convention error you also made in the oracle. You have used several:
+
+* $P^T + P^L = \delta$ across three independently generated kernels ([step-08](step-08.md)).
+* $\operatorname{tr}P^E = 1$, $\operatorname{tr}P^M = 2$, constant in every argument
+  ([step-16](step-16.md)).
+* `gen3Frame` at the symmetric point reproducing `sp3Frame` — *and differing off it*
+  ([step-07](step-07.md)).
+* $\gamma^0$ as a fixed component versus an explicit $e_0$ contraction ([step-19](step-19.md)).
+* Collected versus distributed dressed numerators, agreeing to **exactly** zero
+  ([step-18](step-18.md)).
+
+Prefer these. They are cheap, they need no external tool, and they fail loudly.
+
+### 2. Structural assertions — before any number exists
+
+Cheaper still, and they catch a different class of mistake:
+
+```mathematica
+(* the network is the one you wrote *)
+If[nd =!= 3, Print["FAIL: expected 3 diagrams, got ", nd]; Exit[1]];
+
+(* the basis actually resolved *)
+If[! FreeQ[TBGetProjector[b, 1, idxP], _TBGetProjector], Print["FAIL: unresolved"]; Exit[1]];
+
+(* the rewrite fired *)
+If[! MemberQ[Keys[ntk[[1]]["Env"]], ntUnitVec[0]], Print["FAIL"]; Exit[1]];
+```
+
+Assert the **expected** count, not merely a nonzero one — a truncated sum still has diagrams
+([step-09](step-09.md)). And guard against **vacuous** passes: an unresolved basis makes every
+downstream check succeed while testing nothing ([step-11](step-11.md)).
+
+### 3. Physics gates
+
+Projector orthonormality $\langle P_i, V_j\rangle = \delta_{ij}$ over a whole basis
+([step-11](step-11.md)) is the best of these: it is exact, symbolic, kinematics-independent, and it
+fails before any kernel exists. The weighted-prime trick makes it one kernel instead of $n^2$.
+
+For a four-fermi basis, add: the structures are momentum-independent contact terms, so the trace
+must come out **constant** ([step-19](step-19.md)).
+
+### 4. Oracles
+
+Comparing against an independent implementation — the FORM kernels in `tests/refshim/` — is the
+last resort, not the first. It is the most expensive and the most fragile:
+
+```{admonition} Both sides must be frozen from the same run
+:class: warning
+The FORM oracles are **not** regenerated by the `*_form.wls` scripts. Those write
+`flows/<NAME>/kernel.hh` at the repo root; the file the tests actually include,
+`tests/refshim/<NAME>_kernel.hh`, is a **hand-made copy** with the DiFfRG includes swapped for
+`shim.hpp`.
+
+So the oracle only moves when someone copies it. Regenerating the numeric kernel alone — for a flow
+whose *routing* or *truncation* changed — leaves you grading a new integrand against an old oracle.
+See `STALE_TEST_ORACLES.md` for which ones are currently suspect.
+```
+
+## Reading a failure
+
+Recognising a signature is worth more than a bisect. The recurring ones:
+
+| Symptom | Almost always means |
+|---|---|
+| A ratio of **exactly 0.25** | A collapsed Dirac loop — $\operatorname{tr}\mathbb{1}$ became 1 instead of 4 |
+| An **exact factor of $-1$** in a flow | A projection prefactor that does not match its dressing normalisation ([step-12](step-12.md)) |
+| `dressing(GammaN, List(...))` in the emitted C++ | A `dressingRules` pattern that **never fired** — usually a field-ordering mismatch ([step-10](step-10.md), [step-19](step-19.md)) |
+| A `$`-suffixed symbol (`Q$21048`) in generated code | A `Module`-local leaked into emission — a scalar transformation applied to a whole trace ([step-07](step-07.md)) |
+| An **unclosed** `gamma[...]^2` from `FormTrace` | A transposed Dirac structure — projector legs not reversed ([step-11](step-11.md)) |
+| `NumTrace::privclash` on a literal integer | A fixed Lorentz component where the feature is not being applied ([step-19](step-19.md)) |
+| **0 diagrams** | A pruned network — an odd Dirac trace, a vanishing colour fold, or a rule that zeroed everything |
+| Kernel is right, physics is wrong | The quadrature measure ([step-21](step-21.md)) or the parameter order ([step-15](step-15.md)) |
+| Compiles, links, wrong numbers, *no* source change | A **stale archive** — see below |
+
+### The stale-archive trap
+
+This one deserves its own paragraph because it wastes days and looks exactly like an engine bug.
+
+The generated kernel header can be **byte-identical** while the answer changes, because the
+*generator* was linked against a stale `libNumTracer.a`. The mismatch is an ODR/ABI one between the
+archive and the headers, and it hides perfectly: you diff the kernel, see no change, and conclude
+the tracer is non-deterministic.
+
+**Rebuild the archive before any regeneration.** If a number moved and the emitted header did not,
+suspect the build before you suspect the algebra.
+
+A related one: emitted kernels depend on `-march=native`. FMA contraction inside `libNumTracer.a`
+changes the emitted coefficients, so committed kernels are machine-dependent at the last few digits.
+`-ffp-contract=off` buys reproducibility if you need it.
+
+## Practical hygiene
+
+**Regenerating produces large diffs that are not your change.** The committed kernels drift from the
+engine over time, so a full regeneration touches far more than you edited. Do not try to read that
+diff — **grade on the oracle tests**, not on the bytes.
+
+**Never byte-diff two kernels as a correctness check**, and never grade pointwise-relative on values
+that cross zero. Grade on a relative error against a scale, over many random points, as every
+program in this series does.
+
+**Re-measure numbers before quoting them.** Several documents in this repository carry dated
+headline figures that no longer hold; `PERFORMANCE.md` is explicit about which of its numbers cover
+what. A benchmark is a measurement, not a fact.
+
+**Do not over-measure.** If existing data already answers the question, stop running benchmarks.
+
+## A checklist for a new flow
+
+1. `Print` the diagram count and assert it. ([step-10](step-10.md))
+2. Assert the basis resolved, then check orthonormality. ([step-11](step-11.md))
+3. Check the projection prefactor against the dressing's normalisation. ([step-12](step-12.md))
+4. Check the counterterm coefficient equals the number of field rescalings.
+   ([step-13](step-13.md))
+5. Check the frame, `AngleDefs`, scalar reduction and integrator all agree about the angle count.
+   ([step-14](step-14.md))
+6. Check `kernelParameterList` against `device::tie` — evaluate one flow at a known point before and
+   after any change to either. ([step-15](step-15.md))
+7. Grep the emitted kernel for `dressing(` and for `$`.
+8. If you touched `mathematica/`: `ctest -L codegen`.
+
+## Possibilities for extensions
+
+1. **Prove the blind spot to yourself.** Inject a $10^{-7}$ relative error into an emitted
+   coefficient in `Codegen.m`. Run plain `ctest` — green. Run `ctest -L codegen` — red. Ten minutes,
+   and you will never again trust a green run after a front-end change.
+
+2. **Build a mutation harness.** Introduce a sign flip in a projector, a swapped parameter, a
+   truncated network — one at a time — and record which of your checks catches each. Any mutation
+   nothing catches is a gap in your gates, and now you know where.
+
+3. **Write an identity gate for your own flow.** Find a relation your flow must satisfy that needs
+   no oracle: a symmetry, a limit, a sum rule, a piece that must be constant. That gate will outlive
+   every oracle you commit.
+
+4. **Reproduce the stale archive.** Modify a header, rebuild the generator *without* rebuilding
+   `libNumTracer.a`, regenerate, and observe the kernel change while the source did not. Recognising
+   this once is worth the ten minutes.
+
+5. **Audit the oracles.** For each flow in `tests/gen/`, check whether its FORM oracle was copied
+   from the same run as its numeric kernel. `STALE_TEST_ORACLES.md` is the current answer; verify it
+   rather than trusting it.
+
+---
+
+That is the series. You have gone from contracting two vectors through a metric
+([step-01](step-01.md)) to generating, wiring, scaling and validating a four-point vertex flow in a
+production fRG code. For how the engine works underneath, continue to
+[Under the Hood](../internals/index.md).

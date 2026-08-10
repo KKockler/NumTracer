@@ -152,6 +152,9 @@ nt_tutorial(full_diagram step-05-full-diagram/full_diagram.cpp)
 # ===========================================================================
 # IV. Advanced sectors — tier A
 # ===========================================================================
+# step-16 — finite temperature: the electric/magnetic split and a broken-O(4) trace
+nt_tutorial(finite_temperature step-16-finite-temperature/finite_temperature.cpp)
+
 # step-17 — per-flavour and per-component dressings: the group-diagonal SU(N) fold
 nt_tutorial(dressed_flavour step-17-dressed-flavour/dressed_flavour.cpp)
 
@@ -187,12 +190,25 @@ nt_tutorial_wls(dsl_heads
                 H_sunf_kernel.hh H_sunf_kernels.hh
                 H_dress_kernel.hh H_dress_kernels.hh)
 
-# step-09 — the same network emitted five ways; every variant must agree to the last bit
+# step-09 — the same network emitted four ways; every variant must agree to the last bit
 nt_tutorial_wls(options
                 step-09-codegen-options/options.wls
                 step-09-codegen-options/check_options.cpp
                 Opt_default_kernel.hh Opt_default_kernels.hh
-                Opt_nocollect_kernel.hh Opt_nocollect_kernels.hh
                 Opt_xcse_kernel.hh Opt_xcse_kernels.hh
                 Opt_const_kernel.hh Opt_const_kernels.hh
                 Opt_ns_kernel.hh Opt_ns_kernels.hh)
+
+# ===========================================================================
+# IV. Advanced sectors — tier B
+# ===========================================================================
+# step-19 — fixed-component gammas (the feature four-quark Fierz bases need)
+nt_tutorial_wls(fixed_components
+                step-19-four-fermi/fixed_components.wls
+                step-19-four-fermi/check_fixed_components.cpp
+                Fx_t_kernel.hh Fx_t_kernels.hh
+                Fx_x_kernel.hh Fx_x_kernels.hh
+                Fx_tt_kernel.hh Fx_tt_kernels.hh
+                Fx_4_kernel.hh Fx_4_kernels.hh
+                Fx_4ref_kernel.hh Fx_4ref_kernels.hh
+                Fx_g_kernel.hh Fx_g_kernels.hh)

@@ -22,7 +22,7 @@ namespace DiFfRG
       const auto _interp4 = Gu(sqrt(powr<2>(l1)));
       const auto _interp5 = Gu(sqrt(powr<2>(l1) - 2. * cos1 * l1 * p + powr<2>(p)));
       const auto _interp6 = GuDot(sqrt(powr<2>(l1)));
-      return -2. * fma(DiFfRG::flavour_split_num::tr1(fenv), powr<2>(_interp1) * _interp2 * _interp3, fma(DiFfRG::flavour_split_num::tr0(fenv), powr<2>(_interp4) * _interp5 * _interp6, 0.));
+      return fma(-1., DiFfRG::flavour_split_num::tr2(fenv) * powr<2>(_interp1) * _interp2 * _interp3, fma(DiFfRG::flavour_split_num::tr3(fenv), powr<2>(_interp1) * _interp2 * _interp3, fma(-1., DiFfRG::flavour_split_num::tr0(fenv) * powr<2>(_interp4) * _interp5 * _interp6, fma(DiFfRG::flavour_split_num::tr1(fenv), powr<2>(_interp4) * _interp5 * _interp6, 0.))));
     }
 
     static inline auto constant(const double& p, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& Gu, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& Gd, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& GuDot, const SplineInterpolator1D<double, LogarithmicCoordinates1D<double>, GPU_memory>& GdDot)

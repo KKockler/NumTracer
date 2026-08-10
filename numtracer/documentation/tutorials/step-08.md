@@ -121,7 +121,7 @@ A dressing is an **ordinary Mathematica head applied to arguments** — `myZ[p]`
 in `"Dressings"`. That declaration is the entire mechanism: it turns `myZ` into a kernel parameter
 and emits the call site as `myZ(p)`.
 
-```{admonition} `ntDress` does not currently work — use the plain-symbol form
+````{admonition} `ntDress` does not currently work — use the plain-symbol form
 :class: warning
 `NumTracer.m` documents a head `ntDress[head, args…]` as "an opaque scalar dressing emitted
 verbatim as `head(args)`". It is not implemented: no rule in `DSL.m` or `Codegen.m` rewrites it, so
@@ -133,7 +133,7 @@ const auto _interp1 = ntDress(myZ, p);   // 'ntDress' was not declared in this s
 
 which no runtime header declares. Write `myZ[p]` and declare `myZ` in `"Dressings"` instead — the
 form every production flow uses.
-```
+````
 
 The generated signature is worth seeing:
 

@@ -32,7 +32,7 @@ dress = {myZ};
 (* ---------------------------------------------------------------------------------------------
  * @snip begin: net
  * A network with THREE diagrams — a top-level Plus is a sum of diagrams — two of which share the
- * same dressing coefficient myZ(l1). That shared coefficient is what "GlobalCollect" has something
+ * same dressing coefficient myZ(l1). That shared coefficient is what the emitter factors
  * to collect, and the three separate traces are what "CrossTraceCSE" has something to fuse.
  *
  * Closed form:   myZ(l1) * p^2   +   (q1.ql) * p^2   =   myZ(l1) p^2 + p^3 l1 cos1
@@ -66,20 +66,13 @@ emit[nm_, ns_, opts___] := (
 
 (* ---------------------------------------------------------------------------------------------
  * @snip begin: variants
- * (1) The DEFAULT. "GlobalCollect" -> True groups diagrams by their dressing coefficient and folds
- *     colour numerically, so FunKit's emitter can factor the shared myZ(l1) across the two
- *     projector diagrams instead of repeating it. Measured at ~30% off the runtime of dense
- *     quark-loop vertices.
+ * (1) The DEFAULT. Diagrams are grouped by their dressing coefficient and colour is folded
+ *     numerically (both unconditional), so FunKit's emitter factors the shared myZ(l1) across the
+ *     two projector diagrams instead of repeating it.
  *)
 emit["Opt_default_kernel", "opt_default"];
 
-(* (2) "GlobalCollect" -> False. The same three diagrams, each emitted on its own with its own
- *     coefficient. Compare the `return` statement of this kernel with (1): the value is identical,
- *     the factoring is not.
- *)
-emit["Opt_nocollect_kernel", "opt_nocollect", "GlobalCollect" -> False];
-
-(* (3) "CrossTraceCSE" -> True. By default each trace is lowered into its own trN() function, so a
+(* (2) "CrossTraceCSE" -> True. By default each trace is lowered into its own trN() function, so a
  *     subexpression appearing in two different traces is computed twice. This option lowers ALL
  *     traces as one fused CSE program (a single `trace_all`). It can win on flows whose traces
  *     overlap heavily and lose on flows where it just makes one enormous function — it is OFF by
@@ -87,14 +80,14 @@ emit["Opt_nocollect_kernel", "opt_nocollect", "GlobalCollect" -> False];
  *)
 emit["Opt_xcse_kernel", "opt_xcse", "CrossTraceCSE" -> True];
 
-(* (4) "Constant" -> expr. A loop-INDEPENDENT term flat-added to the integral. It does NOT enter
+(* (3) "Constant" -> expr. A loop-INDEPENDENT term flat-added to the integral. It does NOT enter
  *     the integrand: it is emitted as a separate `constant(...)` function that the consumer's
  *     integrator adds after quadrature. This is how an RG counterterm is supplied — step-13.
  *     Note the value returned by kernel() is unchanged; only constant() differs.
  *)
 emit["Opt_const_kernel", "opt_const", "Constant" -> myZ[p]];
 
-(* (5) Retargeting. A generated kernel is self-contained by DEFAULT: it includes only
+(* (4) Retargeting. A generated kernel is self-contained by DEFAULT: it includes only
  *     numtracer/codegen/runtime.hpp and lives in namespace `numtracer_kernels`. A consumer with its
  *     own support API redirects all of it. Here we only rename the namespaces — swapping
  *     "RuntimeInclude" too would need that header to exist, which is exactly what step-15 does when

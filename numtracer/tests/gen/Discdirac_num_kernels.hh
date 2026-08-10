@@ -16,18 +16,15 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[3] = sqrt(1. - powr<2>(cos1)) * cos2;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = 3;
-  return s0;
+  return (3);
 }
 static inline double tr1([[maybe_unused]] const double *f) {
-  const double s0 = 1;
-  return s0;
+  return (1);
 }
 static inline double tr2(const double *f) { return tr1(f); }
 static inline double tr3([[maybe_unused]] const double *f) {
-  const double s0 = 4;
   const double s1 = f[2];
-  const double s2 = s0*s1;
+  const double s2 = (4)*s1;
   const double s3 = f[1];
   const double s4 = s2*s3;
   const double s5 = f[0];
@@ -35,33 +32,23 @@ static inline double tr3([[maybe_unused]] const double *f) {
   return s6;
 }
 static inline double tr4([[maybe_unused]] const double *f) {
-  const double s0 = -0.75;
-  const double s1 = -0.86602540378444004;
   const double s2 = f[1];
-  const double s3 = s1*s2;
   const double s4 = f[3];
-  const double s5 = s0*s4;
-  const double s6 = s3+s5;
-  const double s7 = -0.25;
-  const double s8 = 1;
+  const double s5 = (-0.75)*s4;
+  const double s6 = fma((-0.86602540378444004), s2, s5);
   const double s9 = s2*s2;
-  const double s10 = s7*s9;
-  const double s11 = s8+s10;
-  const double s12 = s4*s6;
-  const double s13 = s11+s12;
+  const double s11 = fma((-0.25), s9, (1));
+  const double s13 = fma(s4, s6, s11);
   const double s14 = f[2];
   const double s15 = s14*s14;
   const double s16 = s13*s15;
   return s16;
 }
 static inline double tr5([[maybe_unused]] const double *f) {
-  const double s0 = 3.4641016151378001;
-  const double s1 = -2;
   const double s2 = f[1];
-  const double s3 = s1*s2;
   const double s4 = f[3];
-  const double s5 = s0*s4;
-  const double s6 = s3+s5;
+  const double s5 = (3.4641016151378001)*s4;
+  const double s6 = fma((-2), s2, s5);
   const double s7 = f[2];
   const double s8 = s6*s7;
   const double s9 = f[0];
@@ -79,10 +66,9 @@ static inline double tr6([[maybe_unused]] const double *f) {
 }
 static inline double tr7(const double *f) { return tr3(f); }
 static inline double tr8([[maybe_unused]] const double *f) {
-  const double s0 = -2;
   const double s1 = f[2];
   const double s2 = s1*s1;
-  const double s3 = s0*s2;
+  const double s3 = (-2)*s2;
   return s3;
 }
 }} // namespace numtracer_kernels::discdirac_num

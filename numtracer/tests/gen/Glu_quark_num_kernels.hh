@@ -14,19 +14,28 @@ static inline void fill(double *f, [[maybe_unused]] double l1, [[maybe_unused]] 
   f[2] = p;
 }
 static inline double tr0([[maybe_unused]] const double *f) {
-  const double s0 = -48;
-  const double s1 = 32;
   const double s2 = f[1];
-  const double s3 = s1*s2;
+  const double s3 = (32)*s2;
   const double s4 = f[0];
-  const double s5 = s3*s4;
   const double s6 = f[2];
-  const double s7 = s0*s6;
-  const double s8 = s5+s7;
-  const double s9 = 16;
-  const double s10 = s4*s9;
+  const double s7 = (-48)*s6;
+  const double s8 = fma(s3, s4, s7);
   const double s11 = s2*s8;
-  const double s12 = s10+s11;
+  const double s12 = fma(s4, (16), s11);
+  const double s13 = s4*s4;
+  const double s14 = s4*s13;
+  const double s15 = s12*s14;
+  return s15;
+}
+static inline double tr1([[maybe_unused]] const double *f) {
+  const double s2 = f[1];
+  const double s3 = (-32)*s2;
+  const double s4 = f[0];
+  const double s6 = f[2];
+  const double s7 = (48)*s6;
+  const double s8 = fma(s3, s4, s7);
+  const double s11 = s2*s8;
+  const double s12 = fma(s4, (-16), s11);
   const double s13 = s4*s4;
   const double s14 = s4*s13;
   const double s15 = s12*s14;

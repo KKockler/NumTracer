@@ -33,7 +33,7 @@
 (* Default silent, but env-controllable so a headless/CI run can turn the [cse]/[prof]/[time]
    diagnostics on without editing a .wls — mirrors the C++ side's NT_GEN_PROFILE. The density guard in
    tests/gen/regen_check.sh needs the [cse] sub-terms line, which is emitted through ntLog. *)
-$NumTracerVerbose = (Environment["NT_GEN_VERBOSE"] =!= $Failed);
+$NumTracerVerbose = ntEnvFlag["NT_GEN_VERBOSE"];
 
 ntLog[args___] := If[TrueQ[$NumTracerVerbose],
     Print[args]];
@@ -503,7 +503,7 @@ $ntCompileJobs := ntCompileJobs[];
    would pay for an index vector and save nothing. *)
 
 (* escape hatch + the A/B control for the two paths below *)
-ntNoTableDedup[] := StringQ[Environment["NT_GEN_NO_TABLE_DEDUP"]] && Environment["NT_GEN_NO_TABLE_DEDUP"] =!= "";
+ntNoTableDedup[] := ntEnvFlag["NT_GEN_NO_TABLE_DEDUP"];
 
 ntChunkDef[name_String, ret_String, elems_List] :=
   Module[{u, pos, idxCost, dedup},
@@ -644,7 +644,7 @@ resolveGenCxx[] := Module[{env = Environment["NT_GEN_CXX"], path, comps, clangPi
    command, so it needs no code in the generator itself. NT_GEN_NO_TCMALLOC=1 opts out; silently
    empty when the library is absent, so nothing changes on machines without gperftools. *)
 ntTcmallocPrefix[] :=
-  If[StringQ[Environment["NT_GEN_NO_TCMALLOC"]] && Environment["NT_GEN_NO_TCMALLOC"] =!= "",
+  If[ntEnvFlag["NT_GEN_NO_TCMALLOC"],
     "",
     With[{lib = SelectFirst[
         {"/usr/lib/libtcmalloc_minimal.so", "/usr/lib64/libtcmalloc_minimal.so",
@@ -805,7 +805,7 @@ ntRecognizeComm[p_] := Module[{terms, a, b},
    Set env NT_NO_SIGMA_FOLD=1 to disable the optimization (the commutator then distributes into two
    traces as before) — a safety switch and the baseline for measuring the fold's sub-term reduction. *)
 
-$ntSigmaFold = (Environment["NT_NO_SIGMA_FOLD"] === $Failed);
+$ntSigmaFold = !ntEnvFlag["NT_NO_SIGMA_FOLD"];
 
 (* Fold every bare γ-commutator Plus among `factors` into a single ntSigma token (gated by
    $ntSigmaFold), recursively: find a factor that is a Plus recognisable as a commutator [A,B]
@@ -1685,7 +1685,7 @@ unitLoopSpatialQ[comps_, magSym_] := Module[{cc = PowerExpand[comps]},
   AnyTrue[Range[2, 4], (Coefficient[cc[[#]], magSym] =!= 0)&]];
 
 unitLoopMixedOkQ[frame_, magSym_] :=
-  Environment["NT_NO_UNIT_GROUPS"] === $Failed &&
+  !ntEnvFlag["NT_NO_UNIT_GROUPS"] &&
     (* at least one momentum is a magSym-proportional loop — either FULLY (all four components,
        the vacuum case) or SPATIALLY (finite T: an independent temporal l0 rides along) — and NO
        momentum mixes magSym with other coordinates inside a component *)
@@ -2055,7 +2055,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    — the pre-dedup behaviour. It is the escape hatch, and the control for the equivalence test
    (generate twice, compare the kernels' VALUES; a byte-diff is meaningless because dedup changes
    GlobalEnv interning order and so renumbers every sN). *)
-    ntNoDedup = (Environment["NT_GEN_NO_DEDUP"] =!= $Failed);
+    ntNoDedup = ntEnvFlag["NT_GEN_NO_DEDUP"];
 (* LEVER (b): each sub-term carries a {traceKey, dressKey} PAIR. The traceKey is dressing-free
    {ds, ls, chain, structural-options} — so combinations that share a concrete structure but differ only
    in dressing collapse to ONE trace. The dressKey is the sorted dress-atom multiset; it becomes the
@@ -2484,7 +2484,15 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    passed per branch rather than shared so each keeps its exact expression (poly*constant here vs
    scale_trace's constant*poly). *)
             "  long gwin = numtracer::numeric::net_window((long)sidx.size(), hwB);\n",
-            "  if(ntprof) numtracer::numeric::check_group_partition(groups, " <> str[nNet] <> ");\n",
+(* UNCONDITIONAL, deliberately. `groups` must PARTITION the nets: a duplicate means a net is folded
+   into the kernel twice, a gap means one is silently dropped. Either is a wrong kernel with no other
+   symptom. This used to be emitted behind `if(ntprof)` — i.e. it ran only under NT_GEN_PROFILE,
+   which no production regeneration sets, so the invariant has effectively never been checked. It is
+   O(nNet) once per generation (nets are tens to low thousands) against a kernel build measured in
+   seconds to minutes, so gating it on a profiling flag bought nothing and cost the guard entirely.
+   Currently reports and continues; it becomes fatal once a full regeneration has confirmed no
+   committed flow trips it. *)
+            "  numtracer::numeric::check_group_partition(groups, " <> str[nNet] <> ");\n",
 (* LEVER (b): the dressed fold reads a PLAIN-MPoly trace table T + the per-sub-term dressing monomials sdr,
    building the per-net DPoly channel-by-channel (fold_groups_streaming_dressed). The colour scale (scaleCx)
    and the sink are unchanged — only the per-net fold's trace type differs, so the group DPoly the sink
@@ -2766,10 +2774,10 @@ ntMarkGenerated[manifestFile_String] := Module[{m = Import[manifestFile, "RawJSO
 
    NT_NO_INTERP_SHARE=1 disables it (the A/B control). *)
 
-$ntInterpShare = (Environment["NT_NO_INTERP_SHARE"] =!= "1");
+$ntInterpShare = !ntEnvFlag["NT_NO_INTERP_SHARE"];
 
 (* k-only lookup hoisting ("HoistLoopConstLookups"): NT_GEN_NO_KHOIST=1 disables (the A/B control). *)
-$ntKHoist = (Environment["NT_GEN_NO_KHOIST"] =!= "1");
+$ntKHoist = !ntEnvFlag["NT_GEN_NO_KHOIST"];
 
 ntInterpLine[ln_String] :=
   Module[{m = StringCases[ln,
@@ -2878,11 +2886,6 @@ Options[mkGenerateKernel] =
     "FullParallel" -> False,
     "AngleDefs" -> {},
     "CrossTraceCSE" -> False,
-    "GlobalCollect" -> True,
-    (* default ON: groups diagrams by dressing coeff + folds colour
-numerically so COEN collects the factored coefficient across diagrams (FORM-style); ~30% runtime
-cut on the dense quark-loop vertices, generation cost unchanged. Pass False to opt out per flow. *)
-    "NumericContract" -> False,
     "Components" -> Automatic,
     "SymbolDefs" -> <||>,
     "Decorator" -> "static inline",
@@ -2937,11 +2940,10 @@ cut on the dense quark-loop vertices, generation cost unchanged. Pass False to o
    vanishes (projector-i × colour-i often cancel to a real value that Mathematica can't see through the
    opaque trace symbols). If it vanishes, re-emit a REAL (double) kernel — losslessly. Set False to skip
    the probe and always keep the complex+consumer-Re path. *)
-(* "NumericContract" -> True: the numeric (matrix-product) backend (task #22) — contract each diagram
-   numerically via et/numeric (γ/metric/projector numeric, momenta symbolic), no sp-invariant
-   reduce/rebase/ibp. "Components" -> <|mom -> {e0,e1,e2,e3}, ...|> gives each momentum's 4 components
-   as expressions (partially numeric / partially symbolic); Automatic falls back to the kinematic
-   frame polynomialised. "SymbolDefs" -> <|sym -> expr|> gives the C++ fill for any DERIVED symbol
+(* The numeric (matrix-product) backend is the ONLY backend and is always on; there is no option for
+   it. "Components" -> <|mom -> {e0,e1,e2,e3}, ...|> gives each momentum's 4 components as expressions
+   (partially numeric / partially symbolic); Automatic falls back to the kinematic frame
+   polynomialised. "SymbolDefs" -> <|sym -> expr|> gives the C++ fill for any DERIVED symbol
    (e.g. sin1 -> Sqrt[1-cos1^2]); plain free symbols are taken to be kernel arguments. *)
 (* Standalone-output options (defaults make the emitted code self-contained against NumTracer's
    own headers, with no mention of any downstream consumer). A consumer that supplies its own
@@ -2994,7 +2996,7 @@ mkGenerateKernel::pruneoff = "PruneRealTraces ignored: the RealProbe cannot run 
 (* (mkGenerateKernel::crosscseComplex was removed 2026-07-19: CrossTraceCSE now types tarr[] from the
    emitted `trace_all_t`, so a complex flow is no longer truncated and needs no guard.) *)
 
-mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, groups=`3`) — nothing to emit. Aborting instead of writing a placeholder kernel. (A diagram-build guard such as disconnectmix may have dropped everything, or NumTrace returned no usable diagrams.)";
+mkGenerateKernel::emptynets = "Flow `1` produced no generator nets (nets=`2`, groups=`3`) — nothing to emit. Aborting instead of writing a placeholder kernel. (Either NumTrace returned no usable diagrams, or every diagram was dropped during the net build.)";
 
 mkGenerateKernel::scalarleak = "Diagram `1`: a non-numeric factor `2` reached the generator scalar coefficient (a Lorentz tensor that was not resolved by the net builder, e.g. an un-anchored metric contraction). It would be emitted as undeclared C++. Aborting; fix the net build (compileTInv) so the contraction folds numerically.";
 
@@ -3065,7 +3067,7 @@ resolveGenLib[incDir_] := Module[{env, base, cands, lib},
             FileNameJoin[{base, "build", "libNumTracer.a"}]
           };(* in-tree default build dir *)
         SelectFirst[cands, FileExistsQ, $Failed]];
-    If[lib =!= $Failed && Environment["NT_ALLOW_STALE_LIB"] === $Failed && genLibStaleQ[lib, incDir],
+    If[lib =!= $Failed && !ntEnvFlag["NT_ALLOW_STALE_LIB"] && genLibStaleQ[lib, incDir],
       Module[{hdrs = FileNames["*.hpp" | "*.h", incDir, Infinity], newest},
         newest = First @ SortBy[hdrs, -AbsoluteTime[FileDate[#, "Modification"]]&];
         Message[MakeNTKernel::stalelib, lib, newest];
@@ -3264,7 +3266,12 @@ diagColPolys[colnetStrs_, includeDir_] :=
         "      std::printf(\"T %.17g %.17g %zu\", t.coeff.re, t.coeff.im, t.dress.size());\n",
         "      for(int d : t.dress) std::printf(\" %d\", d);\n",
         "      std::printf(\"\\n\"); } }\n  return 0;\n}\n"];
-    cppFile = FileNameJoin[{$TemporaryDirectory, "ntdiagpoly.cpp"}];
+(* UNIQUE per invocation. These were the FIXED names ntdiagpoly.cpp / ntdiagpoly in $TemporaryDirectory,
+   so every flow — and every concurrent session — shared one `.out` and one `.cerr`. Combined with the
+   unchecked run below, a crashed helper silently consumed a PREVIOUS flow's colour polynomials. The
+   only thing standing between that and a wrong kernel was RUN_SERIAL on codegen_regen plus
+   regen_check.sh's sequential loop, i.e. scheduling, not correctness. *)
+    cppFile = FileNameJoin[{$TemporaryDirectory, "ntdiagpoly_" <> StringReplace[CreateUUID[], "-" -> ""] <> ".cpp"}];
     bin = StringReplace[cppFile, ".cpp" -> ""];
     ntExportCpp[cppFile, src];
 (* HEADER_ONLY: this one-off TU calls a SPLIT engine entry point (sun_value_dressed), whose body is
@@ -3276,11 +3283,17 @@ diagColPolys[colnetStrs_, includeDir_] :=
     If[rc =!= 0,
       Print["[diagpoly] compile failed (rc=", rc, "):\n", Quiet @ Check[Import[bin <> ".cerr", "Text"], ""]];
       Abort[]];
-    Run["'" <> bin <> "' > '" <> bin <> ".out'"];
-    out =
-      If[FileExistsQ[bin <> ".out"],
-        Import[bin <> ".out", "Text"],
-        ""];
+(* The RUN's exit code is checked, exactly like the compile's above. It used to be discarded, so a
+   crashed helper fell through to `If[FileExistsQ[...]]` and either read a stale `.out` (see the
+   unique-name note above) or produced res = {}, which then reached the MapThread below as a
+   length-mismatch — a confusing downstream error instead of a diagnosis. Delete first so a missing
+   file can never be mistaken for output, then abort loudly with the captured stderr. *)
+    Quiet @ DeleteFile[bin <> ".out"];
+    rc = Run["'" <> bin <> "' > '" <> bin <> ".out'"];
+    If[rc =!= 0 || !FileExistsQ[bin <> ".out"],
+      Print["[diagpoly] helper run failed (rc=", rc, "):\n", Quiet @ Check[Import[bin <> ".cerr", "Text"], ""]];
+      Abort[]];
+    out = Import[bin <> ".out", "Text"];
     lines = Select[StringSplit[StringTrim[out], "\n"], # =!= ""&];
     Do[
       Module[{tk = StringSplit[ln]},
@@ -3316,7 +3329,18 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, gc, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>},
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+(* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
+   It used to be declared local to that inner Module (which spans the net-build loop and closes
+   right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
+   it stayed the unassigned symbol NumTracer`Private`diagData, so `diagData[[i]]` never evaluated,
+   `FreeQ[..., Complex]` was vacuously True for EVERY group, and "PruneRealTraces" -> True emitted
+   every trace as a real `double` regardless of its dressing coefficient — dropping -Im(c)*Im(tr)
+   for any group with a complex coefficient. An O(1) wrong kernel whose only symptom was a
+   Part::partd message. This is a DIFFERENT bug from the probe/prune ORDERING one fixed below; that
+   fix reordered generation and never touched the scope. Same hand-off pattern as lorFacOf /
+   pGroupOf / nAdd above: declared outer, assigned inner. *)
+    diagData = {}},
     Needs["FunKit`"];
 (* A large flow assembles a kernel with one summand per diagram GROUP (ZA4: 1274). Several codegen
    steps (the integrand Sum, COEN's expression lowering) recurse ~linearly in that count, so the
@@ -3347,8 +3371,6 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           "double"]];
     angleDefs = OptionValue["AngleDefs"];
     crossCSE = OptionValue["CrossTraceCSE"];
-    gc = OptionValue["GlobalCollect"];                                                              (* Route-B: fold the WHOLE integrand (all diagrams, dressings as
-inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE is subsumed by it. *)
     (* normalise raw CUDA qualifiers to the Kokkos macros — see ntKokkosDecor. *)
     decor = ntKokkosDecor[OptionValue["Decorator"]];
     (* Offline: emit sources + the per-flow numtrace.json switch and let the `numtrace` build target do
@@ -3479,7 +3501,10 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    churn GBs through the allocator. Internal`Bag amortises the append; the lists are materialised
    once, after the loop. Nothing reads the accumulators DURING the loop except for the running net
    index, which `nNetAcc` now carries. *)
-    Module[{diagData, bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[], bColToks = Internal`Bag[], bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[], nNetAcc = 0},
+    (* NB no `diagData` in this local list — it is declared in the OUTER Module (see the note on its
+       declaration there) because `pruneG` reads it after this Module closes. Re-adding it here
+       re-shadows it and silently restores the all-groups-pruned bug. *)
+    Module[{bInvNets = Internal`Bag[], bInvRest = Internal`Bag[], bColourNets = Internal`Bag[], bColToks = Internal`Bag[], bDiagData = Internal`Bag[], bLorFacOf = Internal`Bag[], bFactorNets = Internal`Bag[], nNetAcc = 0},
       ntLog[
         "[prof] per-diagram net-build (",
         Length[k["Diagrams"]],
@@ -4096,7 +4121,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    clang rejects a PCH whose flags disagree with the consumer's. *)
         pchOut = bin <> ".pch";
         pchCmd =
-          If[StringContainsQ[cxx, "clang"] && !(StringQ[Environment["NT_GEN_NO_PCH"]] && Environment["NT_GEN_NO_PCH"] =!= ""),
+          If[StringContainsQ[cxx, "clang"] && !ntEnvFlag["NT_GEN_NO_PCH"],
             "(ulimit -v 17000000; " <> cxx <> " -std=c++20 -ftemplate-depth=4000 -O0 -fno-exceptions -fno-rtti" <> hoDef <> "-I '" <> incDir <> "' -x c++-header '" <> pchFile <> "' -o '" <> pchOut <> "') > '" <> clog <> "' 2>&1",
             None];
         pchArg = If[pchCmd === None, "", " -DNT_GEN_PCH -include-pch '" <> pchOut <> "'"];
@@ -4111,7 +4136,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    opts out. CAVEAT (documented, not speculative): if phase-B parallel lowering ever lands, sN
    interning makes the source non-deterministic and this key must move to the generator INPUTS. *)
         Module[{srcKey, keyFile = bin <> ".srckey", cacheOff, hit},
-          cacheOff = StringQ[Environment["NT_GEN_NO_COMPILE_CACHE"]] && Environment["NT_GEN_NO_COMPILE_CACHE"] =!= "";
+          cacheOff = ntEnvFlag["NT_GEN_NO_COMPILE_CACHE"];
           srcKey =
             ToString @ Hash[
               {FileHash[#, "SHA256"]& /@ Join[{genFile, declFile, pchFile}, unitFiles],
@@ -4228,9 +4253,7 @@ inert symbols) into ONE collected polynomial -> one kernel, like FORM. crossCSE 
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "GlobalCollect" -> True, "NumericContract" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic};
-
-MakeNTKernel::disconnectmix = "Diagram `1` disconnects into >= 2 Dirac/colour trace components (a product of independent Dirac traces, a genuine >=2-loop structure). The numeric backend handles a single Dirac/colour trace times any number of disconnected pure-Lorentz scalars (factored), but does not yet multiply two or more independent Dirac traces.";
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 
@@ -4243,4 +4266,4 @@ MakeNTKernel[ntk : NTKernel[_], file_, opts : OptionsPattern[]] := (
     Abort[]);
 
 MakeNTKernel[ntk : NTKernel[_], genFile_, kernelFile_, tracesFile_, opts : OptionsPattern[]] :=
-  mkGenerateKernel[ntk, genFile, kernelFile, tracesFile, "NumericContract" -> True, Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkGenerateKernel]]];
+  mkGenerateKernel[ntk, genFile, kernelFile, tracesFile, Sequence @@ FilterRules[Join[{opts}, Options[MakeNTKernel]], Options[mkGenerateKernel]]];

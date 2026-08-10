@@ -6,7 +6,7 @@ Tags: `codegen`, `options` · **Tier B** (a Wolfram kernel and FunKit)*
 ## Introduction
 
 `MakeNTKernel` has 28 options. Listing them would be a reference page; this is a tutorial, so
-instead we emit **the same network five ways** and look at what actually changed in the generated
+instead we emit **the same network four ways** and look at what actually changed in the generated
 C++.
 
 The organising fact is this: **almost every option is semantics-preserving.** It changes how the
@@ -20,22 +20,31 @@ to study are in the emitted source.
 From `Codegen.m`:
 
 ```
-"Name","Namespace","Dressings","ScalarParams","ADParams","Decorator","IncludeDir",
-"RunGenerator","FullParallel","AngleDefs","CrossTraceCSE","GlobalCollect","NumericContract",
-"Components","SymbolDefs","RuntimeInclude","ExtraIncludes","KernelNamespace","SupportNamespace",
-"DressingType","RegulatorTemplate","RegulatorAlias","RealProbe","PruneRealTraces","Constant",
-"Offline","CoordinateArgs"
+"Name","Namespace","Dressings","ScalarParams","ADParams","Decorator","DeviceTarget","IncludeDir",
+"RunGenerator","FullParallel","AngleDefs","CrossTraceCSE","Components","SymbolDefs",
+"RuntimeInclude","ExtraIncludes","KernelNamespace","SupportNamespace","DressingType",
+"ShareInterpolatorIndex","HoistLoopConstLookups","RegulatorTemplate","RegulatorAlias",
+"RealProbe","PruneRealTraces","Constant","Offline","CoordinateArgs"
 ```
 
 They fall into five groups:
 
 | Group | Options | Covered in |
 |---|---|---|
-| **Identity** — what the kernel is called and where it lives | `Name`, `Namespace`, `KernelNamespace`, `SupportNamespace`, `Decorator` | here, and [step-21](step-21.md) for the device decorator |
+| **Identity** — what the kernel is called and where it lives | `Name`, `Namespace`, `KernelNamespace`, `SupportNamespace`, `Decorator`, `DeviceTarget` | here, and [step-21](step-21.md) for the device decorator |
 | **Interface** — what it takes and returns | `Dressings`, `DressingType`, `ScalarParams`, `ADParams`, `Constant`, `CoordinateArgs`, `AngleDefs` | here, [step-13](step-13.md), [step-14](step-14.md) |
 | **Target** — what it compiles against | `RuntimeInclude`, `ExtraIncludes`, `IncludeDir`, `RegulatorTemplate`, `RegulatorAlias` | [step-15](step-15.md) |
-| **Emission strategy** — how it is spelled | `GlobalCollect`, `CrossTraceCSE`, `FullParallel`, `Components`, `SymbolDefs` | here, [step-20](step-20.md) |
-| **Build orchestration & correctness probes** | `Offline`, `RunGenerator`, `RealProbe`, `PruneRealTraces`, `NumericContract` | [step-20](step-20.md), [step-21](step-21.md) |
+| **Emission strategy** — how it is spelled | `CrossTraceCSE`, `FullParallel`, `Components`, `SymbolDefs`, `ShareInterpolatorIndex`, `HoistLoopConstLookups` | here, [step-20](step-20.md), [step-21](step-21.md) |
+| **Build orchestration & correctness probes** | `Offline`, `RunGenerator`, `RealProbe`, `PruneRealTraces` | [step-20](step-20.md), [step-21](step-21.md) |
+
+```{admonition} This list moves
+:class: note
+The option set is not frozen — `GlobalCollect` and `NumericContract` were options and are now
+unconditional behaviour, and `ShareInterpolatorIndex` / `HoistLoopConstLookups` are recent
+additions. If this table and `Options[MakeNTKernel]` in `Codegen.m` disagree, believe `Codegen.m`.
+The *listings* on this page cannot go stale — they are pulled from the script that runs — but prose
+about a specific option can.
+```
 
 ## The commented program
 
@@ -49,7 +58,7 @@ They fall into five groups:
 :end-before: "@snip end: net"
 ```
 
-```{admonition} A real `.wls` trap, and the assertion that catches it
+````{admonition} A real `.wls` trap, and the assertion that catches it
 :class: warning
 Note the parentheses around the sum. In a `.wls` script **a line that is already a complete
 expression ends there**, so
@@ -71,9 +80,9 @@ If[nd =!= 3, Print["FAIL: expected 3 diagrams, got ", nd]; Exit[1]];
 ```
 
 Assert the number you expect, not merely that it is nonzero — a truncated sum still has diagrams.
-```
+````
 
-### The five variants
+### The four variants
 
 ```{literalinclude} ../../../Tutorials/step-09-codegen-options/options.wls
 :language: mathematica
@@ -88,9 +97,8 @@ cmake --build build --target options && ./build/options
 ```
 
 ```text
-one network, five emissions, at (p, l1, cos1) = (1.7, 0.9, 0.35)
+one network, four emissions, at (p, l1, cos1) = (1.7, 0.9, 0.35)
   default                      =       5.608045   (closed form 5.608045)
-  GlobalCollect -> False       =       5.608045   == default
   CrossTraceCSE -> True        =       5.608045   == default
   Constant -> myZ[p]           =       5.608045   == default
   renamed namespaces           =       5.608045   == default
@@ -100,7 +108,7 @@ the constant() entry point
 ALL TESTS PASSED
 ```
 
-All five agree, as they must. Now the interesting part.
+All four agree, as they must. Now the interesting part.
 
 ### What the default emits
 
@@ -113,17 +121,6 @@ Two trace functions. `tr1` is the collected $P^T + P^L$ pair — the two diagram
 dressing coefficient `myZ(l1)`, folded into one trace so that `_interp1` multiplies them once. `tr0`
 is the third diagram, multiplied by its own scalar coefficient `cos1*l1*p`. This is the
 $\sum_{\text{diagrams}}\text{coeff}\times\text{trace}$ shape, made concrete.
-
-### `GlobalCollect -> False` — no difference *here*
-
-On this network the two emissions are byte-identical. That is an honest result and worth stating
-plainly: `GlobalCollect` groups diagrams by dressing coefficient so the emitter can factor a shared
-coefficient across them, and here the grouping had already happened for other reasons.
-
-Where it does matter is dense flows with many diagrams sharing few distinct dressing products —
-the quark-loop contributions to gluonic vertices. `PERFORMANCE.md` records roughly a **30 %
-runtime cut** there. It is on by default because that case is the expensive one; turning it off is
-a diagnostic, not a tuning knob.
 
 ### `CrossTraceCSE -> True` — a genuinely different shape
 
@@ -214,8 +211,8 @@ support API.
    watch the checker fail against the closed form instead. Compare how much easier the first
    failure was to diagnose than the second.
 
-2. **Find a network where `GlobalCollect` matters.** Add several more diagrams sharing the same
-   dressing product, and diff the two emissions. Count `_interp` hoists in each.
+2. **See the dressing-coefficient grouping do more work.** Add several more diagrams sharing the
+   same dressing product, and count the `_interp` hoists in the emission before and after.
 
 3. **Measure `CrossTraceCSE` honestly.** Time both variants in a tight loop over $10^7$ points. On
    this toy the difference is noise; the exercise is to build the harness, because
