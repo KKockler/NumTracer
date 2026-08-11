@@ -71,6 +71,30 @@ ntReportDiFfRG[name_String, flowDir_, lines_List] :=
 
 (* ---- DiFfRG flow directory (public delayed symbol, trailing slash) -------------------------- *)
 
+(* Resolve the "MatsubaraVar" option to a symbol name (or None). Automatic follows DiFfRG's own
+   convention — the Matsubara frequency is the LAST integration variable, which is what MakeKernel
+   reads for its "MatsubaraEven" option — so a flow declaring
+   "IntegrationVariables" -> {"l1", "cos1", "phi", "f0"} needs no extra option to get the check.
+   A flow whose frame names the frequency something else passes it explicitly; None opts out.
+   An empty variable list yields None rather than a Last[] error, so vacuum flows are unaffected.
+
+   Automatic is gated on the integrator actually being a finite-T one. Without that gate a VACUUM
+   flow's last integration variable is an angle ("cos1"), which is a perfectly good frame symbol —
+   so the check would run, and a kernel that happens to be even in cos1 would be stamped
+   `matsubara_even`. Inert today (no vacuum integrator reads the trait) but exactly the kind of
+   latent mis-binding that surfaces later as wrong physics. *)
+ntMatsubaraVar[None, _, _] := None;
+ntMatsubaraVar[Automatic, _, {}] := None;
+ntMatsubaraVar[Automatic, integrator_, vars_List] :=
+  If[!StringQ[integrator] || !StringContainsQ[integrator, "_fT"],
+    None,
+    With[{v = Last[vars]},
+      Which[
+        StringQ[v], v,
+        AssociationQ[v] && KeyExistsQ[v, "Name"], v["Name"],
+        True, ToString[v]]]];
+ntMatsubaraVar[v_, _, _] := v;
+
 ntFlowDir[dir_String] :=
   dir;
 
@@ -104,6 +128,22 @@ Options[MakeNTKernelDiFfRG] =
     ,(* REQUIRED flow name, e.g. "ZA" -> dir flows/ZA, class ZA_kernel *)
     "Integrator" -> Automatic
     ,(* REQUIRED DiFfRG integrator template, e.g. "Integrator_p2_1ang" *)
+(* Name of the Matsubara-frequency symbol, for a finite-T flow. It asks NumTracer to PROVE whether
+   the kernel is even in that frequency and, if so, emit DiFfRG's `matsubara_even` trait: the
+   integrator then evaluates the kernel once per Matsubara mode instead of twice, halving both that
+   work and the number of inlined kernel copies per launch.
+
+   Automatic = Last["IntegrationVariables"], the same convention DiFfRG's own MakeKernel uses for
+   its "MatsubaraEven" option. Give an explicit symbol name to override, or None to skip the check
+   entirely. If the name matches no symbol in the flow's frame, NumTracer says so loudly and emits
+   no trait rather than quietly skipping the optimisation.
+
+   This cannot be delegated to MakeKernel's "MatsubaraEven" option: on the numeric path MakeKernel
+   is handed the placeholder `body = 0.` (NumTracer overwrites kernel.hh afterwards), so its
+   symbolic check is trivially satisfied for EVERY flow and would stamp the trait on kernels that
+   are not even -- silently dropping the odd half of the Matsubara sum. The verdict has to come
+   from the polynomials, which is where NumTracer proves it. *)
+    "MatsubaraVar" -> Automatic,
     "IntegrationVariables" -> Automatic
     ,(* REQUIRED, e.g. {"l1","cos1"} *)
     "Parameters" -> Automatic
@@ -379,7 +419,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    kernels. *)
     $ntLastHoistCount = 0;
     If[TrueQ @ CheckAbort[
-         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
          True,
          False],
       Null,

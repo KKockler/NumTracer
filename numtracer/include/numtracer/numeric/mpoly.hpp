@@ -926,4 +926,30 @@ namespace numtracer::numeric
     return s;
   }
 
+  /// @brief Does every monomial of @p p carry an EVEN power of fundamental symbol @p sym?
+  ///
+  /// Used to certify a finite-T kernel as Matsubara-even, which lets DiFfRG's
+  /// `QuadratureIntegrator_fT` replace `kernel(+ω) + kernel(−ω)` with `2·kernel(ω)` — halving both
+  /// the emitted device code and the Matsubara-sum work at runtime.
+  ///
+  /// A monomial is `c · ∏ x_k^{e_k} · ∏ 1/atomDen_a`, so evenness of the whole polynomial in `sym`
+  /// needs BOTH this predicate and the same predicate on every `atomDen` the polynomial references
+  /// — an odd denominator would flip sign just as an odd numerator power does. The caller owns that
+  /// second half (it is the one holding the atom table); this function deliberately does not guess
+  /// at it.
+  ///
+  /// The condition is SUFFICIENT, not necessary: odd terms that cancel between monomials would be
+  /// reported as odd. That is the safe direction — a false "even" silently drops the odd half of
+  /// the Matsubara sum and gives wrong physics with no diagnostic, whereas a false "odd" only
+  /// forgoes an optimisation.
+  inline bool poly_even_in(const MPoly &p, int sym)
+  {
+    if (sym < 0) return false;
+    for (const auto &[m, c] : p.t) {
+      (void)c;
+      if (m.e.get(sym) % 2 != 0) return false;
+    }
+    return true;
+  }
+
 } // namespace numtracer::numeric

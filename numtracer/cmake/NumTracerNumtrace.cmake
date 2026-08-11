@@ -127,6 +127,16 @@ function(numtracer_add_numtrace flows_target flow_dir)
       set(_maxwb 0)
     endif()
 
+    # Does this flow's kernel target device code? Enables gen.hpp's size-gated `__noinline__`, which
+    # the generator reads as NT_GEN_DEVICE. Same ERROR_VARIABLE form and the same reason as the caps
+    # above: absent from every manifest written before the field existed, and a missing key is a hard
+    # error for string(JSON GET). Absent => false => the old all-inline emission, so old manifests
+    # keep building exactly as they did.
+    string(JSON _device ERROR_VARIABLE _jerr GET "${_json}" "device")
+    if(_jerr OR NOT _device)
+      set(_device 0)
+    endif()
+
     # Manifest paths are normally relative to the flow directory, but tolerate absolute ones: a path
     # that could not be made relative at emit time (e.g. a not-yet-created file whose symlinked parent
     # resolved differently) is written out absolute, and must not be re-prefixed.
@@ -208,6 +218,7 @@ function(numtracer_add_numtrace flows_target flow_dir)
         "-DJOBS=${NUMTRACE_JOBS}"
         "-DMAXW=${_maxw}"
         "-DMAXWB=${_maxwb}"
+        "-DDEVICE=${_device}"
         "-DIDX=${_idx}"
         "-DTOTAL=${_total}"
         -P "${_driver}")

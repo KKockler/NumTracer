@@ -259,6 +259,23 @@ if(NUMTRACER_BUILD_TESTS)
   add_executable(test_poly_cancel tests/test_poly_cancel.cpp)
   target_link_libraries(test_poly_cancel PRIVATE NumTracer::NumTracer)
 
+  # The device __noinline__ size gate. It was dead in production twice over, each time silently (a
+  # dead gate emits a valid, merely all-inline kernel), so it needs a test that asserts it FIRES.
+  # The gate caches its environment once per process on purpose, so the modes cannot share one — see
+  # the per-mode add_test/ENVIRONMENT block below.
+  add_executable(test_noinline_gate tests/test_noinline_gate.cpp)
+  target_link_libraries(test_noinline_gate PRIVATE NumTracer::NumTracer)
+
+  # The rank-1 electric projector against the dense one, through the real contraction. The identity
+  # is exact on paper; this asserts the ENGINE agrees, which is a different claim (different
+  # elimination order, different atoms in the numerator, different unit-reduction path).
+  # HEADER-ONLY on purpose: the two factor builders and contract_factors live behind
+  # NUMTRACER_DEFINE_BODIES (they are engine internals, not exported entry points), and this test
+  # has to reach both forms in ONE process. The header-only mode exists for exactly this and needs
+  # no widening of the library's export surface.
+  add_executable(test_rank1_proje tests/test_rank1_proje.cpp)
+  target_link_libraries(test_rank1_proje PRIVATE NumTracer::NumTracer_headeronly)
+
   # Phase-2 example 2: pion <- quark loop -> pion (Yukawa) — fundamental flavour x Dirac x colour.
   add_executable(compare_pion_quark tests/refshim/compare_pion_quark.cpp)
   target_include_directories(compare_pion_quark PRIVATE tests/gen tests/refshim)
@@ -476,6 +493,27 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME guards COMMAND test_guards)
   add_test(NAME trace_fold COMMAND test_trace_fold)
   add_test(NAME poly_cancel COMMAND test_poly_cancel)
+
+  # One process per mode: eff_decor reads NT_GEN_DEVICE / NT_GEN_NOINLINE_MIN /
+  # NT_GEN_NOINLINE_TRACES once and caches them, because emission has to be consistent across every
+  # function in a generator run. ENVIRONMENT is set explicitly on every case (including the empty
+  # values on `host`) so an inherited variable in the developer's shell cannot flip a verdict.
+  add_test(NAME rank1_proje COMMAND test_rank1_proje)
+  add_test(NAME noinline_gate_host COMMAND test_noinline_gate host)
+  set_tests_properties(noinline_gate_host PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_fires COMMAND test_noinline_gate fires)
+  set_tests_properties(noinline_gate_fires PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_min0 COMMAND test_noinline_gate min0)
+  set_tests_properties(noinline_gate_min0 PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=0;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_off COMMAND test_noinline_gate off)
+  set_tests_properties(noinline_gate_off PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=1;NT_GEN_NOINLINE_MIN=off;NT_GEN_NOINLINE_TRACES=")
+  add_test(NAME noinline_gate_forced COMMAND test_noinline_gate forced)
+  set_tests_properties(noinline_gate_forced PROPERTIES
+    ENVIRONMENT "NT_GEN_DEVICE=;NT_GEN_NOINLINE_MIN=;NT_GEN_NOINLINE_TRACES=1")
   add_test(NAME flow_zaaqbq1_small COMMAND compare_zaaqbq1_small)
   add_test(NAME flow_lambda3d_small COMMAND compare_lambda3d_small)
   add_test(NAME flow_zaqbq1 COMMAND compare_zaqbq1)

@@ -518,6 +518,69 @@ namespace numtracer::numeric
       return F;
     }
 
+    /// @brief Push the dense factor(s) for one @ref NElem onto @p out.
+    ///
+    /// Everything except the finite-T ELECTRIC projector contributes exactly one factor, i.e. this is
+    /// `out.push_back(elem_factor(...))`. `ProjE` is the exception, and the reason this wrapper
+    /// exists: it has RANK 1 (the engine already knows — `projTrace4D` returns 1 for it), so instead
+    /// of one dense 4x4 factor carrying BOTH Lorentz indices it can be emitted as an outer product of
+    /// two 4-vectors, one per index:
+    ///
+    ///     P_E = v ⊗ v · INV(k) · INVS(k),   v_0 = |k⃗|²,   v_i = −k_0 k_i  (i = 1,2,3)
+    ///
+    /// Check the two corners against `P_E = P_T − P_M`: at (0,0) it gives `|k⃗|⁴/(k²|k⃗|²) = |k⃗|²/k²`,
+    /// which is `1 − k_0²/k²`; at (i,j) it gives `k_0² k_i k_j/(k²|k⃗|²)`, which is
+    /// `k_i k_j (1/|k⃗|² − 1/k²)`. Exact, not an approximation.
+    ///
+    /// WHY IT PAYS. `contract_factors` is greedy min-fill-in variable elimination: its cost is
+    /// exponential in the size of the id-union of each factor group. A dense `{a,b}` factor forces
+    /// those two indices into a common group forever; two rank-1 factors `{a}` and `{b}` do not, so
+    /// the elimination can cut the network there. That is the classic tensor-network separator win,
+    /// and it is worth far more than halving one factor. Nothing in the elimination itself changes —
+    /// it simply finds cheaper orderings once the artificial coupling is gone.
+    ///
+    /// `v_0` is `atomDen[el.atomS]`: the SPATIAL denominator |k⃗|², which the caller already holds, so
+    /// no `k²` polynomial is needed anywhere (`k² − k_0² = |k⃗|²` is what makes that work).
+    ///
+    /// NT_NO_RANK1_PROJE=1 restores the dense form — the A/B control, and the escape hatch if a flow
+    /// ever contracts faster dense.
+    inline void push_elem_factors(std::vector<Factor> &out, int nsym, const NElem &el,
+                                  const std::vector<std::array<MPoly, 4>> &comp,
+                                  const std::vector<MPoly> &atomDen)
+    {
+      static const bool rank1E = [] {
+        const char *e = std::getenv("NT_NO_RANK1_PROJE");
+        return !(e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0);
+      }();
+      // atomS must be a real id with a filled denominator; a malformed net falls back to dense
+      // rather than silently building a wrong factor.
+      const bool canSplit = rank1E && el.kind == NElem::ProjE && el.a != el.b && el.atom >= 0 &&
+                            el.atomS >= 0 && static_cast<std::size_t>(el.atomS) < atomDen.size();
+      if (!canSplit) {
+        out.push_back(elem_factor(nsym, el, comp));
+        return;
+      }
+      const auto k = mom_components(nsym, el.vlc, comp);
+      const MPoly at = MPolyFactory::atom(nsym, el.atom);   // 1/k²
+      const MPoly atS = MPolyFactory::atom(nsym, el.atomS); // 1/|k⃗|²
+      std::array<MPoly, 4> v{atomDen[static_cast<std::size_t>(el.atomS)], MPolyFactory::zero(nsym),
+                             MPolyFactory::zero(nsym), MPolyFactory::zero(nsym)};
+      for (int i = 1; i < 4; ++i)
+        v[static_cast<std::size_t>(i)] = MPolyFactory::zero(nsym) - k[0] * k[static_cast<std::size_t>(i)];
+      // The two scalar atoms ride on ONE leg, so the product over the pair is v_a v_b · at · atS.
+      Factor A, B;
+      A.ids = {el.a};
+      B.ids = {el.b};
+      A.v.reserve(4);
+      B.v.reserve(4);
+      for (int i = 0; i < 4; ++i) {
+        A.v.push_back(v[static_cast<std::size_t>(i)] * at * atS);
+        B.v.push_back(v[static_cast<std::size_t>(i)]);
+      }
+      out.push_back(std::move(A));
+      out.push_back(std::move(B));
+    }
+
     /// First-seen-ordered union of all Lorentz ids carried by a factor group (duplicates dropped). The
     /// order matters: it fixes the union-index layout the elimination decodes against.
     inline std::vector<int> first_seen_union(const std::vector<Factor> &group)
@@ -1011,7 +1074,7 @@ namespace numtracer::numeric
       std::vector<ndetail::Factor> facs = loops;
       facs.reserve(loops.size() + elems.size());
       for (const NElem &el : elems)
-        facs.push_back(ndetail::elem_factor(nsym, el, comp));
+        ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
       // contract_factors consumes its `facs` argument by value — move so the per-term
       // factor list is built once, not copied again into the call.
       MPoly term = ndetail::contract_factors(nsym, std::move(facs));
@@ -1141,7 +1204,7 @@ namespace numtracer::numeric
         facs = loops;
         facs.reserve(loops.size() + elems.size());
         for (const NElem &el : elems)
-          facs.push_back(ndetail::elem_factor(nsym, el, comp));
+          ndetail::push_elem_factors(facs, nsym, el, comp, aden);
       }
       // move the per-term factor list into contract_factors (consumed by value) — avoids
       // a redundant deep copy of every Factor's MPoly entries.

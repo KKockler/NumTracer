@@ -88,6 +88,22 @@ if(MODE STREQUAL "run")
     set(ENV{NT_GEN_MAXW_B} "${_wb}")
   endif()
 
+  # ---- device target ----------------------------------------------------------------------------
+  # The offline twin of Codegen.m's ntDeviceEnvPrefix. It enables gen.hpp's size-gated `__noinline__`,
+  # which is device-only (the host has no register cliff and its emission stays byte-identical). This
+  # is the whole reason the manifest carries a "device" field: nothing of the emitting Wolfram
+  # kernel's environment survives the trip into a `cmake -P` build step, so a fact not written down
+  # is lost -- and this one was, on every offline-generated flow.
+  set(_dev "host")
+  if(DEVICE)
+    if(DEFINED ENV{NT_GEN_DEVICE})
+      set(_dev "device (NT_GEN_DEVICE from the environment)")
+    else()
+      set(ENV{NT_GEN_DEVICE} "1")
+      set(_dev "device")
+    endif()
+  endif()
+
   # With the flows serialized this banner is the only thing saying which one the build is sitting on
   # and how much of the machine it was given.
   set(_which "")
@@ -97,7 +113,7 @@ if(MODE STREQUAL "run")
   if(NOT DEFINED FLOW OR FLOW STREQUAL "")
     set(FLOW "${NS}")
   endif()
-  message(STATUS "NumTracer: ${_which}tracing ${FLOW} (W=${_w}, WB=${_wb})")
+  message(STATUS "NumTracer: ${_which}tracing ${FLOW} (W=${_w}, WB=${_wb}, ${_dev})")
 
   # ECHO_ERROR_VARIABLE tees the generator's stderr to the console as it arrives — the
   # NT_GEN_PROFILE phase lines — while still capturing it for the failure message below.

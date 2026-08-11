@@ -659,12 +659,18 @@ ntTcmallocPrefix[] :=
    point — that is exactly why the old `decor.find("__device__")` test silently never fired on any
    production flow. `Automatic` falls back to the raw spelling so existing raw-CUDA callers keep
    working; DiFfRG_compat passes True/False from its own Device option. *)
+(* The single definition of "does this emission target device code". Used twice: for the ONLINE
+   Run[] env prefix below, and for the manifest's "device" field, which is how the OFFLINE numtrace
+   build step learns the same fact (it inherits nothing of this kernel's environment — see the
+   identical argument for the thread caps in ntWriteManifest). Keeping one predicate is the point:
+   the two paths must never disagree about whether the gate applies. *)
+ntDeviceTargetQ[deviceTarget_, decor_String] :=
+  If[deviceTarget === Automatic,
+    StringContainsQ[decor, "__device__"],
+    TrueQ[deviceTarget]];
+
 ntDeviceEnvPrefix[deviceTarget_, decor_String] :=
-  With[{isDev =
-      If[deviceTarget === Automatic,
-        StringContainsQ[decor, "__device__"],
-        TrueQ[deviceTarget]]},
-    If[isDev, "NT_GEN_DEVICE=1 ", ""]];
+  If[ntDeviceTargetQ[deviceTarget, decor], "NT_GEN_DEVICE=1 ", ""];
 
 chunkLorInv[lorExpr_, ids_, env_, mask_, nc_] := Which[
     lorExpr === 0,
@@ -1820,7 +1826,10 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
         NetVal in C++, contracts them numerically (4×4 matrix products), folds colour per group, and
         PRINTS the committed straight-line kernel header. No reduce/rebase/ibp/sp-kinematics. *)
 
-emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False] :=
+(* `mIdx` is the MPoly var index (0-based) of the Matsubara frequency, or -1 for "not a finite-T
+   flow / unknown". When it is >= 0 the generator proves Matsubara evenness while it contracts (see
+   the ntMEven thread below) and emits the verdict as a constant in the traces header. *)
+emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_, fillArgSig_, kns_:"numtracer_kernels", complexQ_:False, realOnlyG_ : {}, crossCSE_:False, mIdx_:-1] :=
   Module[{nNet = Length[invNets], nGrp = Length[groups], nsym = ncomp["nsym"], maxBase = ncomp["maxBase"], varFill = ncomp["varFill"], symNames = ncomp["symNamesCpp"], compCpp = ncomp["compCpp"], unitG = ncomp["units"], str, tmpl, pre, unitPre, unitInc, nUnits, units, decl, diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, hasDressed, allDefs, main, compInit, cseDefs, cseDecls, chunkDecls, ntNoDedup, subKeys, netTerms, refCount, distinctSubs, subIdxOf, nSub, nReused, sdnDefs, slnDefs, sdchDefs, sdslDefs, sdnCDecl, slnCDecl, sdchCDecl, sdslCDecl, tableDefs = "",
     chpDefs, chpCDecl, optpDefs, optpCDecl, sdchrDefs, sdchrCDecl, sdslrDefs, sdslrCDecl, dressAtomIds, colMainDecls, colChunkDefs},
     str[x_] := ToString[x];
@@ -2367,6 +2376,28 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
    the deduped table gives the same atomDen as scanning every occurrence did. *)
             "  auto atomDen = env.collect_atom_denoms(sln, comp);\n",
             "  for(auto &a: atomDen) a = reduce_units(a, units);  // bare-loop k^2 -> monomial l1^2 -> cancels\n",
+(* MATSUBARA EVENNESS, proven while contracting. If every trace and every atom denominator carries
+   only EVEN powers of the Matsubara frequency, the kernel satisfies kernel(+w) == kernel(-w) and
+   DiFfRG's QuadratureIntegrator_fT may collapse `kernel(+w) + kernel(-w)` to `2*kernel(w)`: half
+   the Matsubara-sum work at runtime, and one fewer inlined copy of the whole kernel body per
+   launch (which on a large flow is the dominant ptxas cost).
+
+   Proven HERE, not by DiFfRG's MakeKernel "MatsubaraEven" option, which cannot work on this path:
+   MakeKernel is handed the placeholder `body = 0.` (DiFfRG_compat.m) because NumTracer overwrites
+   kernel.hh afterwards, so its `PossibleZeroQ[Simplify[expr - (expr /. w -> -w)]]` is trivially
+   True for EVERY flow. Passing that option through would stamp the trait on kernels that are not
+   even and silently drop the odd half of the sum. The numeric path has no Mathematica expression
+   to test — the body is a set of polynomials this generator computes — so the proof has to live
+   where the polynomials do.
+
+   The test is a SUFFICIENT condition (odd terms that cancel between monomials read as odd), which
+   is the safe direction: a false "odd" costs an optimisation, a false "even" is wrong physics. *)
+            If[mIdx >= 0,
+              "  // Matsubara evenness (see poly_even_in): every trace and every atom denominator must\n" <>
+              "  // carry only even powers of var(" <> str[mIdx] <> "), the Matsubara frequency.\n" <>
+              "  std::atomic<bool> ntMEven{true};\n" <>
+              "  for(const auto &a: atomDen) if(!poly_even_in(a, " <> str[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n",
+              ""],
             "  const bool ntprof = (std::getenv(\"NT_GEN_PROFILE\")!=nullptr);\n",
             "  unsigned hw=std::thread::hardware_concurrency(); if(!hw)hw=4u;\n",
             "  if(const char* mw=std::getenv(\"NT_GEN_MAXW\")){int v=std::atoi(mw); if(v>0&&(unsigned)v<hw)hw=(unsigned)v;}\n",
@@ -2403,11 +2434,24 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                   "  long nCache = " <> str[If[hasDressed, nSub, nReused]] <> ";\n",
                   "  if(const char* mm=std::getenv(\"NT_GEN_MEMO_MAX\")){ long v=std::atol(mm); if(v>=0) nCache=std::min<long>(v,NSUB); }\n",
                   "  auto trace=[&](int k)->" <> PT <> "{\n",
-                  If[hasDressed,
-                    (* structural trace → plain MPoly: a non-slot sub-term contracts via sdn[k]/sln[k],
-                                 a collected one via the dressing-free _mp variant (dressing stripped at codegen). *)
-                    "    return sdch[k].empty()\n" <> "      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)\n" <> "      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);\n",
-                    "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"],
+(* The parity probe sits on the trace lambda rather than on the trace table T, because with
+   nCache == 0 that table is EMPTY — phase B recomputes through this lambda instead. Every distinct
+   trace value passes through here exactly once (a cached one was put in the cache by this same
+   call), so this sees all of them and none twice. Cost is O(terms) against a contraction that is
+   already superlinear in the same terms, i.e. noise.
+
+   DRESSED flows are deliberately excluded: lever (b) strips the dressing into separate monomials
+   (sdr) that the group fold multiplies back in, and those are not covered by this probe. Claiming
+   evenness from the structural trace alone would be unsound if a dressing carried an odd power. *)
+                  If[mIdx >= 0 && !hasDressed,
+                    "    " <> PT <> " ntm = env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n" <>
+                    "    if(!poly_even_in(ntm, " <> str[mIdx] <> ")) ntMEven.store(false, std::memory_order_relaxed);\n" <>
+                    "    return ntm;\n",
+                    If[hasDressed,
+                      (* structural trace → plain MPoly: a non-slot sub-term contracts via sdn[k]/sln[k],
+                                   a collected one via the dressing-free _mp variant (dressing stripped at codegen). *)
+                      "    return sdch[k].empty()\n" <> "      ? env.numeric_value_netval(sdn[k], sln[k], comp, atomDen)\n" <> "      : env.numeric_value_dressed_netval_mp(sdch[k], sdsl[k], sln[k], comp, atomDen);\n",
+                      "    return env.numeric_value_netval(sdn[k], sln[k], comp, atomDen);\n"]],
                   "  };\n",
                   (* PHASE A — contract each distinct trace once, parallel over a FLAT work list (numeric/trace_fold.hpp). *)
                   "  auto tA=std::chrono::steady_clock::now();\n",
@@ -2545,6 +2589,19 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             "  std::cout << \"template<int N> \" << decor << \" double powr(double x){ double r=1.0; for(int i=0;i<N;++i) r*=x; return r; }\\n\";\n",
             "  emit_env_layout(std::cout, g);\n",
             "  std::cout << \"static inline constexpr int nenv = \" << g.syms.size() << \";\\n\";\n",
+(* The proven verdict, as a compile-time constant the kernel class picks up. Always emitted for a
+   finite-T flow (rather than only when true) so the header records what was checked: a `false`
+   here is a positive statement that the traces were tested and are not even, not a gap. *)
+            If[mIdx >= 0,
+              "  std::cout << \"// Matsubara evenness of the traces in var(" <> str[mIdx] <> "), proven from the monomial\\n\";\n" <>
+              "  std::cout << \"// exponents at generation time (see poly_even_in). Consumed by the kernel class as\\n\";\n" <>
+              "  std::cout << \"// DiFfRG's `matsubara_even` trait, which halves the Matsubara-sum evaluations.\\n\";\n" <>
+              "  std::cout << \"static inline constexpr bool matsubara_even = \" << (" <>
+                If[hasDressed, "false", "ntMEven.load(std::memory_order_relaxed)"] <>
+                " ? \"true\" : \"false\") << \";\\n\";\n" <>
+              "  if(ntprof) std::fprintf(stderr,\"[num] matsubara_even = %s\\n\", " <>
+                If[hasDressed, "\"false (dressed flow: not checked)\"", "(ntMEven.load(std::memory_order_relaxed)?\"true\":\"false\")"] <> ");\n",
+              ""],
             "  emit_fill(std::cout, g, \"fill\", \"" <> fillArgSig <> "\", fm, decor);\n",
 (* TRACE-BODY DEDUP: the grouping key is the dressing COEFFICIENT (diagData), finer than the trace
    STRUCTURE — so flows with many Feynman graphs that share a kinematic trace but differ only in
@@ -2689,7 +2746,8 @@ ntEnvPosInt[nm_String] := With[{v = Environment[nm]},
     0]];
 
 ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFile_String,
-    unitFiles_List, decor_String, mainOpt_String, fullParallel_, complexQ_, probeFile_] := Module[
+    unitFiles_List, decor_String, mainOpt_String, fullParallel_, complexQ_, probeFile_,
+    deviceTarget_ : Automatic] := Module[
   {genDir = DirectoryName[genFile], manifest},
   manifest = <|
     (* the flow's identity is its directory (flows/ZA4), not the kernel class name (ZA4_kernel) *)
@@ -2710,6 +2768,12 @@ ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFi
    the build's own -jN. 0 = unset. *)
     "maxw"          -> ntEnvPosInt["NT_GEN_MAXW"],
     "maxw_b"        -> ntEnvPosInt["NT_GEN_MAXW_B"],
+(* Does this flow's kernel target DEVICE code? Same trip, same reason as the thread caps above: it
+   enables gen.hpp's size-gated `__noinline__`, which is device-only, and the generator learns it
+   from NT_GEN_DEVICE. Online that variable comes from ntDeviceEnvPrefix's shell prefix; offline
+   there is no shell prefix and no inherited environment, so without this field the gate is simply
+   dead — which is exactly what it was on every offline-generated flow until this was added. *)
+    "device"        -> ntDeviceTargetQ[deviceTarget, decor],
     "complex"       -> TrueQ[complexQ],
     "kernels"       -> ntRelativePath[flowDir, tracesFile]|>;
   If[TrueQ[complexQ],
@@ -2903,6 +2967,12 @@ Options[mkGenerateKernel] =
    host-only Kokkos build. Automatic infers from the raw CUDA spelling only (i.e. host unless the
    caller says otherwise); MakeNTKernelDiFfRG passes its own Device option through. *)
     "DeviceTarget" -> Automatic,
+(* Name of the Matsubara-frequency symbol (a string or symbol), for a finite-T flow. Setting it asks
+   the generator to PROVE whether the kernel is even in it and, if so, emit DiFfRG's
+   `matsubara_even` trait — which lets QuadratureIntegrator_fT evaluate the kernel once per mode
+   instead of twice. None = not a finite-T flow, no trait, no check. DiFfRG_compat passes the last
+   entry of "IntegrationVariables", which is where DiFfRG's own integrators put it. *)
+    "MatsubaraVar" -> None,
     "RuntimeInclude" -> "numtracer/codegen/runtime.hpp",
     "ExtraIncludes" -> {},
     "KernelNamespace" -> "numtracer_kernels",
@@ -3335,7 +3405,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -3436,6 +3506,28 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           ];(* finite-T / general frame *)
         symDefs = Join[ad, ud];
         numericComponents[env, pf, symDefs, ug]];
+(* MPoly var index of the Matsubara frequency, matched by name against the FRAME's symbols (-1 =
+   option unset, i.e. not a finite-T flow). Everything downstream keys off this one number: >= 0
+   turns on the generator's evenness proof and the trait emission. *)
+    mVarIdx =
+      With[{mv = OptionValue["MatsubaraVar"]},
+        If[mv === None || mv === Automatic,
+          -1,
+          With[{pos = Position[ncomp["usyms"], s_Symbol /; SymbolName[s] === ToString[mv], {1}]},
+            If[pos === {}, -2, pos[[1, 1]] - 1]]]];
+(* A NAME THAT MATCHES NOTHING IS AN ERROR, not a quiet -1. Silently doing nothing is how the
+   __noinline__ gate stayed dead for months: the caller asked for an optimisation, got a valid
+   kernel without it, and had no way to tell. Say so, loudly, and name the symbols that exist. *)
+    If[mVarIdx === -2,
+      Print["[NumTracer] WARNING: \"MatsubaraVar\" -> ", OptionValue["MatsubaraVar"],
+        " does not name any symbol in this flow's frame, so no evenness check was run and no ",
+        "`matsubara_even` trait will be emitted. The frame's symbols are: ", ncomp["usyms"],
+        ". (The integration-variable name DiFfRG uses, e.g. \"f\", is often NOT the frame symbol, ",
+        "e.g. \"f0\" — this option wants the frame symbol.)"];
+      mVarIdx = -1];
+    If[mVarIdx >= 0,
+      ntLog["[matsubara] frequency symbol ", OptionValue["MatsubaraVar"], " = MPoly var ", mVarIdx,
+        " — evenness will be proven at generation time"]];
 (* [[maybe_unused]]: a frame may not reference every fill() argument (e.g. an angle or dressing atom
    that only some diagrams use), so mark each parameter to keep the emitted kernel -Wunused-clean. *)
     fillArgSig = StringRiffle[("[[maybe_unused]] double " <> SymbolName[#])& /@ fillArgs, ", "];
@@ -3988,8 +4080,37 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                 mkKernelFn[integrand],
                 "#endif"}, "\n"]];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
+(* MATSUBARA EVENNESS, second half. The generator proves it for the TRACES; this proves it for
+   everything else the kernel body does with the frequency — dressing arguments, regulator
+   arguments, denominators. Both must hold, and they are proven in different places because the two
+   halves live in different languages: the traces are polynomials the C++ generator builds at build
+   time, the rest is this Mathematica expression.
+
+   The test is syntactic and conservative: strip every EVEN power of the symbol, then require the
+   symbol to be gone. `Sqrt[f0^2 + l1^2]` passes (the inner f0^2 is stripped); a bare `f0`, or a
+   fermionic dressing at a shifted argument like `ZQ[f0 + p0]`, does not. Erring towards "not even"
+   is the safe direction — the trait only ever removes work, so a missed optimisation costs time
+   while a wrong trait costs correctness.
+
+   The two halves are combined in C++ rather than here: this side decides whether to emit the
+   member at all, the generator's constant supplies its value. An absent member reads as false
+   through DiFfRG's `requires K::matsubara_even` trait, which is exactly the fallback we want. *)
+          mEvenBody =
+            mVarIdx >= 0 &&
+              With[{ms = ncomp["usyms"][[mVarIdx + 1]]},
+                FreeQ[integrand /. Power[ms, e_Integer /; EvenQ[e]] :> 1, ms]];
+          If[mVarIdx >= 0 && !mEvenBody,
+            ntLog["[matsubara] kernel body uses ", ncomp["usyms"][[mVarIdx + 1]],
+              " at an odd power (or inside a shifted dressing argument) — no matsubara_even trait"]];
 (* ntRe/ntIm are needed by both real branches, so a complex flow always carries them. *)
-          classStr = ntKernelClass[name, Join[{kernelFn, constFn}, If[hoistFnStr === None, {}, {hoistFnStr}]], decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
+          classStr = ntKernelClass[name,
+            Join[
+              If[TrueQ[mEvenBody],
+                {"static constexpr bool matsubara_even = " <> kns <> "::" <> ns <> "::matsubara_even;"},
+                {}],
+              {kernelFn, constFn},
+              If[hoistFnStr === None, {}, {hoistFnStr}]],
+            decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
             FunKit`MakeCppHeader[
@@ -4001,7 +4122,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        The whole emit->write->compile->run pipeline is a local closure so the deferred
        PruneRealTraces pass (post-probe, below) can re-run it with realOnlyG updated. *)
     genPass[] := (
-    ntLog["[prof] emitNumericGenerator: ", First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain} = emitNumericGenerator[invNets, invRest, colourNets, g, ncomp, ns, fillArgSig, kns, complexQ, realOnlyG, crossCSE];], " s"];
+    ntLog["[prof] emitNumericGenerator: ", First @ AbsoluteTiming[{genPre, genUnits, genDecl, genMain} = emitNumericGenerator[invNets, invRest, colourNets, g, ncomp, ns, fillArgSig, kns, complexQ, realOnlyG, crossCSE, mVarIdx];], " s"];
 (* Split generator: a main TU + N net-builder unit TUs + a decl header (all in the tests/gen/ dir), so the
    net-builder codegen compiles in parallel (see emitNumericGenerator). The main `#include`s the decl. *)
     declFile = StringReplace[genFile, ".cpp" -> "_nets.hh"];
@@ -4263,7 +4384,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
     (* per-flow numtrace manifest + switch. Written LAST, so a flow that aborted part-way leaves no
        manifest claiming to be buildable. Offline it says 0 (the numtrace target still owes the
        kernels); online everything is already done, so it says 1 and the target skips the flow. *)
-    Module[{mf = ntWriteManifest[DirectoryName[kernelFile], name, ns, genFile, headerFile, unitFiles, decor, mainOptForManifest, OptionValue["FullParallel"], complexQ, probeFile]},
+    Module[{mf = ntWriteManifest[DirectoryName[kernelFile], name, ns, genFile, headerFile, unitFiles, decor, mainOptForManifest, OptionValue["FullParallel"], complexQ, probeFile, OptionValue["DeviceTarget"]]},
       If[!offline, ntMarkGenerated[mf]];
       Print["wrote manifest: ", mf, If[offline, " (generated: 0 — run `make numtrace`)", " (generated: 1)"]]];
     kernelFile];
@@ -4275,7 +4396,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 

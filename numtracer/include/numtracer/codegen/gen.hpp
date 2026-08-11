@@ -17,6 +17,7 @@
 #include "numtracer/network/network.hpp" // splitmix64_finalise / hash_combine hash helpers + <cstdint>
 
 #include <climits>
+#include <cstdint> // SIZE_MAX (the NT_GEN_NOINLINE_MIN "off" sentinel)
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -439,47 +440,86 @@ namespace numtracer::network
     /// condition that picks the decorator). The `__device__` test is kept only as a back-compat
     /// fallback for callers still passing the raw CUDA spelling.
     ///
+    /// That fix closed the ONLINE path only, and every production flow is generated OFFLINE — the
+    /// generator runs from a `cmake -P` step (NumTracerNumtraceRun.cmake) that inherits nothing of
+    /// the emitting Wolfram kernel's environment, so the shell prefix never reached it and the gate
+    /// stayed dead regardless. Closed 2026-08-11 by carrying a `"device"` field in numtrace.json —
+    /// the same trip the NT_GEN_MAXW thread caps already make, for the same reason. A manifest
+    /// without the field reads as false, so flows keep their all-inline emission until re-emitted.
+    ///
     /// Overrides:
     ///   NT_GEN_NOINLINE_TRACES : force out-of-line for EVERY function (host+device) — the compile-cost
     ///                            lever for the 100k+-line kernels, and the A/B control.
     ///   NT_GEN_NOINLINE_MIN=N  : per-function threshold, default 500. Out-of-lines when `nInstr > N`,
     ///                            so N=0 out-of-lines every device function that has any instruction at
     ///                            all (a 0-instruction function stays inline — degenerate, and it has
-    ///                            nothing to spill). Read ONCE per process and cached: emission must be
+    ///                            nothing to spill). `off` (or any negative value) disables the gate
+    ///                            entirely — the escape hatch back to all-inline emission, which is
+    ///                            NOT 0. Read ONCE per process and cached: emission must be
     ///                            consistent across every function in a run, so changing the variable
     ///                            mid-process deliberately has no effect.
+    ///
+    /// WHY THE THRESHOLD IS STILL 500, and what would move it. The 500 came from a 12-flow sm_89
+    /// sweep whose companion figures ("ZA4 0.73x") were later re-measured at −4.8% — wrong by ~5x —
+    /// so the sweep is not a sound basis for the number. What is solid is a static SASS sweep on nf2
+    /// ZA4: on sm_90, ungated leaves 11,636 B of spill at 18% occupancy, min=300 leaves none, min=200
+    /// reaches 25% and min=100 reaches 32%, at +2.6%/+5%/+7.6% ops respectively. That argues for
+    /// 200-300 on the datacenter parts. It is NOT changed here because the one flow claimed to LOSE
+    /// from out-of-lining (ZAqbq1_147, 108 functions of ~125 instructions) sits far below 500 and is
+    /// therefore untouched at this threshold — lowering it is what would put that claim in play, and
+    /// that claim has never been reproduced. Re-measure it before moving the default.
     /// Is this generation targeting device code? Authoritative signal is `NT_GEN_DEVICE` (set by
     /// Codegen.m from the same condition that chooses the decorator); the raw-CUDA spelling is
     /// honoured as a fallback. Read once per process: emission must be consistent across every
     /// function in a run.
+    /// An environment variable read as a boolean the same way everywhere in this header: set, and
+    /// neither empty nor "0". The `!= nullptr` spelling this replaces is a footgun — `FOO=` and
+    /// `FOO=0` both read as TRUE under it, so unsetting a flag by emptying it silently leaves it on.
+    inline bool env_flag(const char *name)
+    {
+      const char *e = std::getenv(name);
+      return e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0;
+    }
+
     inline bool device_target(const std::string &decor)
     {
-      static const bool envDevice = [] {
-        const char *e = std::getenv("NT_GEN_DEVICE");
-        return e != nullptr && *e != '\0' && std::string(e) != "0";
-      }();
+      static const bool envDevice = env_flag("NT_GEN_DEVICE");
       return envDevice || decor.find("__device__") != std::string::npos;
     }
 
     inline std::string eff_decor(const std::string &decor, std::size_t nInstr = 0)
     {
       std::string effDecor = decor;
-      bool noinline = std::getenv("NT_GEN_NOINLINE_TRACES") != nullptr;
+      bool noinline = env_flag("NT_GEN_NOINLINE_TRACES");
       if (!noinline && device_target(decor)) {
         static const std::size_t noinlineMinInstr = [] {
-          if (const char *e = std::getenv("NT_GEN_NOINLINE_MIN")) {
+          const char *e = std::getenv("NT_GEN_NOINLINE_MIN");
+          if (e != nullptr && *e != '\0') { // empty means unset, NOT the very aggressive 0 below
+            // "off" / any negative value disables the gate outright (all-inline emission, the
+            // pre-2026-08-11 behaviour). It needs its own spelling because the natural guess, 0,
+            // means the OPPOSITE here: the test is `nInstr > N`, so 0 out-of-lines everything.
+            if (std::strcmp(e, "off") == 0) return SIZE_MAX;
             const long v = std::atol(e);
-            if (v >= 0) return static_cast<std::size_t>(v);
+            if (v < 0) return SIZE_MAX;
+            return static_cast<std::size_t>(v);
           }
           return static_cast<std::size_t>(500);
         }();
         noinline = nInstr > noinlineMinInstr;
       }
       if (noinline) {
-        // A Kokkos INLINE/FORCEINLINE macro expands to `__device__ __host__ __forceinline__`, so
-        // appending `__attribute__((noinline))` to it emits a self-contradiction the compiler is
-        // free to resolve either way. Swap in KOKKOS_FUNCTION — same host/device qualification,
-        // no inline hint — and only then attach the attribute.
+        // KOKKOS_FORCEINLINE_FUNCTION expands to `__device__ __host__ __forceinline__`, so appending
+        // `__attribute__((noinline))` to it emits a self-contradiction the compiler is free to
+        // resolve either way. KOKKOS_INLINE_FUNCTION is only a plain `inline` (Kokkos_Macros.hpp:
+        // KOKKOS_IMPL_INLINE_FUNCTION = inline) and would not strictly contradict it — but `inline`
+        // still biases the inliner, and mixing the two spellings reads as an accident. Swap either
+        // for KOKKOS_FUNCTION — same host/device qualification, no inline hint — and only then
+        // attach the attribute.
+        //
+        // Worth knowing what this is actually overriding: nvcc is NOT force-inlining everything
+        // today. On SP_EM ZA4 (55 traces, 435k SSA) it out-of-lines 26 of them on its own; the gate
+        // takes that to 51. So the choice is between nvcc's heuristic and the size rule, not between
+        // "one giant function" and "many small ones".
         for (const char *kokkosInline : {"KOKKOS_FORCEINLINE_FUNCTION", "KOKKOS_INLINE_FUNCTION"}) {
           const std::size_t at = effDecor.find(kokkosInline);
           if (at != std::string::npos) {
