@@ -103,6 +103,14 @@ sp4Frame::usage = "sp4Frame[p, l1, cos1, cos2, phi, q1, q2, q3, q4, ql] — four
 
 propFrameFT::usage = "propFrameFT[p0, p, l0, l1, cos1, pSym, lSym] — finite-temperature frame: component 0 is the Matsubara/temporal direction (heat bath u=(1,0,0,0)). External pSym = {p0, p, 0, 0} (p0 e.g. the lowest fermionic Matsubara frequency pi T), loop lSym = {l0, l1 cos1, l1 sqrt(1-cos1^2), 0} with an independent temporal l0.";
 
+sp3FrameFT::usage = "sp3FrameFT[{p10,p20,p30}, p, l0, l1, cos1, phi, q1, q2, q3, ql] — finite-temperature 3-point frame: three externals at the SPATIAL symmetric point (equal spatial length p, 120 deg apart in the spatial 1-2 plane, summing to zero), each carrying its own temporal component from p0s; loop ql = {l0, l1 sin1 cos(phi), l1 sin1 sin(phi), l1 cos1} with an independent Matsubara l0. Slot 0 is temporal, 1..3 spatial. The spatial configuration and the loop parametrisation match DiFfRG's DeclareSymmetricPoints3DP3 exactly, so cos(l,p_i) agrees term by term. The finite-T analogue of sp3Frame.";
+
+sp4FrameFT::usage = "sp4FrameFT[{p10,p20,p30,p40}, p, l0, l1, cos1, phi, q1, q2, q3, q4, ql] — finite-temperature 4-point frame: four externals at the SPATIAL symmetric point (regular tetrahedron in the spatial slots, mutual cosines -1/3), each with its own temporal component; loop as in sp3FrameFT. Matches DiFfRG's DeclareSymmetricPoints3DP4. Note this needs only TWO loop angles where the vacuum sp4Frame needs three: four SPATIAL vectors summing to zero fit in three dimensions.";
+
+frameShiftedLoop::usage = "frameShiftedLoop[frame, lSym, lfSym, shift] — add the FERMIONIC loop-momentum partner lfSym to a finite-T frame: same three-momentum as lSym, temporal component shifted by `shift` (typically pi T). FunKit routes the bare loop momentum onto the regulated line and names it after that line's statistics, so a quark self-energy carries BOTH l1 (gluon-regulator diagram) and lf1 (quark-regulator diagram) at once; with the integrator summing the bosonic tower f0 = 2 pi n T, lf0 = f0 + pi T is the odd tower and the shifted bosonic quadrature reproduces the fermionic sum exactly. Do NOT rewrite lf1 -> l1 at finite T (the vacuum derivations do, correctly, because there the two coincide).";
+
+frameSpatialCosines::usage = "frameSpatialCosines[frame, ql, {q1,...,qn}, p, l1] — the loop-external SPATIAL cosines cos(l,p_i) read off `frame`, returned as the rule list {cosl1p1 -> ..., ...} that the dressing parametrisation and MakeNTKernel's \"AngleDefs\" both consume. Derive them rather than restating them: the tensor part resolves momenta through the frame while the dressings go through AngleDefs, and nothing downstream compares the two.";
+
 Begin["`Private`"];
 
 $NumTracerDirectory = DirectoryName[$InputFileName];

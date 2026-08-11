@@ -3335,7 +3335,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -3899,7 +3899,23 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    can append them after the dressings without disturbing any existing argument position. The
    loop-independent constant() is called with the same argument tail (tuple_cat(pos, m_args)), so
    it must accept them too — unused there. *)
-      kernelParams = Join[mkParam[#, "double"]& /@ args, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress, mkParam[#, "double"]& /@ hoistSyms];
+(* A scalar that is BOTH a runtime parameter and a frame coordinate is declared once, by
+   scalarParams. The finite-T case is the natural one: the temperature is a "double" kernel
+   parameter (so DiFfRG_compat puts it in scalarParams — everything typed double that is not the
+   special-cased k/p) AND it may appear in the frame, e.g. an external leg pinned to a Matsubara
+   frequency vec[p,0] = pi T, which forces the caller to list it in "Args" so fill() receives it.
+   Joining the two lists blindly then emits `const double& T, const double& T` and the kernel does
+   not compile.
+
+   Drop the duplicate from the ARGS side, not the scalarParams side: scalarParams is what
+   constParams and the hoist function are built from as well, so removing it there would make
+   constant() lose a parameter DiFfRG still passes it. args keeps its full form for fillArgs — the
+   frame genuinely needs the symbol — so only the signature is de-duplicated. Order is unaffected:
+   the DiFfRG call order is coordinates, k, then the remaining scalars in "Parameters" order, which
+   is exactly where the scalarParams block sits. *)
+    With[{scalarParamNames = ToString /@ scalarParams},
+      sigArgs = DeleteCases[args, a_ /; MemberQ[scalarParamNames, ToString[a]]]];
+      kernelParams = Join[mkParam[#, "double"]& /@ sigArgs, mkParam[#, scalarTy[#]]& /@ scalarParams, mkParam[#, dressTy[#]]& /@ dress, mkParam[#, "double"]& /@ hoistSyms];
 (* The loop-independent `constant` is called by DiFfRG as constant(pos..., k, scalars..., dressings...),
    where pos is the FULL coordinate tuple of the flow's grid (quadrature_integrator.hh builds
    full_args = tuple_cat(coordinates.forward(idx), m_args)). Matching only `p` and `k` by name works

@@ -103,3 +103,87 @@ sp4Frame[p_, l1_, cos1_, cos2_, phi_, q1_, q2_, q3_, q4_, ql_] :=
 
 propFrameFT[p0_, p_, l0_, l1_, cos1_, pSym_, lSym_] :=
   <|pSym -> {p0, p, 0, 0}, lSym -> {l0, l1 cos1, l1 Sqrt[1 - cos1^2], 0}|>;
+
+(* ---- finite-temperature SPATIAL symmetric-point frames ---------------------------------------
+
+   The finite-T analogues of sp3Frame / sp4Frame. Once O(4) breaks to O(3) the "symmetric point"
+   is a statement about the SPATIAL momenta only: the n external three-momenta have equal length p,
+   sum to zero, and sit at mutual angles arccos(-1/(n-1)). Each leg additionally carries its own
+   independent temporal (Matsubara) component, passed as the list `p0s` -- typically all zero for
+   gluon legs, but the list form also covers legs pinned to a nonzero external frequency.
+
+   The spatial configurations reproduce DiFfRG's DeclareSymmetricPoints3DP3 / ...3DP4 EXACTLY,
+   including the loop parametrisation: with vec3[T,F] = {Sin[T] Cos[F], Sin[T] Sin[F], Cos[T]} the
+   loop direction is vec3[ArcCos[cos1], phi], so cos1 is the polar angle against the 3-axis and phi
+   the azimuth. Consequently the loop-external cosines cos(l,p_i) = loopDir . V_i agree with
+   DeclareSymmetricPoints3D* term by term, and a kernel generated here can be checked against a
+   FormTracer kernel that used those declarations.
+
+   Note the loop's spatial part is a UNIT 3-vector times l1 -- Sum_{i=1..3} U_i^2 = 1 -- which is
+   precisely the property unitLoopSpatialQ / unitLoopMixedFrameSpec in Codegen.m need to collapse
+   the bare-loop denominator to the two-term l0^2 + l1^2. Do not reparametrise the loop in a way
+   that breaks that identity (e.g. by inlining a non-polar direction), or the emitted traces blow
+   up. Slot 0 is temporal throughout, slots 1..3 spatial. *)
+
+(* Three externals at the spatial symmetric point (120 degrees in the spatial 1-2 plane) + loop
+   with polar angle cos1 (against the spatial 3-axis) and azimuth phi. (ZAcbc / ZA3) *)
+
+sp3FrameFT[p0s_List, p_, l0_, l1_, cos1_, phi_, q1_, q2_, q3_, ql_] :=
+  <|q1 -> {p0s[[1]], p, 0, 0},
+    q2 -> {p0s[[2]], -p/2, p Sqrt[3]/2, 0},
+    q3 -> {p0s[[3]], -p/2, -p Sqrt[3]/2, 0},
+    ql -> {l0, l1 Sqrt[1 - cos1^2] Cos[phi], l1 Sqrt[1 - cos1^2] Sin[phi], l1 cos1}|>;
+
+(* Four externals at the spatial symmetric point (regular tetrahedron in the spatial slots, mutual
+   cosines -1/3) + the same loop parametrisation. (ZA4)
+
+   Unlike the vacuum sp4Frame -- where four momenta summing to zero need all four Euclidean slots
+   and hence a THIRD loop angle -- four SPATIAL vectors summing to zero fit in three dimensions, so
+   the finite-T ZA4 kernel needs only (cos1, phi) plus the Matsubara variable. That is why the
+   finite-T ZA4 uses Integrator_fT_p2_4D_2ang, not a 3-angle integrator. *)
+
+sp4FrameFT[p0s_List, p_, l0_, l1_, cos1_, phi_, q1_, q2_, q3_, q4_, ql_] :=
+  Module[{s = 2 Sqrt[2]/3},(* Sin[ArcCos[-1/3]] *)
+    <|q1 -> {p0s[[1]], 0, 0, p},
+      q2 -> {p0s[[2]], p s, 0, -p/3},
+      q3 -> {p0s[[3]], -p s/2, p s Sqrt[3]/2, -p/3},
+      q4 -> {p0s[[4]], -p s/2, -p s Sqrt[3]/2, -p/3},
+      ql -> {l0, l1 Sqrt[1 - cos1^2] Cos[phi], l1 Sqrt[1 - cos1^2] Sin[phi], l1 cos1}|>];
+
+(* ---- the fermionic loop-momentum partner (finite T) ------------------------------------------
+
+   At T > 0 a diagram can carry TWO loop-momentum tags at once. FunKit routes the BARE loop
+   momentum onto whichever line carries the regulator insertion, and names it after that line's
+   statistics: `l1` when d_t R sits on a Bose line, `lf1` when it sits on a Fermi line (see
+   FunKit modules/AnSEL.m). A quark self-energy therefore produces both — the gluon-regulator
+   diagram routed through l1 and the quark-regulator diagram through lf1 — inside one expression.
+
+   The two are the SAME three-momentum; they differ only in which Matsubara tower the temporal
+   component runs over. With the integrator summing the BOSONIC tower f0 = 2 pi n T, the fermionic
+   partner is that same variable shifted by pi T, so that l0 stays even and lf0 = f0 + pi T is odd.
+   Shifting the bosonic quadrature by pi T reproduces the fermionic sum exactly:
+   T sum_n g(2 pi n T) with g(x) = h(x + pi T) IS T sum_n h((2n+1) pi T).
+
+   Adding the partner as a separate frame key (rather than rewriting lf1 -> l1, which is what the
+   vacuum derivations do and what would be WRONG here) keeps the two towers distinct while the
+   spatial parts stay literally identical, so composite momenta like lf1 - p1 resolve correctly by
+   the frame's ordinary list arithmetic.
+
+   `shift` is added to component 0 only; passing -pi T gives the other sign convention. *)
+
+frameShiftedLoop[frame_, lSym_, lfSym_, shift_] :=
+  Join[frame, <|lfSym -> MapAt[# + shift &, frame[lSym], 1]|>];
+
+(* Loop-external SPATIAL cosines cos(l, p_i) read straight off a frame, as the rule list the
+   dressing parametrisation (SPParam) and MakeNTKernel's "AngleDefs" both consume.
+
+   Deriving them from the frame rather than writing them out a second time is the point: the tensor
+   part resolves its momenta through the frame while the scalar dressings go through AngleDefs, and
+   if the two disagree the kernel is silently wrong at every momentum -- nothing downstream compares
+   them. *)
+
+frameSpatialCosines[frame_, ql_, qs_List, p_, l1_] :=
+  MapIndexed[
+    Symbol["cosl1p" <> ToString[First[#2]]] ->
+      Simplify[Rest[frame[ql]] . Rest[frame[#1]] / (l1 p)]&,
+    qs];
