@@ -74,6 +74,9 @@ ntSUNDiagFund::usage = "ntSUNDiagFund[N, i, j, spec, scale] — a fundamental Kr
 
 ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, spec, scale] — an adjoint Kronecker delta^{ab} (rank N) carrying a PER-COMPONENT adjoint dressing. `spec` is a rules list {c1 -> name1, ..., Default -> defName} with 1-based component indices (1..N^2-1, e.g. 3 and 8 for the SU(3) Cartan/Gell-Mann directions) and distinctly-named scalar dressing symbols evaluated at `scale`; unnamed components collapse to Default when present, else drop. Folds to Σ_a c_a name_a(scale) — e.g. a gluon condensed along the Cartan directions (ntSUNDiagAdj[3, a, b, {3 -> A03, 8 -> A08}, scale]), the other 6 colours dropping out with no dead terms.";
 
+ntUnitDressing::usage = "ntUnitDressing[scale] — the trivial dressing, identically 1. Used as the per-component entry of an ntSUNDiagFund/ntSUNDiagAdj that is meant as a pure PROJECTOR rather than a carrier of physics: keeping one component with ntUnitDressing and dropping the rest PINS that group index to a fixed value. This is how a fixed (numeric) adjoint index such as the Cartan generators T^3 / T^8 is represented, since SUNFac has no pinned-index kind of its own.";
+ntUnitDressing[_] := 1;
+
 ntSP::usage = "ntSP[q1, q2] — Lorentz scalar product q1.q2 (a scalar coefficient).";
 
 ntSPS::usage = "ntSPS[q1, q2] — spatial (finite-T) scalar product q1_vec.q2_vec = ntSP[q1,q2] - q1_0 q2_0 (a scalar coefficient).";

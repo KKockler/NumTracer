@@ -26,6 +26,14 @@
 $ffMap = <|
   "FEx" -> Plus, "FTerm" -> Times, "NonCommutativeMultiply" -> Times,
   "transProj" -> ntTransProj, "longProj" -> ntLongProj, "vec" -> ntVec,
+  (* finite-T transverse split. TensorBases and NumTracer agree on both the argument order
+     (momentum, mu, nu) and the conventions: P_E = P_T - P_M = delta_{mu 0} delta_{nu 0}
+     + qs_mu qs_nu/|q_vec|^2 - q_mu q_nu/q^2, P_M = delta_{ij} - q_i q_j/|q_vec|^2 with vanishing
+     temporal rows. The engine side (labelsOf/momentumOf/needsInvQ/needsInvSQ in DSL.m,
+     builderInv -> eproj/mproj in Codegen.m) has been complete and gated by compare_ftproj_num all
+     along; only this table was missing, so every FunKit flow with an E/M-split gluon propagator
+     hit the untranslated-head trap the ROOT-CLASS GUARD below describes. *)
+  "transProjElectric" -> ntElectricProj, "transProjMagnetic" -> ntMagneticProj,
   "deltaLorentz" -> ntMetric,
   (* Dirac (spinor) sector. FunKit emits a slashed momentum as gamma[mu,..] * vec[q,mu]
      (the gamma carries the Lorentz axis), so ntGamma -> Dirac::gamma_axis. *)
@@ -54,11 +62,47 @@ $ffMap = <|
    nc; the hand-rolled QM-model isospin tokens (the τ Yukawa generator, the pion f^{abc}
    self-coupling, the adjoint/fundamental isospin deltas) build against nf. Both go through the
    SAME four heads — the engine separates the groups by their disjoint contraction ids. *)
+(* A generator carrying a FIXED (numeric) adjoint index — the Cartan directions T^3 / T^8 of a
+   Polyakov / A_0 background, written TCol[3, i, j] exactly as in the FormTracer models. SetNc[3]
+   switches colour to FormTracer`SU3fundexplicit, so TensorBases contracts those correctly on the
+   Wolfram side; but SUNFac has NO pinned adjoint index. Passing the literal straight through as
+   ntSUNT[nc, 3, i, j] makes the 3 an ordinary contraction LABEL, and a repeated label is SUMMED:
+   tr(T^3 T^3) would come out as Σ_a tr(T^a T^a) = 4 instead of 1/2 — silently, with no error.
+   Pin it instead with a diagAdj that keeps only that one adjoint component.
+
+   THE INDEX IS NOT THE SAME NUMBER IN BOTH ENGINES. TensorBases/FormTracer use the standard
+   Gell-Mann ordering, where the two SU(3) Cartan generators are a = 3 and a = 8. NumTracer builds
+   GENERALIZED Gell-Mann generators with the diagonal (Cartan) ones LAST — verified by printing the
+   generator diagonals: 0-based gen[6] = diag(1/2,-1/2,0) is Gell-Mann T^3 and gen[7] =
+   diag(1,1,-2)/(2 Sqrt[3]) is Gell-Mann T^8, while gen[0..5] are off-diagonal. So Gell-Mann a must
+   be REMAPPED, or the pin silently selects an off-diagonal generator (a bug invisible to any test
+   that sums symmetrically over components — tr(T^a T^a) = 1/2 for EVERY a).
+
+   For SU(N) the diagonal generators are the last N-1, and the Gell-Mann-convention diagonal indices
+   are a = n^2-1 for n = 2..N. Hence 1-based NumTracer component = N^2-N+n-1. SU(3): 3 -> 7, 8 -> 8.
+   SU(2): 3 -> 3 (coincides). Any other fixed index is an off-diagonal generator whose position in
+   the generalized ordering is convention-dependent, so refuse it rather than guess.
+   Verified component-sensitively via tr(T^a D) against a diagonal D. *)
+ntCartanComponent[n_, a_] := Module[{m = Position[Table[k^2 - 1, {k, 2, n}], a]},
+  If[m === {},
+    Print["[NumTracer] ERROR: FromFunKit got a generator with FIXED adjoint index ", a,
+      " for SU(", n, "). Only the Cartan (diagonal) directions a = ", Table[k^2 - 1, {k, 2, n}],
+      " can be pinned: the off-diagonal generators' positions in NumTracer's generalized",
+      " Gell-Mann ordering are convention-dependent and would silently select the wrong one."];
+    Abort[]];
+  n^2 - n + (m[[1, 1]] + 1) - 1];
+
+ntSUNTPinnable[n_][a_, i_, j_] :=
+  If[IntegerQ[a],
+    With[{lbl = Unique["ntCartan$"], comp = ntCartanComponent[n, a]},
+      ntSUNT[n, lbl, i, j] ntSUNDiagAdj[n, lbl, lbl, {comp -> ntUnitDressing}, 0]],
+    ntSUNT[n, a, i, j]];
+
 sunMap[nc_, nf_] := <|
   "FCol" -> (ntSUNf[nc, ##] &), "deltaAdjCol" -> (ntSUNDeltaAdj[nc, ##] &),
-  "TCol" -> (ntSUNT[nc, ##] &), "deltaFundCol" -> (ntSUNDeltaFund[nc, ##] &),
+  "TCol" -> (ntSUNTPinnable[nc][##] &), "deltaFundCol" -> (ntSUNDeltaFund[nc, ##] &),
   "fFlav" -> (ntSUNf[nf, ##] &), "deltaAdjFlav" -> (ntSUNDeltaAdj[nf, ##] &),
-  "tauFlav" -> (ntSUNT[nf, ##] &), "deltaFlavFundGen" -> (ntSUNDeltaFund[nf, ##] &),
+  "tauFlav" -> (ntSUNTPinnable[nf][##] &), "deltaFlavFundGen" -> (ntSUNDeltaFund[nf, ##] &),
   (* FUNDAMENTAL Levi-Civita: N indices (colour SU(3) -> 3, isospin SU(2) -> 2). Contracted into
      Kronecker deltas by expandFundEps in DSL.m — no engine token. *)
   "epsFundCol" -> (ntEpsFund[nc, ##] &), "epsFundFlav" -> (ntEpsFund[nf, ##] &),
@@ -90,6 +134,7 @@ sunMap[nc_, nf_] := <|
    in FromFunKit checks against: every one of these must be mapped, or refused on purpose. *)
 $funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "sp", "sps",
   "deltaDirac", "gamma", "gamma5", "sigma", "transProj", "longProj",
+  "transProjElectric", "transProjMagnetic",
   "deltaAdjCol", "deltaFundCol", "FCol", "TCol", "epsAdjCol", "epsFundCol",
   "deltaAdjFlav", "deltaFundFlav", "fFlav", "tauFlav", "TFlav",
   "epsAdjFlav", "epsFundFlav", "deltaFlavFundGen", "epsLorentz"};

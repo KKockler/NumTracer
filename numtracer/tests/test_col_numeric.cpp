@@ -179,6 +179,65 @@ int main() {
       const bool single = (p.size() == 1 && p[0].dress.empty());
       rep("undressed via sun_value_dressed (=24)", single ? p[0].coeff : Cx{-1, 0}, sun_value_cx(n));
     }
+
+    // ---- diagFund ON A GENERATOR LINE (the colour-background / quark-propagator case) ----------
+    // A colour-diagonal quark propagator always sits BETWEEN two T^a vertices, so its δ lands on a
+    // generator cycle. loop_poly_dressed expands the trace over that index's components instead of
+    // matrix-multiplying through it. Both closed forms below follow from the Fierz identity
+    //     Σ_a (T^a)_{AB}(T^a)_{BA} = ½(1 − δ_AB/N)      (no sum on A,B).
+    {
+      // (f) self-energy topology  tr(T^a D T^a) = C_F · Σ_B D_B.  SU(3): C_F = 4/3.
+      SUNNet se = {sun3.deltaAdj(0, 1), sun3.T(0, 10, 11), sun3.diagFund(11, 12, arr(3)), sun3.T(1, 12, 10)};
+      SUNPoly p = sun_value_dressed(se);
+      // all D=1 must collapse back to the undressed tr(T^a T^a) = C_F N = 4 — the invariant that
+      // makes a zero background reproduce the colour-blind flow exactly.
+      rep("SU(3) tr(T^a D T^a), all D=1 (=4)", evalPoly(p, ones), Cx{4, 0});
+      // D=(1,2,3): C_F · 6 = 8
+      rep("SU(3) tr(T^a D T^a)  (D=1,2,3, =8)", evalPoly(p, [](int i) { return i + 1.0; }), Cx{8, 0});
+
+      // (g) TWO dressed propagators on one fermion loop:
+      //     tr(T^a D T^a D) = ½[ (Σ D)² − (1/N)·Σ D² ].
+      // The second term is a genuine same-colour correlation — it is exactly what an independent
+      // per-propagator average would drop, and why the gluon-polarisation quark loop needs the
+      // resolved trace rather than a colour average.
+      SUNNet lp = {sun3.deltaAdj(0, 1), sun3.T(0, 10, 11), sun3.diagFund(11, 12, arr(3)),
+                   sun3.T(1, 12, 13), sun3.diagFund(13, 10, arr(3))};
+      SUNPoly q = sun_value_dressed(lp);
+      rep("SU(3) tr(T^a D T^a D), all D=1 (=4)", evalPoly(q, ones), Cx{4, 0});
+      // D=(1,2,3): ½[36 − 14/3] = 47/3
+      rep("SU(3) tr(T^a D T^a D) (D=1,2,3, =47/3)", evalPoly(q, [](int i) { return i + 1.0; }),
+          Cx{47.0 / 3.0, 0});
+
+      // (g2) COMPONENT-SENSITIVE check. Everything above sums symmetrically over components, so it
+      // passes even if the per-component values are PERMUTED — tr(T^a T^a) = 1/2 for every a. This
+      // one reads the generator diagonal directly: tr(T^a D) with D = diag(1,2,3).
+      // NumTracer builds GENERALIZED Gell-Mann generators with the diagonal (Cartan) ones LAST, so
+      // 0-based gen[6] is the standard Gell-Mann T^3 = diag(1/2,-1/2,0)  -> tr(T^3 D) = -1/2
+      // and    gen[7] is             Gell-Mann T^8 = diag(1,1,-2)/(2√3) -> tr(T^8 D) = -√3/2.
+      // gen[0..5] are off-diagonal and give 0 against any diagonal D. FunKitAdapter's
+      // ntCartanComponent relies on exactly this ordering, so pin it down here.
+      {
+        auto keepId = [](int c, int id) { std::vector<int> v(8, -1); v[c] = id; return v; };
+        auto D = [](int id) { return id == 9 ? 1.0 : id + 1.0; }; // id 9 = the unit (pin) dressing
+        auto trAD = [&](int comp) {
+          return evalPoly(sun_value_dressed({sun3.T(0, 10, 11), sun3.diagFund(11, 10, arr(3)),
+                                             sun3.diagAdj(0, 0, keepId(comp, 9))}), D);
+        };
+        for (int c = 0; c < 6; ++c) rep("off-diagonal gen vs diagonal D (=0)", trAD(c), Cx{0, 0});
+        rep("gen[6] is Gell-Mann T^3: tr(T^3 D)", trAD(6), Cx{-0.5, 0});
+        rep("gen[7] is Gell-Mann T^8: tr(T^8 D)", trAD(7), Cx{-0.8660254037844386, 0});
+      }
+
+      // (h) a diagFund that KEEPS ONE component is a colour projector P_c on the quark line.
+      //     tr(T^a P_c T^a) = Σ_A ½(1 − δ_Ac/N) = ½(N − 1/N) = C_F, for every choice of c.
+      for (int c = 0; c < 3; ++c) {
+        std::vector<int> keep(3, -1);
+        keep[c] = 0; // component c carries dressing id 0, the others are dropped
+        SUNPoly pc = sun_value_dressed({sun3.deltaAdj(0, 1), sun3.T(0, 10, 11),
+                                        sun3.diagFund(11, 12, keep), sun3.T(1, 12, 10)});
+        rep("SU(3) tr(T^a P_c T^a) = C_F (=4/3)", evalPoly(pc, ones), Cx{4.0 / 3.0, 0});
+      }
+    }
   }
 
   std::printf("\n%s (%d failure%s)\n", fail ? "TESTS FAILED" : "ALL TESTS PASSED", fail, fail == 1 ? "" : "s");

@@ -344,6 +344,36 @@ inline std::vector<std::vector<int>> extract_cycles(const std::vector<std::array
   return cycles;
 }
 
+/// @brief The FUNDAMENTAL index classes of each generator cycle, aligned entry-for-entry with
+///        @ref extract_cycles: entry `k` is the class of the index sitting immediately AFTER
+///        generator `k` (its column class), so the last entry is the one closing the trace.
+///
+/// @ref extract_cycles keeps only the adjoint classes, which is all the undressed trace needs — a
+/// dense matrix product sums the fundamental indices implicitly. A `diagFund` weights one of those
+/// indices per component, so the dressed contraction has to know which class sits where. Same walk,
+/// same order, so the two results index the same cycles.
+inline std::vector<std::vector<int>> extract_cycles_fund(const std::vector<std::array<int, 3>> &gens) {
+  std::map<int, std::size_t> rowToGen; // rowClass(i) -> generator index
+  for (std::size_t gi = 0; gi < gens.size(); ++gi) rowToGen[gens[gi][1]] = gi;
+  std::vector<char> seen(gens.size(), 0);
+  std::vector<std::vector<int>> cycles;
+  for (std::size_t start = 0; start < gens.size(); ++start) {
+    if (seen[start]) continue;
+    std::vector<int> cycle;
+    std::size_t curGen = start;
+    do {
+      seen[curGen] = 1;
+      cycle.push_back(gens[curGen][2]); // column class: the index AFTER this generator
+      auto it = rowToGen.find(gens[curGen][2]);
+      if (it == rowToGen.end())
+        NT_THROW(std::runtime_error, "sun_net: open fundamental chain (only closed traces supported)");
+      curGen = it->second;
+    } while (curGen != start);
+    cycles.push_back(std::move(cycle));
+  }
+  return cycles;
+}
+
 /// @brief The product of generator traces `∏_cycles tr(T^{a_1}…T^{a_m})` for a fully-pinned adjoint
 ///        assignment @p classVal (class → component `0..Adim-1`). Shared by both contractions.
 inline Cx loop_prod(const SUNDyn &dat, const std::vector<std::vector<int>> &cycles,
@@ -507,6 +537,99 @@ inline SUNPoly poly_mul(const SUNPoly &a, const SUNPoly &b) {
   return r;
 }
 
+/// @brief Generator-trace product for a pinned adjoint assignment, with per-component FUNDAMENTAL
+///        dressings inserted on the cycles. The dressed analogue of @ref loop_prod.
+///
+/// A `diagFund` sitting on a generator cycle weights one summed fundamental index per component, so
+/// the trace is no longer a plain matrix product: its value depends on which component that index
+/// takes. Pinning a position to a value `v` turns the diagonal factor into `D_v · e_v e_vᵀ`, which
+/// splits the cyclic product into runs between consecutive pinned positions:
+///
+///     tr(M_0 … M_{m-1} with pins at p_1…p_r)
+///        = Σ_{v_1…v_r} ∏_j (M_{p_j+1} … M_{p_{j+1}})_{v_j v_{j+1}} · ∏_j D^{(c_{p_j})}_{v_j}
+///
+/// so a cycle carrying `r` distinct dressed classes costs `N^r` terms — N=3 and r≤2 in the quark
+/// flows this exists for. Positions whose classes were united by the union-find share one value, so
+/// the enumeration runs over DISTINCT classes, not positions. Cycles with no dressed class take the
+/// dense path and reproduce @ref loop_prod exactly.
+inline SUNPoly loop_poly_dressed(const SUNDyn &dat, int N, const std::vector<std::vector<int>> &cycles,
+                                 const std::vector<std::vector<int>> &cyclesFund,
+                                 const std::map<int, int> &classVal,
+                                 const std::map<int, std::vector<const std::vector<int> *>> &fundDiag) {
+  SUNPoly prod{SUNTerm{Cx{1.0, 0.0}, {}}};
+  for (std::size_t ci = 0; ci < cycles.size(); ++ci) {
+    const std::vector<int> &cyc = cycles[ci], &fnd = cyclesFund[ci];
+    const std::size_t m = cyc.size();
+    std::vector<std::size_t> pinned; // positions carrying a fundamental dressing
+    for (std::size_t k = 0; k < m; ++k)
+      if (fundDiag.count(fnd[k])) pinned.push_back(k);
+
+    if (pinned.empty()) { // undressed cycle: dense trace, identical to loop_prod
+      DynMat mm = dat.gens[classVal.at(cyc[0])];
+      for (std::size_t k = 1; k < m; ++k) mm = dmatmul(mm, dat.gens[classVal.at(cyc[k])]);
+      const std::complex<double> tr = dtrace(mm);
+      prod = poly_mul(prod, SUNPoly{SUNTerm{Cx{tr.real(), tr.imag()}, {}}});
+      continue;
+    }
+
+    // run j = M_{p_j+1} … M_{p_{j+1}} (cyclic; a single matrix when the pins are adjacent, and the
+    // whole cycle when there is only one pin).
+    const std::size_t r = pinned.size();
+    std::vector<DynMat> runs;
+    runs.reserve(r);
+    for (std::size_t j = 0; j < r; ++j) {
+      const std::size_t from = (pinned[j] + 1) % m, to = pinned[(j + 1) % r];
+      DynMat mm(N);
+      for (int i = 0; i < N; ++i) mm(i, i) = {1.0, 0.0};
+      for (std::size_t s = 0; s < m; ++s) {
+        const std::size_t idx = (from + s) % m;
+        mm = dmatmul(mm, dat.gens[classVal.at(cyc[idx])]);
+        if (idx == to) break;
+      }
+      runs.push_back(std::move(mm));
+    }
+
+    // distinct dressed classes on this cycle; positions sharing a class share a value
+    std::vector<int> dclasses;
+    for (std::size_t j = 0; j < r; ++j)
+      if (std::find(dclasses.begin(), dclasses.end(), fnd[pinned[j]]) == dclasses.end())
+        dclasses.push_back(fnd[pinned[j]]);
+    const std::size_t nd = dclasses.size();
+    auto slotOf = [&](std::size_t j) {
+      for (std::size_t d = 0; d < nd; ++d)
+        if (dclasses[d] == fnd[pinned[j]]) return d;
+      return nd; // unreachable: every pinned position's class is in dclasses
+    };
+
+    long long tot = 1;
+    for (std::size_t d = 0; d < nd; ++d) tot *= N;
+    SUNPoly cyclePoly;
+    std::vector<int> val(nd, 0);
+    for (long long t = 0; t < tot; ++t) {
+      long long x = t;
+      for (std::size_t d = 0; d < nd; ++d) { val[d] = static_cast<int>(x % N); x /= N; }
+      std::vector<int> key; // every diag factor on every dressed class of this cycle
+      bool drop = false;
+      for (std::size_t d = 0; d < nd && !drop; ++d)
+        for (const std::vector<int> *mp : fundDiag.at(dclasses[d])) {
+          const int dr = (*mp)[val[d]];
+          if (dr < 0) { drop = true; break; } // a dropped component kills this assignment
+          key.push_back(dr);
+        }
+      if (drop) continue;
+      Cx c{1.0, 0.0};
+      for (std::size_t j = 0; j < r; ++j) {
+        const std::complex<double> e = runs[j](val[slotOf(j)], val[slotOf((j + 1) % r)]);
+        c = c * Cx{e.real(), e.imag()};
+      }
+      if (c.re == 0.0 && c.im == 0.0) continue;
+      poly_add_term(cyclePoly, c, std::move(key));
+    }
+    prod = poly_mul(prod, cyclePoly);
+  }
+  return prod;
+}
+
 /// @brief Dressed single-group contraction: like @ref contract_group but folds **group-diagonal
 ///        dressing** factors (kinds 4/5) into a @ref SUNPoly `Σ_a c_a D_a` instead of one number.
 ///
@@ -520,8 +643,9 @@ inline SUNPoly poly_mul(const SUNPoly &a, const SUNPoly &b) {
 /// sun_value_dressed gate routes such nets to the fast path).
 ///
 /// A per-component *fundamental* dressing on a **generator** line (a `diag_fund` whose index is also
-/// a generator row/col) is not yet supported and throws — the flavour use case is a generator-free
-/// δ loop, and the gluon use case is adjoint.
+/// a generator row/col) is handled by @ref loop_poly_dressed, which expands the affected generator
+/// trace over that index's components instead of matrix-multiplying through it. This is the quark
+/// use case: a colour-diagonal propagator always sits between two `T^a` vertices.
 inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &net) {
   assert_no_open_labels(N, net); // before the union-find, as in contract_group
   const SUNDyn &dat = sun_data_for(N);
@@ -587,10 +711,9 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
     default: NT_THROW(std::runtime_error, "sun_net: unknown SUNFac kind");
     }
   }
-  // a per-component fundamental dressing on a generator line is not yet supported.
-  for (const auto &kv : fundDiag)
-    if (genFundClasses.count(kv.first))
-      NT_THROW(std::runtime_error, "sun_net: diagFund on a generator (fundamental) line not yet supported");
+  // A per-component fundamental dressing on a generator line is NOT handled here: it stays on the
+  // cycle and is folded by loop_poly_dressed below. The closed-loop pass just has to leave it alone
+  // (it already does — it skips genFundClasses), so there is nothing to reject.
 
   // ---- closed-loop factors: plain loops fold to a scalar; diag-dressed loops to a Σ_a SUNPoly ----
   double factorScalar = 1.0;
@@ -635,13 +758,13 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
 
   // ---- fundamental-cycle extraction (generator traces) — shared with contract_group ----
   const std::vector<std::vector<int>> cycles = extract_cycles(gens);
-  auto loopProd = [&](const std::map<int, int> &classVal) { return loop_prod(dat, cycles, classVal); };
+  // the fundamental classes riding those same cycles, needed only when a diagFund sits on one
+  const std::vector<std::vector<int>> cyclesFund = extract_cycles_fund(gens);
 
   // ---- assignment sum (sparse f-backtracking + dense gen-only), tagging diag-dressed values ----
   SUNPoly total; // 0
   std::map<int, int> classVal; // adjoint class -> its pinned/summed component value
   auto emit = [&](Cx fProd) {
-    const Cx c = fProd * loopProd(classVal);
     std::vector<int> key;
     for (const auto &kv : asgDiag) {
       const int val = classVal.at(kv.first);
@@ -651,7 +774,15 @@ inline SUNPoly contract_group_dressed(int N, const std::vector<const SUNFac *> &
         key.push_back(dr);
       }
     }
-    poly_add_term(total, c, std::move(key));
+    // The generator traces are a POLYNOMIAL now, not a scalar: a diagFund on a cycle tags each
+    // fundamental component with its own dressing id. Every cycle term multiplies the adjoint-side
+    // key built above.
+    const SUNPoly lp = loop_poly_dressed(dat, N, cycles, cyclesFund, classVal, fundDiag);
+    for (const auto &t : lp) {
+      std::vector<int> k2 = key;
+      k2.insert(k2.end(), t.dress.begin(), t.dress.end());
+      poly_add_term(total, fProd * t.coeff, std::move(k2));
+    }
   };
   auto sumGen = [&](auto &&self, std::size_t gi, Cx fProd) -> void {
     if (gi == genOnly.size()) { emit(fProd); return; }
