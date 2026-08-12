@@ -99,7 +99,8 @@ $ntCppLeakPatterns =
    that GCC and Clang both ACCEPT ($ in an identifier is a documented extension). So the failure is
    an "undefined identifier" only as long as the name happens not to collide with something
    declared — otherwise it compiles into a silently wrong kernel.
-   Two known producers: `ntRePartIntegrand`'s own `Unique["tr$"]` placeholders (see there), and
+   Three known producers: `ntSplitRealImag`'s local stand-in for the imaginary unit (see there),
+   `ntProjectIntegrand`'s multilinear `Unique["tr$"]` placeholders, and
    TensorBases' `TBUnique` dummy indices escaping through the closure returned by
    TB3PToS0S1SPhi / TB3PToS0as (Kinematics.m) when they land in a tensor slot no rule rewrites.
    No legitimate emitted identifier contains `$`: verified zero `$` characters across all 630
@@ -225,7 +226,13 @@ MakeNTKernel::colrest = "splitColourGroupsInv: after splitting a branch into its
 
 MakeNTKernel::colpow = "compileColG: a colour/flavour SUM raised to the integer power `1`. Expanding it by repetition would duplicate the summands' index labels, so the same label would appear on 2k tensors and the et/SUNNet contraction would silently mis-pair them into a wrong number — and checkLabels has already run by this point, so nothing downstream would notice. (This is the colour analogue of NumTrace::bridgepow.) Refusing instead. Offending base:\n`2`";
 
-MakeNTKernel::tokleak = "ntProjectIntegrand: a scoped Mathematica symbol survived the real/imaginary projection of the integrand and would be CForm'd into the kernel as a bare C++ identifier (which both GCC and Clang ACCEPT, so it can compile into a silently wrong kernel rather than failing). These are the Unique[\"tr$\"] placeholders that stand in for the trace tokens while the coefficients are extracted; every one must be substituted back out. Reaching this means the token-degree routing missed a summand — most likely an integrand shape that is neither a Plus of Times nor covered by ntSplitTokenPart. Offending symbol(s):\n`1`";
+MakeNTKernel::tokleak = "ntProjectIntegrand: a scoped Mathematica symbol survived the real/imaginary projection of the integrand and would be CForm'd into the kernel as a bare C++ identifier (which both GCC and Clang ACCEPT, so it can compile into a silently wrong kernel rather than failing). Two producers: the local stand-in for the imaginary unit in ntSplitRealImag, which survives whenever Coefficient could not treat the coefficient as a polynomial in it (ntIiSafeQ is meant to have refused that case first), and — on the multilinear route — a trace-token placeholder that was not substituted back out. Either way the token-degree routing or the nesting guard missed a summand, most likely an integrand shape that is neither a Plus of Times nor covered by ntSplitTokenPart. Offending symbol(s):\n`1`";
+
+(* NB: no backquoted code fragments in these two strings either — see the note above. *)
+
+MakeNTKernel::cplxnest = "ntProjectIntegrand: the integrand contains an explicit Complex NESTED below a head the real/imaginary split cannot traverse (typically a denominator, i.e. Power with a negative exponent — the finite-density shape l0 + I muq). The split substitutes the imaginary unit by a real stand-in and reads off its coefficients, which is faithful ONLY where the coefficient is a polynomial in that stand-in. For anything else Coefficient power-series expands and returns the leading term, so 1/(a + I b) projects to 1/a: the imaginary part of the denominator is DELETED, silently, and the kernel is a wrong number that compiles. Non-rational heads (Sqrt, Exp) are worse still — the whole expression comes back as the stand-in's zeroth-order part, leaking the local symbol into the emitted C++. Refusing instead. `1` offending subexpression(s):\n`2`";
+
+MakeNTKernel::toknest = "ntRePartLinear: a trace token in this summand is not a BARE factor of it — it sits inside a Power, or below some other head. The token-degree routing classified the summand as linear, but neither the factor-level scan here nor the Coefficient extraction it replaced can see such a token, so the whole summand would be dropped from the projected integrand: a missing term, with nothing downstream to notice. Offending summand:\n`1`";
 
 MakeNTKernel::cppleak = "`1`: the generated source still contains un-lowered Mathematica — the text `2` appears in it. Writing it would produce a file that either fails to compile or, worse, compiles into a silently wrong kernel. This means some expression reached the emitter without being turned into C++; the fragment above should identify which. Offending file:\n`3`";
 
@@ -2799,6 +2806,45 @@ ntIiReduce[e_, ii_] := e //. Power[ii, n_Integer /; n >= 2] :> (-1)^Quotient[n, 
    and every "one Complex scaling a factored real expression": that is what keeps the dressing
    coefficients factored for COEN's CSE. Anything else falls back to the same ii-substitution the
    linear path has always used, so the factoring behaviour there is no worse than before. *)
+(* ---- when is the ii-substitution faithful? --------------------------------------------------
+   Substituting I -> ii (a real symbol) and reading off Coefficient[·, ii, 0|1] is EXACT only where
+   the expression is a POLYNOMIAL in ii. Mathematica does not complain otherwise — it power-series
+   expands and hands back the leading term. Measured consequences on shapes the finite-density
+   propagator actually produces:
+
+     "tr0"/(a + I b)   ->  ntRe["tr0"]/a        the imaginary part of the DENOMINATOR is deleted
+     "tr0"/(a + I b)^2 ->  ntRe["tr0"]/a^2      (same; at finite mu, muq vanishes from every quark
+                                                 propagator and the kernel is a wrong number that
+                                                 compiles — only the numeric probe can catch it)
+     Sqrt[a + I b]     ->  Sqrt[a + b ii$7182]  the whole expression comes back as the ii^0 part,
+                                                 so the Module-local stand-in LEAKS into the C++
+
+   It is also where the cost is: with 1/(l0 + I muq + E)^n factors the projection went 1.5 s at 50
+   summands, 15 s at 100, 39 s at 200, 62 s at 400 — the reported "generation stalls after complex
+   projection". The per-token Coefficient loop this file used to run is a rounding error next to it
+   (0.13 s at 77 tokens over 4000 summands).
+
+   The test is purely STRUCTURAL — deliberately no Expand, so it costs nothing on a large factored
+   coefficient, which is the whole point of keeping those factored. It admits exactly the shapes the
+   substitution can handle: a Complex itself, products and sums of admissible parts, and a
+   non-negative integer power of one. Everything else that carries a Complex is refused. *)
+ntIiSafeQ[e_] :=
+  FreeQ[e, Complex] ||
+  Switch[Head[e],
+    Complex, True,
+    Times | Plus, AllTrue[List @@ e, ntIiSafeQ],
+    Power, IntegerQ[e[[2]]] && NonNegative[e[[2]]] && ntIiSafeQ[e[[1]]],
+    _, False];
+
+(* The MAXIMAL offending nodes, for the message: descend through the Times/Plus skeleton (whose parts
+   are individually admissible or not) and stop at the first node that is not. Reporting the whole
+   summand instead would bury the one denominator that matters in a page of factored dressing. *)
+ntIiUnsafeParts[e_] :=
+  If[ntIiSafeQ[e], {},
+    Switch[Head[e],
+      Times | Plus, Flatten[ntIiUnsafeParts /@ (List @@ e)],
+      _, {e}]];
+
 ntSplitRealImag[e_] := Module[{fs, cs, rest, c, ii, t},
   If[FreeQ[e, Complex], Return[{e, 0}]];
   fs = ntFactorsOf[e];
@@ -2807,6 +2853,12 @@ ntSplitRealImag[e_] := Module[{fs, cs, rest, c, ii, t},
   If[cs =!= {} && FreeQ[rest, Complex],
     c = Times @@ cs;
     Return[{Re[c] * Times @@ rest, Im[c] * Times @@ rest}]];
+(* Not a polynomial in the stand-in: the extraction below would silently return a series leading term
+   (see ntIiSafeQ). Under "ComplexRuntimeProjection" hand the untouched, still-FACTORED expression to
+   the generated code and let it take the parts at runtime. Otherwise ntProjectIntegrand has already
+   refused, so this is unreachable and the extraction below keeps its historical behaviour. *)
+  If[! ntIiSafeQ[e] && TrueQ[$ntComplexRuntimeProjection],
+    Return[{Global`ntRe[e], Global`ntIm[e]}]];
   t = ntIiReduce[Expand[e /. Complex[ar_, ai_] :> ar + ii*ai], ii];
   {Coefficient[t, ii, 0], Coefficient[t, ii, 1]}];
 
@@ -2837,21 +2889,41 @@ ntRealOfSummand[s_, pureQ_] := Module[{plain, monos, pr, pi, qr, qi},
   {qr, qi} = ntTokenProductRealImag[monos, pureQ];
   pr*qr - pi*qi];
 
-(* Route by degree. An all-linear integrand takes the ORIGINAL code path VERBATIM — same token
-   ordering, same expression shape — so every committed kernel stays byte-identical. Only the
-   degree->=2 summands go through the expansion above, appended after. *)
-ntProjectIntegrand[integrand_, pureQ_, linear_] := Module[{sums, degs, nonlin, res},
+(* Route by degree, after one shared guard. Only the degree->=2 summands go through the expansion
+   above; the linear ones keep their own path (below), which reproduces the projection this file has
+   always emitted — same token ordering, same expression shape — so committed kernels stay
+   byte-identical. *)
+ntProjectIntegrand[integrand_, pureQ_, linear_] := Module[{sums, unsafe, degs, res},
   sums = ntSummandsOf[integrand];
+(* GUARD (both projections, before either touches a coefficient). ntPureLinear does not go through
+   ntSplitRealImag and has the same blind spot — `(… /. Complex[a_, b_] :> a)` zeroes the I inside
+   a + I b just as thoroughly — so this has to sit above the split, not inside it. *)
+  unsafe = DeleteDuplicates @ Flatten[
+      Function[s, ntIiUnsafeParts[Times @@ Select[ntFactorsOf[s], FreeQ[#, _String] &]]] /@ sums];
+  If[unsafe =!= {} && ! TrueQ[$ntComplexRuntimeProjection],
+    Message[MakeNTKernel::cplxnest, Length[unsafe], Short[unsafe, 6]]; Abort[]];
   degs = ntTokenDegree /@ sums;
-  If[Max[Append[degs, 0]] <= 1, Return[linear[integrand]]];
-  nonlin = Pick[sums, degs, _?(# >= 2 &)];
-  ntLog["[complex] integrand is MULTILINEAR in the trace tokens: ", Length[nonlin], " of ",
-    Length[sums], " summand(s), max degree ", Max[degs],
-    " (disconnected diagram(s) — exact re/im expansion applied)"];
-  res = linear[Total[Pick[sums, degs, _?(# <= 1 &)]]] + Total[ntRealOfSummand[#, pureQ] & /@ nonlin];
-(* The placeholders must all be gone. This cannot fire once the routing above is right; it is here
-   because the failure mode it guards is a bare identifier in 300 KB of C++, diagnosed 20 minutes
-   later by the compiler. See also the $-symbol pattern in $ntCppLeakPatterns. *)
+  res =
+    If[unsafe =!= {},
+(* Runtime projection: EVERY summand takes the exact per-summand path, whatever its token degree.
+   The linear fast paths are both unusable here — ntPureLinear's `/. Complex[a_, b_] :> a` deletes
+   the I inside a denominator, and ntRePartLinear reaches the same broken extraction through
+   ntSplitRealImag. ntRealOfSummand is exact at every degree, including 0 and 1. *)
+      ntLog["[complex] ", Length[unsafe], " coefficient(s) carry a Complex below a non-traversable ",
+        "head (finite density?); projecting those at generated-code runtime via ntRe/ntIm"];
+      Total[ntRealOfSummand[#, pureQ] & /@ sums],
+    If[Max[Append[degs, 0]] <= 1,
+      linear[integrand],
+      Module[{nonlin = Pick[sums, degs, _?(# >= 2 &)]},
+        ntLog["[complex] integrand is MULTILINEAR in the trace tokens: ", Length[nonlin], " of ",
+          Length[sums], " summand(s), max degree ", Max[degs],
+          " (disconnected diagram(s) — exact re/im expansion applied)"];
+        linear[Total[Pick[sums, degs, _?(# <= 1 &)]]] + Total[ntRealOfSummand[#, pureQ] & /@ nonlin]]]];
+(* No scoped symbol may survive, on EITHER route. This cannot fire once the guard and the routing
+   above are right; it is here because the failure mode it guards is a bare identifier in 300 KB of
+   C++, diagnosed 20 minutes later by the compiler. (It used to sit after an early Return that the
+   all-linear route took, i.e. it never ran on the common case.) See also the $-symbol pattern in
+   $ntCppLeakPatterns. *)
   With[{leaked = DeleteDuplicates @ Cases[res, s_Symbol /; StringContainsQ[SymbolName[s], "$"], {0, Infinity}]},
     If[leaked =!= {}, Message[MakeNTKernel::tokleak, leaked]; Abort[]]];
   res];
@@ -2865,13 +2937,56 @@ ntPureIntegrand[integrand_] := ntProjectIntegrand[integrand, True, ntPureLinear]
    leading `i` factor and DROPS the whole term — silently losing the real −X·ntIm(tr) contribution of
    every complex trace. Instead split each token's coefficient into real / imaginary parts via an
    `ii`-substitution (I → real symbol ii), which keeps the dressing coefficients FACTORED (unlike
-   ComplexExpand, which un-factors them and defeats COEN's CSE). *)
-ntRePartLinear[integrand_] := Module[{toks = Union[Cases[integrand, _String, Infinity]], tsym, lin, ii},
-  tsym = AssociationThread[toks -> Table[Unique["tr$"], {Length[toks]}]];
-  lin = integrand /. tsym;
-  Total[Function[t, Module[{cc = Coefficient[lin, tsym[t]] /. Complex[ar_, ai_] :> ar + ii*ai},
-     Coefficient[cc, ii, 0]*Global`ntRe[t] - Coefficient[cc, ii, 1]*Global`ntIm[t]]] /@ toks]
-    + ((lin /. Thread[Values[tsym] -> 0]) /. Complex[ar_, ai_] :> ar)];
+   ComplexExpand, which un-factors them and defeats COEN's CSE).
+
+   This is done in ONE pass over the summands. The obvious reading of the formula — mint a
+   placeholder per token and call Coefficient[integrand, placeholder] once per token — traverses the
+   whole integrand once per trace token (three times over, counting the substitution in and the
+   token-free remainder out), so it cost `#tokens x expression size`. Bucketing the summands by
+   their token instead is flat in the token count and, because Plus is canonically ordered, rebuilds
+   the SAME expression: verified `===` identical at 20 / 77 / 154 tokens, so kernels are
+   byte-identical.
+
+   HONEST TRADE, measured over 4000 summands (per-token Coefficient -> this):
+       5 tokens  0.060 -> 0.105 s      77 tokens  0.138 -> 0.116 s
+      20 tokens  0.076 -> 0.105 s     154 tokens  0.235 -> 0.114 s
+   i.e. it is ~40% SLOWER below a crossover near 60 tokens and ~2x faster above it. The old shape
+   ran a few coarse kernel-internal passes over one big expression; this one runs many fine-grained
+   Mathematica-level operations (per summand: ~44 ms in ntLinearSplit, ~56 ms in ntSplitRealImag,
+   3 ms in the assembly). Fusing the two helpers would recover ~30 ms of that, at the price of
+   duplicating the coefficient split — not taken: 50 ms sits inside a generation that spends minutes
+   in NumTrace and net-building, and the reason for the rewrite is not the linear-path speed anyway.
+
+   What it is for: it removes the Unique["tr$"] placeholders from this route entirely — they are
+   what leaked into the emitted C++ when the linearity precondition turned out not to hold — and
+   leaves ntSplitRealImag as the single place where a coefficient is split, so the ii-substitution
+   and its guard (ntIiSafeQ) cannot go out of sync between the two projections. *)
+
+(* One summand -> {its trace token or None, its string-free coefficient}. The caller has already
+   established token degree <= 1 for this summand. *)
+ntLinearSplit[s_] := Module[{facs = ntFactorsOf[s], tk, rest},
+  tk = Cases[facs, _String];
+  rest = DeleteCases[facs, _String];
+(* The token has to be a BARE factor. One sitting inside a Power or below any other head is invisible
+   both to this scan and to the Coefficient extraction it replaces, so such a summand was previously
+   dropped outright — a missing term rather than a diagnostic. FreeQ on the leftovers rather than a
+   Count over the summand: it short-circuits on the first hit, and this runs once per summand. *)
+  If[Length[tk] > 1 || ! FreeQ[rest, _String],
+    Message[MakeNTKernel::toknest, s]; Abort[]];
+  {If[tk === {}, None, First[tk]], Times @@ rest}];
+
+ntRePartLinear[integrand_] := Module[{parts, groups, toks, tokPart, constPart},
+  parts = Function[s, Module[{tk, plain}, {tk, plain} = ntLinearSplit[s]; {tk, ntSplitRealImag[plain]}]] /@
+      ntSummandsOf[integrand];
+  groups = GroupBy[parts, First -> Last];
+(* Sort matches the Union[Cases[…]] ordering the per-token formulation emitted in. It is presentation
+   only — Plus is Orderless, so Total canonicalises regardless, and reversing this line was verified
+   to leave the result `===` unchanged. Kept so a printed intermediate reads in token order. *)
+  toks = Sort[DeleteCases[Keys[groups], None]];
+  tokPart = Total[Function[t, With[{v = groups[t]},
+       Total[v[[All, 1]]]*Global`ntRe[t] - Total[v[[All, 2]]]*Global`ntIm[t]]] /@ toks];
+  constPart = If[KeyExistsQ[groups, None], Total[groups[None][[All, 1]]], 0];
+  tokPart + constPart];
 
 ntRePartIntegrand[integrand_] := ntProjectIntegrand[integrand, False, ntRePartLinear];
 
@@ -3166,6 +3281,7 @@ Options[mkGenerateKernel] =
     "RegulatorAlias" -> False,
     "RealProbe" -> True,
     "PruneRealTraces" -> False,
+    "ComplexRuntimeProjection" -> False,
     "Constant" -> 0.,
     (* "Offline" -> True: emit the generator + probe sources and a per-flow numtrace.json switch set to
        0, but do NOT compile or run anything — the `numtrace` CMake target does that as a build step,
@@ -3190,6 +3306,21 @@ Options[mkGenerateKernel] =
    the double-kernel emission). Safe to enable only when the probe is off OR after per-flow validation,
    or once a post-probe trace regeneration is wired. Left off pending measurement (GCC often already
    DCEs the dead half of small inlined traces). *)
+(* "ComplexRuntimeProjection" -> False (default OFF): what to do when a coefficient carries a Complex
+   below a head the symbolic real/imaginary split cannot traverse — in practice a finite-DENSITY
+   denominator, where the quark propagator carries l0 + I muq. See ntIiSafeQ for why the split is not
+   merely slow there but silently wrong.
+   OFF: refuse (MakeNTKernel::cplxnest). ON: keep such a coefficient intact and emit ntRe/ntIm around
+   it, moving that one projection to generated-code RUNTIME. The C++ overloads already exist and
+   FunKit lowers a Complex literal to complex<double>(0.,1.), so nothing new is needed on the C++
+   side — but the kernel then performs complex arithmetic where it used to be all double, and the
+   expression stays FACTORED (which is the point: expanding it is what defeats COEN's CSE and what
+   made generation stall). Every summand takes the exact per-summand path in this mode, including
+   the Pure body, because ntPureLinear's `/. Complex[a_, b_] :> a` has the same blind spot.
+   Requires the type-generic powr (see ntProbeSource / the generator runtime): a denominator raised
+   to a power is exactly what these flows contain. *)
+$ntComplexRuntimeProjection = False;
+
 (* "RealProbe" -> True (default): when the syntactic complexQ trips (some diagram coeff carries an `i`),
    compile+run a probe over the JUST-generated real traces to test whether Im(integrand) actually
    vanishes (projector-i × colour-i often cancel to a real value that Mathematica can't see through the
@@ -3428,7 +3559,12 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
         ntKokkosStubDefs,
         "#include <complex>\n#include <cmath>\n#include <random>\n#include <cstdio>\n#include <cstring>\n",
         "#include \"" <> FileNameTake[headerFile] <> "\"\n",
-        "template<int N> static inline double powr(double x){ double r=1.0; int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?1.0/r:r; }\n",
+(* Generic in the ARGUMENT type, not just the exponent. The probe evaluates the integrand itself, so
+   under "ComplexRuntimeProjection" it raises a COMPLEX denominator (l0 + I muq) to a power and a
+   `double powr(double)` fails to compile — with the whole compiler log, previously imported in full,
+   as the only diagnostic. numtracer::compute::powr (runtime.hpp) is already generic this way; this
+   is the probe's own private copy catching up. T(1) rather than 1.0 for the identity and inverse. *)
+        "template<int N, class T> static inline T powr(T x){ T r=T(1); int n=N<0?-N:N; for(int i=0;i<n;++i) r*=x; return N<0?T(1)/r:r; }\n",
         "using std::pow; using std::sqrt; using std::sin; using std::cos; using std::tan; using std::exp; using std::log; using std::fma; using std::fabs;\n",
         "static inline std::complex<double> fma(const std::complex<double>&a,const std::complex<double>&b,const std::complex<double>&c){return a*b+c;}\n",
         "template<class T> using complex = std::complex<T>;\n",
@@ -3448,12 +3584,20 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
         "  for(int i=1;i<argc;++i){ if(!std::strcmp(argv[i],\"-o\") && i+1<argc) outf=argv[++i];\n",
         "                           else if(!std::strcmp(argv[i],\"-m\") && i+1<argc) macro=argv[++i]; }\n",
         "  std::mt19937_64 rng(12345); std::uniform_real_distribution<double> U(0.25,3.0),Uc(-0.9,0.9),Uph(0.1,6.2);\n",
-        "  double mim=0,mdiff=0,mre=0,mrim=0,mrdiff=0,mrrep=0; long ok=0;\n",
+        "  double mim=0,mdiff=0,mre=0,mrim=0,mrdiff=0,mrrep=0; long ok=0, nrep=0;\n",
         "  for(int n=0;n<" <> ToString[np] <> ";++n){ " <> randDecls <> "\n",
         "    std::complex<double> f = probe_full(" <> callArgs <> "); double pj = probe_proj(" <> callArgs <> ");\n",
         "    double rp = probe_repart(" <> callArgs <> ");\n",
         "    double im=std::imag(f), re=std::real(f), df=std::abs(f-pj);\n",
-        "    mrrep=std::max(mrrep, std::fabs(rp-re)/(std::abs(f)+1.0));\n",
+(* COUNT the points that disagree, do not just take the max. RePart and the complex body are
+   algebraically equal but associated completely differently, so at a point where the sum cancels
+   badly their roundoff diverges — one such point in a few thousand is normal and says nothing about
+   the emitter. (Measured on ZAAqbq2: median 1.0e-16, p99 1.3e-15, max 7.9e-9 — a single outlier at
+   large |f|, seven orders above the 99th percentile.) The defect this guards is a property of the
+   EXPRESSION, not of a point: a double-counted or dropped term is wrong at essentially EVERY point.
+   So the discriminator is the FRACTION exceeding the tolerance, not the worst case. *)
+        "    { double rr = std::fabs(rp-re)/(std::abs(f)+1.0);\n",
+        "      if(std::isfinite(rr)){ mrrep=std::max(mrrep, rr); if(rr > " <> ToString[CForm[N[tol]]] <> ") ++nrep; } }\n",
 (* PER-POINT relative measures (mrim, mrdiff): a global max|Im|/max|Re| can let a localized
    imaginary part hide behind a large |Re| at some OTHER point (catastrophic cancellation). The
    +1 floor degrades gracefully to an absolute test when |Re|/|f| are small. The verdict keys on
@@ -3472,16 +3616,22 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
    points is NOT a quiet "Complex" any more — it would bake the wrong branch into a committed header —
    so it exits nonzero and the caller aborts. *)
         "  if(ok < 1){ std::fprintf(stderr, \"[probe] no usable points\\n\"); return 2; }\n",
-(* RePart is not a candidate to be chosen between — it is an IDENTITY, Re(Σ c·tr) rewritten with
-   ntRe/ntIm accessors, and it must reproduce real(probe_full) at every point regardless of which
-   verdict wins. Nothing checked that before, which is how the linear decomposition could double-count
-   a multilinear term (and emit unresolved tr$ placeholders) without any test noticing. A violation is
-   an emitter bug, not a property of the flow, so fail rather than pick a branch. *)
-        "  if(mrrep > " <> ToString[CForm[N[tol]]] <> "){ std::fprintf(stderr, \"[probe] the RePart projection does not reproduce Re(integrand): rel=%.3e over %ld points.\\n\"\n",
-        "      \"[probe] This is a NumTracer emitter bug (ntRePartIntegrand), not a property of this flow.\\n\", mrrep, ok); return 4; }\n",
         "  const int verdict = (mrim > " <> ToString[CForm[N[tol]]] <> ") ? 0 : ((mrdiff <= " <> ToString[CForm[N[tol]]] <> ") ? 2 : 1);\n",
-        (* the six measures + point count + verdict, on one line: the caller logs them. *)
-        "  std::printf(\"%.10e %.10e %.10e %.10e %.10e %.10e %ld %d\\n\", mim, mdiff, mre, mrim, mrdiff, mrrep, ok, verdict);\n",
+        (* the six measures + the RePart outlier count + point count + verdict, on one line. Printed
+           BEFORE the RePart gate below so a failure still reports every measure the caller logs —
+           returning early left the operator with a bare "exit 4" and no numbers to judge it by. *)
+        "  std::printf(\"%.10e %.10e %.10e %.10e %.10e %.10e %ld %ld %d\\n\", mim, mdiff, mre, mrim, mrdiff, mrrep, nrep, ok, verdict);\n",
+(* RePart is not a candidate to be chosen between — it is an IDENTITY, Re(Σ c·tr) rewritten with
+   ntRe/ntIm accessors, and it must reproduce real(probe_full) regardless of which verdict wins.
+   Nothing checked that before, which is how the linear decomposition could double-count a multilinear
+   term (and emit unresolved tr$ placeholders) without any test noticing.
+   Gated on the FRACTION of disagreeing points, not the maximum: see the counting comment above. The
+   1% cut sits orders of magnitude away from both sides — a well-conditioned flow has 0 outliers, a
+   badly-conditioned one a handful (ZAAqbq2: 1 in 4000 = 0.025%), and a genuine emitter bug misses at
+   EVERY point (100%). It cannot see a systematic error smaller than the tolerance, which is a real
+   limit of the method rather than an oversight: below that it is under a flow's own roundoff floor. *)
+        "  if(nrep * 100 > ok){ std::fprintf(stderr, \"[probe] the RePart projection does not reproduce Re(integrand): %ld of %ld points disagree by more than " <> ToString[CForm[N[tol]]] <> " (worst rel=%.3e).\\n\"\n",
+        "      \"[probe] A few isolated outliers would be catastrophic cancellation; this many is a NumTracer emitter bug (ntRePartIntegrand).\\n\", nrep, ok, mrrep); return 4; }\n",
         "  if(outf && macro){ std::FILE* f = std::fopen(outf, \"w\");\n",
         "    if(!f){ std::fprintf(stderr, \"[probe] cannot write %s\\n\", outf); return 3; }\n",
         "    std::fprintf(f, \"// GENERATED by the numtrace step — do not edit.\\n\");\n",
@@ -3512,12 +3662,12 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
       Message[ntRunProbe::probefail, "run rc=" <> ToString[rc] <> "\n" <> Quiet@Check[Import[bin <> ".rerr", "Text"], ""]]; Abort[]];
     out = If[FileExistsQ[bin <> ".out"], Import[bin <> ".out", "Text"], ""];
     parsed = Quiet @ Check[ToExpression[StringReplace[#, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]]& /@ StringSplit[StringTrim[out]], $Failed];
-    If[!MatchQ[parsed, {_?NumericQ ..}] || Length[parsed] =!= 8,
+    If[!MatchQ[parsed, {_?NumericQ ..}] || Length[parsed] =!= 9,
       Message[ntRunProbe::probefail, "unparsable output: " <> ToString[out]]; Abort[]];
-    ntLog["[probe] over ", Round[parsed[[7]]], " pts:  max|Im|=", ScientificForm[parsed[[1]], 3], "  max|full-proj|=", ScientificForm[parsed[[2]], 3], "  max|Re|=", ScientificForm[parsed[[3]], 3], "  rel|Im|=", ScientificForm[parsed[[4]], 3], "  rel|full-proj|=", ScientificForm[parsed[[5]], 3], "  rel|RePart-Re|=", ScientificForm[parsed[[6]], 3]];
+    ntLog["[probe] over ", Round[parsed[[8]]], " pts:  max|Im|=", ScientificForm[parsed[[1]], 3], "  max|full-proj|=", ScientificForm[parsed[[2]], 3], "  max|Re|=", ScientificForm[parsed[[3]], 3], "  rel|Im|=", ScientificForm[parsed[[4]], 3], "  rel|full-proj|=", ScientificForm[parsed[[5]], 3], "  worst rel|RePart-Re|=", ScientificForm[parsed[[6]], 3], " (", Round[parsed[[7]]], " outlier pt(s))"];
     If[StringQ[verdictFile] && !FileExistsQ[verdictFile],
       Message[ntRunProbe::probefail, "no verdict header written at " <> verdictFile]; Abort[]];
-    Switch[Round[parsed[[8]]], 2, "Pure", 1, "RePart", _, "Complex"]];
+    Switch[Round[parsed[[9]]], 2, "Pure", 1, "RePart", _, "Complex"]];
 
 (* ---- group-diagonal dressing fold: SUNPoly via the validated C++ engine ---------------------
    Each diag-dressed colour-net STRING (carrying sun<n>.diag{Fund,Adj}(...,{d0,…}) factors) is folded
@@ -4107,6 +4257,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    context: the NumTracer` context itself is Protect-ed at package load (NumTracer.m), so an
    exported-context handoff symbol would silently fail to assign (Set::wrsym). *)
     $ntLastHoistCount = Length[hoistCalls];
+(* Same Private`-context handoff, for the same reason: ntProjectIntegrand runs several call layers
+   down (mkKernelFn -> ntPureIntegrand/ntRePartIntegrand) and threading an option through those
+   would touch every one. Assigned UNCONDITIONALLY so a generation cannot inherit the previous
+   flow's setting — this is a package-global, and MakeNTKernel is called once per flow in a script
+   that generates many. See the "ComplexRuntimeProjection" note above. *)
+    $ntComplexRuntimeProjection = TrueQ[OptionValue["ComplexRuntimeProjection"]];
 (* OPTIMIZATION (opt-in, "PruneRealTraces"): a group whose dressing coefficient is REAL has only
    Re(trace) consumed (the consumer takes Re of the whole kernel; a real coeff cannot move
    Im(trace) into the real part). Flag it so the generator emits a `double` trace and never
@@ -4620,7 +4776,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 

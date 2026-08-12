@@ -573,6 +573,25 @@ if(NUMTRACER_BUILD_TESTS)
   add_test(NAME flow_gluon_condensate COMMAND compare_gluon_condensate)
   add_test(NAME color_su3 COMMAND sun_contract 3)
 
+  # ---- Wolfram UNIT tests (fast, not opt-in) ---------------------------------------------------
+  # Pure symbolic checks over mathematica/ that need no generation, no C++ and no compile, so they
+  # run in a PLAIN ctest in about a second — unlike codegen_regen below, which is the only other
+  # thing that can see a change to mathematica/ and which takes minutes behind an opt-in flag (so in
+  # practice it is not run while editing). Registered only if a Wolfram kernel exists; otherwise the
+  # suite silently keeps its previous coverage rather than failing on a missing dependency.
+  find_program(NT_WOLFRAM_EXE NAMES wolfram wolframscript math)
+  if(NT_WOLFRAM_EXE)
+    # Real/imaginary projection of a complex integrand: the ntIiSafeQ shape table (a
+    # silently-wrong-kernel guard), byte-identity of the one-pass ntRePartLinear against the
+    # per-token-Coefficient formulation it replaced, and the multilinear route's exactness.
+    add_test(NAME wolfram_complex_projection
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_complex_projection.wls")
+    set_tests_properties(wolfram_complex_projection PROPERTIES LABELS wolfram TIMEOUT 300)
+  else()
+    message(STATUS "NumTracer: no Wolfram kernel found; the fast mathematica/ unit tests are skipped")
+  endif()
+
   # ---- CODEGEN test (opt-in) -------------------------------------------------------------------
   # Every test above runs a C++ binary against the PRE-GENERATED headers in tests/gen; Wolfram is
   # never invoked, so none of them can see a change to mathematica/. This one closes that gap: it

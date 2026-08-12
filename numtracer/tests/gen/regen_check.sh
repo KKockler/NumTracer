@@ -197,6 +197,17 @@ export NT_GEN_VERBOSE=1
 # fail honest flows; `wrote generator:` is the marker every numeric flow emits.
 check_flow_log() {
   local f=$1 log=$2 bad=0 n
+  # 0. the package did not load. A syntax error in mathematica/*.m is a SILENT no-op in Mathematica
+  #    (Get returns Null, definitions after the malformed expression are simply absent), so the flow
+  #    runs on a half-defined package and fails far downstream in a way that names the wrong thing:
+  #    measured, an unbalanced bracket mid-Codegen.m surfaced only as
+  #    `SetOptions::optnf: RuntimeInclude is not a known option for MakeNTKernel` plus a 0.0001 s
+  #    numeric backend, and cost a long detour before anyone looked upward in the log. NumTracer.m
+  #    now aborts on it (NumTrace::loadsyntax), but `wolfram -script` still exits 0 on Abort[] — same
+  #    reason the checks below exist — so it has to be caught here too. Checked FIRST: when this
+  #    fires, every other symptom in the log is downstream noise.
+  n=$(grep -acE 'Syntax::|loadsyntax' "$log" 2>/dev/null || true)
+  (( n == 0 )) || { echo "      Syntax::/loadsyntax x$n — numtracer/mathematica/ FAILED TO PARSE; fix that first, the rest of this log is noise"; bad=1; }
   n=$(grep -ac 'genfail' "$log" 2>/dev/null || true)
   (( n == 0 )) || { echo "      genfail x$n — the emitted generator failed to build/run"; bad=1; }
   n=$(grep -acE '::string|cppleak' "$log" 2>/dev/null || true)

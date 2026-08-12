@@ -28,6 +28,10 @@ MakeNTKernel::usage = "MakeNTKernel[ntk, genFile, kernelFile, tracesFile, \"Name
 
 NTKernel::usage = "NTKernel[assoc] is the analysed intermediate-expression tree produced by NumTrace and consumed by MakeNTKernel.";
 
+(* Attached to the package's primary entry point rather than to a symbol of its own: the file that
+   failed may be the one that would have defined any more specific symbol. See ntLoadPart below. *)
+NumTrace::loadsyntax = "NumTracer FAILED TO LOAD: `1` has a syntax error (see the Syntax:: message just above for the line). Mathematica does not treat this as a failure — Get returns Null, every definition before the malformed expression is installed and every one after it silently is not — so loading would otherwise continue and the package would be SILENTLY HALF-DEFINED. The usual symptom is far away and unrecognisable: a missing Options[] surfacing as SetOptions::optnf, a generator that emits nothing yet exits 0. An unbalanced bracket swallows everything to the end of the file, so the reported line is where parsing gave up, NOT where the error is — look for the unclosed bracket earlier. Aborting instead.";
+
 FromFunKit::usage = "FromFunKit[flow, \"FlavourGroup\"->n] rewrites a FunKit traced flow (after // dressingRules) into the NumTracer DSL; scalar products become ntSP, resolved by the frame. SU(N) group tokens get their rank baked into the ntSUN* heads — colour from Global`Nc, the isospin group from \"FlavourGroup\" (default Global`Nf or 2).";
 
 MakeNTKernelDiFfRG::usage = "MakeNTKernelDiFfRG[ntk, \"Name\"->\"ZA\", \"Integrator\"->\"Integrator_p2_1ang\", \"Parameters\"->kernelParameterList, \"IntegrationVariables\"->{\"l1\",\"cos1\"}, \"AngleDefs\"->{...}] scaffolds the DiFfRG flows/<Name>/ plumbing (MakeKernel on a placeholder body) and overwrites kernel.hh/kernels.hh with the NumTracer-traced numeric kernel. Dressings and their interpolator type are auto-derived from Parameters; the Regulator alias and the DiFfRG emission constants (namespace, includes, support API) are baked in. A loop-independent term flat-added to the integral (DiFfRG's constExpr) can be passed either positionally — MakeNTKernelDiFfRG[ntk, constExpr, opts] — or as \"Constant\"->expr; it populates constant(p,k,dressings) and is a plain expression (e.g. ZA[p]), not an NTKernel. Pair with UpdateNTFlows. Requires DiFfRG to be loaded.";
@@ -158,15 +162,36 @@ GetNumTracerThreads[] := Module[{a = Environment["NT_GEN_MAXW"], b = Environment
     If[b === $Failed, Automatic, ToExpression[b]]}];
 
 
-Get[FileNameJoin[{$NumTracerDirectory, "DSL.m"}]];
+(* ---- load the implementation files, LOUDLY -------------------------------------------------
+   A syntax error in one of these is the single most dangerous edit in this package, because
+   Mathematica makes it a SILENT NO-OP: on `Syntax::sntue` Get returns Null (NOT $Failed — checking
+   the return value does not work), every definition BEFORE the malformed expression is installed,
+   and every definition after it — up to the end of the file, since an unbalanced bracket swallows
+   the remainder into one unfinished expression — quietly is not.
 
-Get[FileNameJoin[{$NumTracerDirectory, "Frames.m"}]];
+   What that looks like downstream, measured: an unbalanced bracket in the middle of Codegen.m left
+   `Options[MakeNTKernel]` undefined 1800 lines later, so a generator script reported
+   `SetOptions::optnf: RuntimeInclude is not a known option for MakeNTKernel`, ran its numeric
+   backend in 0.0001 s, emitted NOTHING, printed "kernels generated" and exited 0. The real cause
+   was one line in the load output, thousands of lines earlier, and nothing connected the two.
 
-Get[FileNameJoin[{$NumTracerDirectory, "Codegen.m"}]];
+   Check with an explicit message list turns that into an abort at load time. It is inert on a clean
+   file (verified against both an unfinished expression and a stray closing bracket). *)
+ntLoadPart[file_String] :=
+  If[Check[Get[FileNameJoin[{$NumTracerDirectory, file}]], $Failed,
+       Syntax::sntue, Syntax::sntx, Syntax::sntxi,
+       Syntax::bktmcp, Syntax::bktmop, Syntax::tsntxi] === $Failed,
+    Message[NumTrace::loadsyntax, file]; Abort[]];
 
-Get[FileNameJoin[{$NumTracerDirectory, "FunKitAdapter.m"}]];
+ntLoadPart["DSL.m"];
 
-Get[FileNameJoin[{$NumTracerDirectory, "DiFfRG_compat.m"}]];
+ntLoadPart["Frames.m"];
+
+ntLoadPart["Codegen.m"];
+
+ntLoadPart["FunKitAdapter.m"];
+
+ntLoadPart["DiFfRG_compat.m"];
 
 End[];
 
