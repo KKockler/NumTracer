@@ -212,7 +212,12 @@ Options[MakeNTKernelDiFfRG] =
        to default this to True here. Do not: with the complex body gone, verdict 0 silently becomes
        Re[Integral[flow]], and choosing to truncate the flow equation belongs to whoever is doing the
        physics, not to the scaffolding. Set it explicitly when that is what you mean. *)
-    "RealOutput" -> False
+    "RealOutput" -> False,
+    (* Forwarded to MakeNTKernel. Finite-density denominators such as l0 + I muq
+       are not polynomial in the imaginary unit stand-in used by the symbolic
+       real/imaginary split. Keep them factored and project with ntRe/ntIm in
+       generated C++ when explicitly requested. *)
+    "ComplexRuntimeProjection" -> False
   };
 
 MakeNTKernelDiFfRG::noname = "\"Name\" is required (the flow name, e.g. \"ZA\").";
@@ -446,7 +451,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    kernels. *)
     $ntLastHoistCount = 0;
     If[TrueQ @ CheckAbort[
-         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ComplexRuntimeProjection" -> OptionValue["ComplexRuntimeProjection"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
          True,
          False],
       Null,
