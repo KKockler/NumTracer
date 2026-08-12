@@ -235,7 +235,12 @@ function(numtracer_add_numtrace flows_target flow_dir)
       USES_TERMINAL
       VERBATIM)
 
-    if(_complex)
+    set(_needs_probe FALSE)
+    if(_complex AND _json MATCHES "\"probe\"[ \t\r\n]*:")
+      set(_needs_probe TRUE)
+    endif()
+
+    if(_needs_probe)
       # then the probe that reads it; the switch flips at the end of the chain.
       string(JSON _probe   GET "${_json}" "probe")
       string(JSON _macro   GET "${_json}" "verdict_macro")
