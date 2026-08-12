@@ -30,7 +30,7 @@ The DSL heads mirror the FORM/FormTracer vocabulary:
 | `ntSUNT[N, a, i, j]` | SU(N) fundamental generator $(T^a)_{ij}$ |
 | `ntSUNDeltaAdj[N, a, b]` | SU(N) adjoint $\delta^{ab}$ |
 | `ntSUNDeltaFund[N, i, j]` | SU(N) fundamental $\delta_{ij}$ |
-| `ntSUNDiagFund[N, i, j, spec, s]` / `ntSUNDiagAdj[N, a, b, spec, s]` | group-diagonal $\delta$ dressing SELECTED (1-based) components with distinct scalar dressings via a rules-list `spec` `{c -> name, …, Default -> defName}` (unnamed components collapse to `Default` or drop); see [step-17](../tutorials/step-17.md) |
+| `ntSUNDiagFund[N, i, j, spec]` / `ntSUNDiagAdj[N, a, b, spec]` | group-diagonal $\delta$ dressing SELECTED (1-based) components with distinct scalar dressings via a rules-list `spec` `{c -> expr, …, Default -> defExpr}` (each `expr` complete, kinematics included) (unnamed components collapse to `Default` or drop); see [step-17](../tutorials/step-17.md) |
 | `ntGamma`, slashed momenta | Dirac gamma matrices and $\slashed p = p^\mu\gamma_\mu$ |
 | `ntSP[q1, q2]`, `ntDress[h, …]` | scalar coefficients (dot product, opaque dressing) |
 
@@ -38,7 +38,8 @@ The SU(N) heads form **one $N$-parameterized family**: the rank $N$ is always th
 argument, so a single network can carry colour SU($N_c$) and flavour SU($N_f$) at once —
 they stay distinct because their indices carry different labels (see below), not because the
 heads differ. Finite-temperature work adds the electric/magnetic projectors `ntElectricProj` /
-`ntMagneticProj` and the spatial scalar product `ntSPS`; see the
+`ntMagneticProj`, the spatial scalar product `ntSPS`, and the spatial *vector* `ntSpatialVec`
+(FormTracer's `vecs`, which is what a spatial pslash is built from); see the
 [step-16](../tutorials/step-16.md).
 
 ## Indices contract by label, not by extent

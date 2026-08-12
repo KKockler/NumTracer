@@ -75,8 +75,8 @@ labelsOf[ntSigma[legA_, legB_, din_, dout_]] :=
 labelsOf[ntDeltaDirac[din_, dout_]]  := {din, dout};
 labelsOf[ntSUNT[_, a_, i_, j_]]      := {a, i, j};
 labelsOf[ntSUNDeltaFund[_, i_, j_]]  := {i, j};
-labelsOf[ntSUNDiagFund[_, i_, j_, _, _]] := {i, j};  (* per-component-dressed fundamental δ *)
-labelsOf[ntSUNDiagAdj[_, a_, b_, _, _]]  := {a, b};  (* per-component-dressed adjoint δ *)
+labelsOf[ntSUNDiagFund[_, i_, j_, _]] := {i, j};  (* per-component-dressed fundamental δ *)
+labelsOf[ntSUNDiagAdj[_, a_, b_, _]]  := {a, b};  (* per-component-dressed adjoint δ *)
 labelsOf[ntEpsilon[a_, b_, c_, d_]]  := {a, b, c, d};
 (* SU(N) fundamental Levi-Civita: N indices, all of them contraction labels. *)
 labelsOf[h_ntEpsFund] := Rest[List @@ h];
@@ -530,6 +530,61 @@ unitVecFrame[net_] := Association[
 NumTrace::fixcomp = "Fixed Lorentz component `1` is out of range: a component index must be 0..3 \
 (0 = temporal). Check the basis's 3+1 convention.";
 
+(* ---- finite-T SPATIAL vectors (FormTracer's `vecs`) -------------------------------------------
+
+   vecs[q, mu] is the spatial part of q as a 4-vector: components {0, q_1, q_2, q_3}. FromFunKit
+   rewrites it to ntVec[ntSpatialVec[q], mu], so a SPATIAL SLASH vecs[q,mu] gamma[mu,d1,d2] is an
+   ordinary slash against a different momentum — compileDirac's vecOf emits `dslash({{1.0, base}})`
+   for it unchanged. Exactly the ntUnitVec trick above: a new momentum LEAF, no new DFac kind, no C++
+   change. The zero temporal component costs nothing either: it is a structural zero in the frame
+   spec's component table, so it never becomes a term. (It also lowers the momentum's frameMask, but
+   do not read anything into that — the numeric backend's `lvec<Lbl,Base,Mask>` ignores its Mask
+   argument entirely, and a slash carries no mask at all.)
+
+   Contrast ntSPS, the spatial scalar PRODUCT: that is a scalar coefficient the frame resolves as a
+   components-1..3 dot, so it needs no leaf at all. The two must agree, which the codegen gate
+   gen_spatialvec_numeric.wls pins.
+
+   LINEARITY first. The spatial projection is linear, so push it through sums and numeric factors
+   (FormTracer does the same, FormTracer.m:888-889) BEFORE anything else looks at the momentum. Two
+   reasons: (i) only BASE momenta then become frame keys, so ntSpatialVec[p - l] does not mint a
+   third leaf whose components duplicate those of ntSpatialVec[p] and ntSpatialVec[l]; (ii) the leaf
+   is then an atom by the time canonicalizeMomentumSigns' negMomQ inspects it, so the sign
+   convention applies to the spatial momentum itself rather than to whatever sat inside it. *)
+expandSpatialVecs[e_] := e //. {
+  ntSpatialVec[ntSpatialVec[q_]]      :> ntSpatialVec[q],   (* idempotent: the bar of a bar *)
+  ntSpatialVec[0]                     :> 0,
+  ntSpatialVec[a_Plus]                :> (ntSpatialVec /@ a),
+  ntSpatialVec[c_?NumericQ * q_]      :> c ntSpatialVec[q],
+  ntSpatialVec[c_?NumericQ]           :> 0};
+
+(* An ntSpatialVec whose argument the frame cannot resolve would silently become a leaf with
+   SYMBOLIC components — the momentum symbol itself sitting in a component slot — which survives all
+   the way into the emitted arithmetic. Refuse it here instead. *)
+NumTrace::spatialframe = "ntSpatialVec[`1`]: the frame does not resolve `1` to four components \
+(got `2`). Every momentum appearing under a spatial vector (FormTracer's vecs[q, mu]) must be a \
+frame key or a linear combination of frame keys.";
+
+(* The spatial vectors a rewritten network needs, as frame entries: the parent momentum's components
+   with the temporal slot zeroed. Call AFTER unitVecFrame has joined the frame, so that a spatial
+   vector of a unit basis vector resolves too.
+
+   These entries make the spatial vector a first-class frame/env citizen — buildEnv gives it a Base,
+   resolveComponents resolves it, frameMask masks it. They are NOT what the numeric backend computes
+   with (measured by mutation: perturbing them leaves every emitted kernel byte-identical, because
+   `lvec` drops its Mask and a slash never had one): the component table comes from the frame SPEC
+   (Codegen.m unitLoopFrameSpec /
+   unitLoopMixedFrameSpec / polyFrameSpec), where a spatial vector is likewise derived from its
+   parent with slot 1 zeroed — sharing the parent's ntU$ unit group rather than minting a duplicate.
+   Two derivations, one invariant ("the parent's components, temporal slot zeroed"), which is why
+   they cannot drift apart. *)
+spatialVecFrame[net_, frame_] := Association[
+  Function[sv, Module[{c = resolveComponents[First[sv], frame]},
+      If[! MatchQ[c, {_, _, _, _}],
+        Message[NumTrace::spatialframe, First[sv], c]; Abort[]];
+      sv -> ReplacePart[c, 1 -> 0]]] /@
+    DeleteDuplicates[Cases[net, _ntSpatialVec, {0, Infinity}]]];
+
 (* ---- SU(N) FUNDAMENTAL Levi-Civita -------------------------------------------
 
    ntEpsFund[N, i1, ..., iN] is the totally antisymmetric invariant of SU(N) in the FUNDAMENTAL
@@ -790,11 +845,15 @@ NumTrace[net_, OptionsPattern[]] := Module[
      are rewritten into contractions with constant unit basis vectors FIRST, so that no integer
      Lorentz slot ever reaches the label machinery below. See expandFixedComponents. The unit
      vectors join the frame as ordinary momenta, so every existing frame builder stays untouched. *)
-  net2 = canonicalizeMomentumSigns @ expandFundEps @ expandFixedComponents[net];
+  net2 = canonicalizeMomentumSigns @ expandFundEps @ expandSpatialVecs @ expandFixedComponents[net];
   With[{bad = DeleteDuplicates @ Cases[net2, ntUnitVec[i_] :> i, {0, Infinity}]},
     If[! AllTrue[bad, IntegerQ[#] && 0 <= # <= 3 &],
       Message[NumTrace::fixcomp, Select[bad, ! (IntegerQ[#] && 0 <= # <= 3) &]]; Abort[]]];
   frame = Join[frame, unitVecFrame[net2]];
+  (* FINITE-T SPATIAL VECTORS (FormTracer's vecs) join the frame the same way, but AFTER the unit
+     vectors — a spatial vector's components are read off its parent's, so the parent must already
+     resolve. See expandSpatialVecs / spatialVecFrame. *)
+  frame = Join[frame, spatialVecFrame[net2, frame]];
 
   (* the top-level sum is the (linear) sum of DIAGRAMS; keep single-sector vertex sums eager
      via et::add, but distribute colour<->Lorentz-bridging sums so the two sectors never fuse
@@ -837,8 +896,9 @@ NumTrace[net_, OptionsPattern[]] := Module[
       DeleteDuplicates[Sort /@ frees]]];], " s"];
 
   (* global env layout: every distinct momentum, and which ones need a 1/q^2 slot *)
-  (* net2, not net: the unit basis vectors introduced by expandFixedComponents are ordinary
-     momenta and MUST get an env Base, or compileDirac's slash emission finds them absent. *)
+  (* net2, not net: the unit basis vectors introduced by expandFixedComponents — and the spatial
+     vectors introduced by expandSpatialVecs — are ordinary momenta and MUST get an env Base, or
+     compileDirac's slash emission finds them absent. *)
   allMom = DeleteDuplicates @ Cases[net2, f_?tensorQ :> momentumOf[f], Infinity] // DeleteCases[None];
   invMom = DeleteDuplicates @ Cases[net2, f_?(needsInvQ) :> momentumOf[f], Infinity];
   invSMom = DeleteDuplicates @ Cases[net2, f_?(needsInvSQ) :> momentumOf[f], Infinity];

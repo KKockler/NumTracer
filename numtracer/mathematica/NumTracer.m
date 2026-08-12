@@ -49,6 +49,8 @@ ntEpsFund::usage = "ntEpsFund[N, i1, ..., iN] -- the SU(N) FUNDAMENTAL Levi-Civi
 
 ntUnitVec::usage = "ntUnitVec[i] — the constant unit basis 4-vector e_i (i = 0..3, 0 = temporal/Matsubara). Not written by hand: NumTrace introduces it when it rewrites a FIXED-component Lorentz index (gamma^0 and friends, the finite-T 3+1 split used by the four-quark Fierz bases) into a contraction with e_i, and injects its components into the frame. A fixed-component gamma is therefore emitted as an ordinary slash.";
 
+ntSpatialVec::usage = "ntSpatialVec[q] — the SPATIAL part of momentum q as a momentum in its own right: components {0, q_1, q_2, q_3} (slot 0 = temporal/Matsubara). Not written by hand: FromFunKit introduces it for FormTracer's finite-T acronym vecs[q, mu], which becomes ntVec[ntSpatialVec[q], mu]. NumTrace pushes it through sums (it is linear) and injects the resulting components into the frame, so downstream it is an ORDINARY momentum leaf — in particular a spatial slash vecs[q,mu] gamma[mu,d1,d2] is emitted as an ordinary dslash and frameMask prunes its zero temporal component. Contrast ntSPS, the spatial scalar product, which is a scalar coefficient and needs no leaf.";
+
 ntTransProj::usage = "ntTransProj[q, mu, nu] — transverse projector P_{mu nu}(q) = delta - q_mu q_nu/q^2 (valid at finite T).";
 
 ntLongProj::usage = "ntLongProj[q, mu, nu] — longitudinal projector q_mu q_nu/q^2.";
@@ -70,12 +72,29 @@ ntSUNT::usage = "ntSUNT[N, a, i, j] — SU(N) fundamental generator (T^a)_{ij} (
 
 ntSUNDeltaFund::usage = "ntSUNDeltaFund[N, i, j] — SU(N) fundamental Kronecker delta_{ij} (rank N).";
 
-ntSUNDiagFund::usage = "ntSUNDiagFund[N, i, j, spec, scale] — a fundamental Kronecker delta_{ij} (rank N) carrying a PER-COMPONENT dressing. `spec` is a rules list {c1 -> name1, c2 -> name2, ..., Default -> defName}: `ci` are 1-based component indices (1..N) and `namei` are distinctly-named SCALAR dressing symbols evaluated at the kinematic `scale`; a Default -> defName rule dresses every unnamed component, and components with neither a rule nor a Default are DROPPED (contribute nothing). Folds (via sun_value_dressed) to Σ_i c_i name_i(scale) instead of the flavour-blind δ — this dresses e.g. the u- and d-quark differently WITHIN the SU(N) trace, no per-flavour diagram split. Each name is an ordinary scalar kernel dressing parameter.";
+ntSUNDiagFund::usage = "ntSUNDiagFund[N, i, j, spec] — a fundamental Kronecker delta_{ij} (rank N) carrying a PER-COMPONENT dressing. `spec` is a rules list {c1 -> expr1, c2 -> expr2, ..., Default -> defExpr}: `ci` are 1-based component indices (1..N) and each `expri` is a COMPLETE scalar dressing expression, kinematics included — e.g. {1 -> Zu[scale], 2 -> Zd[scale]}. A Default -> defExpr rule dresses every unnamed component, and components with neither a rule nor a Default are DROPPED (contribute nothing). Folds (via sun_value_dressed) to Σ_i c_i expr_i instead of the flavour-blind δ — this dresses e.g. the u- and d-quark differently WITHIN the SU(N) trace, no per-flavour diagram split. Each component may use its own scale. Kinematic heads (ntVec/ntSP/ntSPS) inside an expr are frame-resolved at kernel generation; a component that is a pure PROJECTOR rather than a carrier of physics is simply `c -> 1`.";
 
-ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, spec, scale] — an adjoint Kronecker delta^{ab} (rank N) carrying a PER-COMPONENT adjoint dressing. `spec` is a rules list {c1 -> name1, ..., Default -> defName} with 1-based component indices (1..N^2-1, e.g. 3 and 8 for the SU(3) Cartan/Gell-Mann directions) and distinctly-named scalar dressing symbols evaluated at `scale`; unnamed components collapse to Default when present, else drop. Folds to Σ_a c_a name_a(scale) — e.g. a gluon condensed along the Cartan directions (ntSUNDiagAdj[3, a, b, {3 -> A03, 8 -> A08}, scale]), the other 6 colours dropping out with no dead terms.";
+ntSUNDiagAdj::usage = "ntSUNDiagAdj[N, a, b, spec] — an adjoint Kronecker delta^{ab} (rank N) carrying a PER-COMPONENT adjoint dressing. `spec` is a rules list {c1 -> expr1, ..., Default -> defExpr} over the N^2-1 adjoint components, each `expri` a COMPLETE scalar dressing expression. This is how a gluon condensed along the Cartan is written (ntSUNDiagAdj[3, a, b, {3 -> A03[scale], 8 -> A08[scale]}]), the other 6 colours dropping out with no dead terms. Pinning a FIXED adjoint index uses the same head with `c -> 1`, since SUNFac has no pinned-index kind of its own.";
 
-ntUnitDressing::usage = "ntUnitDressing[scale] — the trivial dressing, identically 1. Used as the per-component entry of an ntSUNDiagFund/ntSUNDiagAdj that is meant as a pure PROJECTOR rather than a carrier of physics: keeping one component with ntUnitDressing and dropping the rest PINS that group index to a fixed value. This is how a fixed (numeric) adjoint index such as the Cartan generators T^3 / T^8 is represented, since SUNFac has no pinned-index kind of its own.";
-ntUnitDressing[_] := 1;
+
+(* The 5-argument (N, i, j, spec, scale) spelling is gone. Reject it AT CONSTRUCTION rather than
+   letting it reach the emitter: colFacG only runs at kernel-generation time, so a stale call would
+   otherwise survive NumTrace and fail much later, far from the line that wrote it. *)
+ntSUNDiagFund[n_, i_, j_, spec_, scale_] := (
+    Print["[NumTracer] ERROR: ntSUNDiagFund no longer takes a separate `scale`. Apply each dressing ",
+      "to its own kinematics in the spec:\n",
+      "    old:  ntSUNDiagFund[N, i, j, {1 -> Zu, 2 -> Zd}, scale]\n",
+      "    new:  ntSUNDiagFund[N, i, j, {1 -> Zu[scale], 2 -> Zd[scale]}]\n",
+      "  (a pure projector component is now `c -> 1`, not `c -> ntUnitDressing`.)"];
+    Abort[]);
+
+ntSUNDiagAdj[n_, a_, b_, spec_, scale_] := (
+    Print["[NumTracer] ERROR: ntSUNDiagAdj no longer takes a separate `scale`. Apply each dressing ",
+      "to its own kinematics in the spec:\n",
+      "    old:  ntSUNDiagAdj[N, a, b, {3 -> A03, 8 -> A08}, scale]\n",
+      "    new:  ntSUNDiagAdj[N, a, b, {3 -> A03[scale], 8 -> A08[scale]}]\n",
+      "  (a pure projector component is now `c -> 1`, not `c -> ntUnitDressing`.)"];
+    Abort[]);
 
 ntSP::usage = "ntSP[q1, q2] — Lorentz scalar product q1.q2 (a scalar coefficient).";
 

@@ -25,6 +25,7 @@ gen_discdirac_numeric	3
 gen_flavour_ingroup	2
 gen_flavour_split	4
 gen_ftproj_numeric	3
+gen_emvertex_numeric	10,3,9
 gen_glu_quark	2
 gen_gluon_condensate	2,2,2
 gen_pion_quark	2

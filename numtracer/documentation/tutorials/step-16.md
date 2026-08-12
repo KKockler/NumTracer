@@ -65,10 +65,44 @@ and wrong everywhere else.
 | `ntElectricProj[q, mu, nu]` | $P^E$ — needs both the full and the spatial atom |
 | `ntMagneticProj[q, mu, nu]` | $P^M$ — needs only the spatial atom |
 | `ntSPS[a, b]` | the **spatial** scalar product $\vec a\cdot\vec b = a\cdot b - a_0 b_0$ |
+| `ntSpatialVec[q]` | the **spatial vector** $\bar q = \{0, q_1, q_2, q_3\}$ — a momentum, not a scalar |
 | `ntVec[q, 0]` | an **integer** second argument: the *scalar* component $q_0$ (e.g. $\pi T$) |
 | `propFrameFT[p0, p, l0, l1, cos1, …]` | a frame with independent temporal slots |
 
 In the C++ engine these are `nprojE` and `nprojM`, each carrying the relevant atom ids.
+
+### The spatial *vector* — and the spatial pslash
+
+FormTracer's finite-$T$ vocabulary has two spatial objects, and they are not interchangeable:
+`sps[a, b]` (a scalar) and `vecs[q, mu]` (a vector). `FromFunKit` maps them to `ntSPS` and to
+`ntVec[ntSpatialVec[q], mu]` respectively.
+
+`ntSpatialVec[q]` is **engine-introduced** — you do not write it by hand any more than you write
+`ntUnitVec`. It is an ordinary momentum whose frame components are the parent's with slot 0 zeroed,
+and that single fact is the whole implementation: `NumTrace` pushes it through sums (it is linear,
+so `vecs[p-l, mu]` becomes $\bar p - \bar l$ rather than a third momentum) and injects the components
+into the frame next to the unit basis vectors.
+
+The payoff is the **spatial pslash**, which is how a finite-$T$ quark line is written:
+
+```wl
+(* vecs[p, mu] gamma[mu, d1, d2]  —  the FormTracer form *)
+ntGamma[mu, d1, d2] ntVec[ntSpatialVec[pp], mu]
+```
+
+This needs no new engine token: a $\gamma$ whose Lorentz index carries an `ntVec` **is** a slash, so
+it is emitted as an ordinary `dslash` against a different momentum. FormTracer's one-argument
+shorthand `gamma[..., vecs[p], ...]` is expanded to the two-argument form by `FromFunKit` before
+anything else looks at it.
+
+```{admonition} `sps` is a coefficient, `vecs` is a leg
+:class: important
+`ntSPS[a, b]` never reaches the engine — `scalarQ` classifies it as a scalar and the frame folds it
+into the diagram coefficient. `ntSpatialVec` does reach the engine, as a momentum with its own env
+`Base`. The codegen gate `gen_spatialvec_numeric.wls` pins them against each other: one of its nets
+is the identity $\mathrm{tr}(\bar{p}\!\!\!/\,\bar{l}\!\!\!/) = 4\,\texttt{sps}(p,l)$, i.e. the two
+implementations of "spatial" required to agree.
+```
 
 ```{admonition} `ntVec[q, mu]` versus `ntVec[q, 0]`
 :class: important

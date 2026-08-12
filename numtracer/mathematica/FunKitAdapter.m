@@ -53,7 +53,15 @@ $ffMap = <|
      (components 1..3) of the momenta. FunKit's component access vec[q, 0] (a literal integer index)
      rides the "vec" -> ntVec map above and is routed to the scalar temporal component q_0 by the
      integer-index classification in DSL.m — no special rule needed here. *)
-  "sps" -> ntSPS
+  "sps" -> ntSPS,
+  (* finite-T spatial VECTOR vecs[q, mu] = the spatial part of q as a 4-vector ({0, q_1, q_2, q_3}).
+     Unlike sps — a scalar the frame folds into the coefficient — this is a genuine tensor LEG, so it
+     needs a momentum of its own: ntSpatialVec[q], which NumTrace pushes through sums and hands to
+     the frame with the temporal slot zeroed (DSL.m expandSpatialVecs / spatialVecFrame). The whole
+     point is that nothing downstream has to know: a SPATIAL SLASH vecs[q,mu] gamma[mu,d1,d2] — the
+     dominant use, and what FormTracer's gamma[..., vecs[q], ...] shorthand expands to
+     (FormTracer.m:1362) — is then an ordinary dslash against a different momentum. *)
+  "vecs" -> (ntVec[ntSpatialVec[#1], #2] &)
 |>;
 
 (* The SU(N) group tokens, mapped to the N-parameterized heads with the group rank `n` injected
@@ -95,7 +103,7 @@ ntCartanComponent[n_, a_] := Module[{m = Position[Table[k^2 - 1, {k, 2, n}], a]}
 ntSUNTPinnable[n_][a_, i_, j_] :=
   If[IntegerQ[a],
     With[{lbl = Unique["ntCartan$"], comp = ntCartanComponent[n, a]},
-      ntSUNT[n, lbl, i, j] ntSUNDiagAdj[n, lbl, lbl, {comp -> ntUnitDressing}, 0]],
+      ntSUNT[n, lbl, i, j] ntSUNDiagAdj[n, lbl, lbl, {comp -> 1}]],
     ntSUNT[n, a, i, j]];
 
 sunMap[nc_, nf_] := <|
@@ -132,7 +140,11 @@ sunMap[nc_, nf_] := <|
    perfectly well-defined. *)
 (* FunKit's DECLARED head vocabulary (ShowFormTracerDefinitions[]). The closed-world list the guard
    in FromFunKit checks against: every one of these must be mapped, or refused on purpose. *)
-$funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "sp", "sps",
+(* NOTE `vecs` is listed even though it IS mapped. That is the point of the list: it is the
+   closed-world guard, and a token that is absent from it is not merely unmapped but INVISIBLE to
+   the guard below — which is exactly how vecs used to reach the emitted C++ as an opaque scalar.
+   Every finite-T token FormTracer declares (FormTracer.m:62) must appear here, mapped or refused. *)
+$funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "vecs", "sp", "sps",
   "deltaDirac", "gamma", "gamma5", "sigma", "transProj", "longProj",
   "transProjElectric", "transProjMagnetic",
   "deltaAdjCol", "deltaFundCol", "FCol", "TCol", "epsAdjCol", "epsFundCol",
@@ -164,6 +176,20 @@ Aborting rather than guessing: a rank/arity mismatch would silently contract aga
 group.";
 adjEps[n_, idx__] := If[n === 2 && Length[{idx}] === 3, ntSUNf[2, idx],
   Message[FromFunKit::epsadj, n, Length[{idx}], n^2 - 1]; Abort[]];
+
+(* ---- the ONE-ARGUMENT slash shorthand --------------------------------------------------------
+   FormTracer accepts a slashed momentum written inside the gamma string — gamma[..., vecs[p], ...]
+   and gamma[..., vec[p], ...], with no Lorentz index — and expands it itself (FormTracer.m:1362,
+   1375). So this normally never reaches us. But the expansion is gated on finiteTenabled for the
+   vecs form, and FunKit's TRACY back-translation (modules/TRACY/Tools.m:95) reconstructs the tokens
+   textually from FORM output, so a shorthand CAN survive. Left alone it would hand ntGamma a nested
+   head in a Lorentz slot: labelsOf returns that whole subexpression as a "label", and the failure
+   surfaces far away. Expand it here, in the token vocabulary, before anything else looks.
+   Dispatch on the head NAME for the same reason the main map does — the FunKit heads live in
+   contexts that need not be on $ContextPath when this file loads. *)
+expandSlashShorthand[e_] := e //. (g_Symbol)[a___, (v_Symbol)[p_], b___] /;
+    SymbolName[g] === "gamma" && MemberQ[{"vec", "vecs"}, SymbolName[v]] :>
+  With[{mu = Unique["ffslash$"]}, v[p, mu] g[a, mu, b]];
 
 (* Contract the flavour Kronecker deltas: their indices are disjoint from every tensor
    sector, so a chain collapses (delta[x,y] delta[y,z] -> delta[x,z]) and a closed loop
@@ -201,7 +227,7 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, re
      presence of TFlav, so flavour-blind flows (Zq/ZA/ZAqbq1/4/7, ...) are byte-identical. *)
   hasIso = ! FreeQ[expr, Global`TFlav];
   If[hasIso, map["deltaFundFlav"] = (ntSUNDeltaFund[nf, ##] &)];
-  isoRewritten = If[hasIso,
+  isoRewritten = expandSlashShorthand @ If[hasIso,
     expr //. {Global`TFlav[0, f1_, f2_] :> ntSUNDeltaFund[nf, f1, f2]/Sqrt[2 Global`Nf],
               Global`TFlav[a_, f1_, f2_]  :> ntSUNT[nf, a, f1, f2]},
     expr];

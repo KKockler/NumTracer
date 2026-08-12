@@ -59,7 +59,7 @@ Open-index tensor heads, native to NumTracer but mirroring the FunKit/FormTracer
 | `ntSUNf[N, a, b, c]` | SU(N) structure constant $f^{abc}$ (rank $N$) |
 | `ntSUNT[N, a, i, j]` | SU(N) fundamental generator $(T^a)_{ij}$ |
 | `ntSUNDeltaAdj[N, a, b]` / `ntSUNDeltaFund[N, i, j]` | SU(N) adjoint / fundamental $\delta$ |
-| `ntSUNDiagFund[N, i, j, spec, s]` / `ntSUNDiagAdj[N, a, b, spec, s]` | group-diagonal $\delta$ dressing selected components via a rules-list `spec` |
+| `ntSUNDiagFund[N, i, j, spec]` / `ntSUNDiagAdj[N, a, b, spec]` | group-diagonal $\delta$ dressing selected components via a rules-list `spec` |
 | `ntSP[q1, q2]` / `ntDress[h, args]` | scalar coefficients (dot product, opaque dressing) |
 
 The SU(N) heads are one $N$-parameterized family (rank $N$ first), so colour SU($N_c$) and

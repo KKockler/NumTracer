@@ -43,12 +43,13 @@ expr = fRG["1-Loop"]["Expression"];
 
 (* hand-rolled rules. The Yukawa vertex carries a FLAVOUR-blind δ (deltaFundFlav, a plain rank-2
    fundamental Kronecker emitted directly as the NumTracer head). Each quark propagator / Rdot
-   insertion carries a FLAVOUR-DIAGONAL dressing ntSUNDiagFund[2, f1, f2, {1 -> nmU, 2 -> nmD},
+   insertion carries a FLAVOUR-DIAGONAL dressing ntSUNDiagFund[2, f1, f2, {1 -> nmU[scale], 2 -> nmD[scale]}],
    scale] — 1-based flavour components (u=1, d=2) with distinctly-named scalar dressings, in place of
    the flavour-blind δ × scalar dressing of flow_flavour_split. Both components named (nothing drops).
    Colour (deltaFundCol) and Dirac (gamma5/gamma) are unchanged. *)
 dFlav[fb_, f_] := NumTracer`ntSUNDeltaFund[2, fb, f];
-diagFlav[fb_, f_, nmU_, nmD_, m_] := NumTracer`ntSUNDiagFund[2, fb, f, {1 -> nmU, 2 -> nmD}, Sqrt[sp[m, m]]];
+diagFlav[fb_, f_, nmU_, nmD_, m_] := With[{s = Sqrt[sp[m, m]]},
+  NumTracer`ntSUNDiagFund[2, fb, f, {1 -> nmU[s], 2 -> nmD[s]}]];
 myRules = {
   GammaN[{sig, qb, q}, {{_}, {_, {dqb_, cqb_, fqb_}}, {_, {dq_, cq_, fq_}}}] :>
     I gamma5[dqb, dq] deltaFundCol[cqb, cq] dFlav[fqb, fq],

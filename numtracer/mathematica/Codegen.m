@@ -333,20 +333,32 @@ resetDiagDr[] := (
     $diagDrByKey = <||>;
     $diagDrCounter = 0;);
 
-diagDrId[name_, scale_] := Module[{key = {name, scale}},
+(* A component's dressing is a COMPLETE expression — whatever the caller wrote, kinematics and all.
+   It is interned here and frame-resolved at emission; nothing is applied to it on the way out.
+
+   This used to be a (name, scale) PAIR, with the emitter forming `name[resolvedScale]`. That split
+   bought nothing and cost the caller a contract to remember: the name had to be a bare symbol with
+   a downvalue, one scale was forced on every component, and writing the natural `f[scale]` inline
+   produced a silent double application. Neither of the things it appeared to buy was real —
+   `resolveScale` is a rule replacement that finds ntVec/ntSPS anywhere in an expression, and the
+   k-only hoist scans the finished integrand rather than this table, so both work identically on an
+   already-applied expression. Callers now write `{1 -> Zu[scale], 2 -> Zd[scale]}`, and may give
+   each component a different scale. *)
+
+diagDrId[expr_] := Module[{key = expr},
     If[!KeyExistsQ[$diagDrByKey, key],
       $diagDrByKey[key] = $diagDrCounter;
-      $diagDrTable[$diagDrCounter] = <|"Name" -> name, "Scale" -> scale|>;
+      $diagDrTable[$diagDrCounter] = <|"Expr" -> expr|>;
       $diagDrCounter++];
     $diagDrByKey[key]];
 
 (* Parse a diag-dressing spec into a per-component id vector of length `dim` (component 0..dim-1;
-   1-based physics index = v+1). Named components get diagDrId[name, scale]; a Default -> name rule
+   1-based physics index = v+1). Named components get diagDrId[expr]; a Default -> expr rule
    fills the rest; unmatched components are -1 (dropped). *)
 
-diagComp2Dr[spec_, scale_, dim_] := Module[{rules = Flatten[{spec}], named, def},
-    named = Association[Cases[rules, (c_Integer -> nm_) :> (c -> diagDrId[nm, scale])]];
-    def = Cases[rules, (Default -> nm_) :> diagDrId[nm, scale]];
+diagComp2Dr[spec_, dim_] := Module[{rules = Flatten[{spec}], named, def},
+    named = Association[Cases[rules, (c_Integer -> nm_) :> (c -> diagDrId[nm])]];
+    def = Cases[rules, (Default -> nm_) :> diagDrId[nm]];
     def =
       If[def === {},
         -1,
@@ -919,11 +931,22 @@ colFacG[ntSUNDeltaFund[n_, i_, j_], ids_] :=
 (* per-component diagonal dressings: parse the spec into a per-component dressing-id vector
    (component → dr, -1 = drop; 1-based physics indices) and emit a diag factor carrying it. *)
 
-colFacG[ntSUNDiagFund[n_, i_, j_, spec_, scale_], ids_] :=
-  "sun" <> ToString[n] <> ".diagFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n]] <> ")";
+colFacG[ntSUNDiagFund[n_, i_, j_, spec_], ids_] :=
+  "sun" <> ToString[n] <> ".diagFund(" <> ToString[ids[i]] <> "," <> ToString[ids[j]] <> "," <> diagVecStr[diagComp2Dr[spec, n]] <> ")";
 
-colFacG[ntSUNDiagAdj[n_, a_, b_, spec_, scale_], ids_] :=
-  "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, scale, n^2 - 1]] <> ")";
+colFacG[ntSUNDiagAdj[n_, a_, b_, spec_], ids_] :=
+  "sun" <> ToString[n] <> ".diagAdj(" <> ToString[ids[a]] <> "," <> ToString[ids[b]] <> "," <> diagVecStr[diagComp2Dr[spec, n^2 - 1]] <> ")";
+
+(* The 5-argument spelling is gone. Catch it explicitly: without this it would fall through to the
+   colleak catch-all below and report an unlowerable colour factor, which says nothing about the
+   actual cause. *)
+colFacG[(h : ntSUNDiagFund | ntSUNDiagAdj)[n_, i_, j_, spec_, scale_], _] := (
+    Print["[NumTracer] ERROR: ", h, " no longer takes a separate `scale`. Apply each dressing to ",
+      "its own kinematics in the spec instead:\n",
+      "    old:  ", h, "[N, i, j, {1 -> Zu, 2 -> Zd}, scale]\n",
+      "    new:  ", h, "[N, i, j, {1 -> Zu[scale], 2 -> Zd[scale]}]\n",
+      "  (a pure projector component is now simply `c -> 1`, not `c -> ntUnitDressing`.)"];
+    Abort[]);
 
 (* CATCH-ALL, and it must stay LAST: the six rules above are the only lowerable colour factors.
    Without this a non-matching factor returns UNEVALUATED and StringRiffle happily ToString's it
@@ -1566,7 +1589,19 @@ compileDirac[factors_, ids_, env_, mask_, nc_] := Module[
    (returned as a unit `group`), so its 1/l² atom cancels — exactly like inv's `rel`. Externals depend
    only on `p` (kept as the numeric p-vector). The loop is the momentum whose components carry `magSym`. *)
 
-unitLoopFrameSpec[frame_, pSym_, magSym_] := Module[{defs = <||>, groups = {}, n = 0, nf},
+(* SPATIAL VECTORS (ntSpatialVec[q], from FormTracer's vecs) are NOT independent momenta: their
+   components are the parent's with the temporal slot zeroed. Minting them a unit group of their own
+   would be numerically correct — defs gives the duplicate ntU$ symbols the parent's very values —
+   but it hides the identity from reduce_units, so cross terms like l·l̄ never collapse against the
+   parent's Σ U² = 1 and the traces grow for nothing. Hold them out of the classification and derive
+   them from the finished parent components instead. With no spatial vector in the frame every step
+   below is a no-op, so existing kernels are untouched (Select, not Complement, everywhere — the key
+   ORDER fixes the ntU$ numbering, and Complement would sort it). *)
+spatialVecKeysOf[frame_] :=
+  Select[Keys[frame], MatchQ[#, _ntSpatialVec] && KeyExistsQ[frame, First[#]] &];
+
+unitLoopFrameSpec[frame_, pSym_, magSym_] := Module[{defs = <||>, groups = {}, n = 0, nf, svKeys},
+    svKeys = spatialVecKeysOf[frame];
     nf =
       Association @
         KeyValueMap[
@@ -1590,7 +1625,8 @@ unitLoopFrameSpec[frame_, pSym_, magSym_] := Module[{defs = <||>, groups = {}, n
                       {mu, 1, 4}];
                   AppendTo[groups, grp];
                   nc]]],
-          frame];
+          KeyDrop[frame, svKeys]];
+    nf = Join[nf, Association[(# -> ReplacePart[nf[First[#]], 1 -> 0]) & /@ svKeys]];
     {nf, defs, groups}];
 
 (* General frame -> {polyFrame, defs}: replace the trig sub-expressions in the frame components with
@@ -1702,16 +1738,20 @@ unitLoopMixedOkQ[frame_, magSym_] :=
       AllTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym] || FreeQ[#, magSym])&]];
 
 unitLoopMixedFrameSpec[frame_, magSym_] := Module[
-    {loopQ, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS},
+    {loopQ, svKeys, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS},
     loopQ[comps_] := Module[{cc = PowerExpand[comps]},
       AllTrue[Range[4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&]];
-    loopKeys = Select[Keys[frame], loopQ[frame[#]]&];
-    spatKeys = Select[Keys[frame], (!MemberQ[loopKeys, #] && unitLoopSpatialQ[frame[#], magSym])&];
+    (* spatial vectors are derived from their parent at the end, never classified — see
+       spatialVecKeysOf. Held out of loopKeys/spatKeys/extFrame so they mint nothing of their own. *)
+    svKeys   = spatialVecKeysOf[frame];
+    loopKeys = Select[Keys[frame], !MemberQ[svKeys, #] && loopQ[frame[#]]&];
+    spatKeys = Select[Keys[frame],
+      (!MemberQ[svKeys, #] && !MemberQ[loopKeys, #] && unitLoopSpatialQ[frame[#], magSym])&];
     (* externals — AND the spatial loops' temporal components — go through polyFrameSpec's
        sin/cos/radical minting, verbatim: a spatial loop is handed in as {l0, 0, 0, 0} so its
        temporal coordinate gets exactly the same treatment an external's would. *)
     extFrame = Join[
-      KeyDrop[frame, Join[loopKeys, spatKeys]],
+      KeyDrop[frame, Join[loopKeys, spatKeys, svKeys]],
       Association @ Map[# -> {PowerExpand[frame[#]][[1]], 0, 0, 0}&, spatKeys]];
     {pf, defs} = polyFrameSpec[extFrame];
     (* full loops: comp_μ = magSym · ntU$n, one unit group per loop — unitLoopFrameSpec's treatment *)
@@ -1758,7 +1798,13 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
                 AppendTo[groups, grp];
                 ncomp]],
           spatKeys];
-    {Join[KeyDrop[pf, spatKeys], nf, nfS], defs, groups}];
+    (* spatial vectors LAST, off the finished components: whatever treatment the parent got — a
+       polyFrameSpec external, a full unit loop, or a spatial unit loop — the spatial vector is that
+       same component list with the temporal slot zeroed, sharing the parent's ntU$ symbols and its
+       unit group. No new symbol, no new group. *)
+    With[{done = Join[KeyDrop[pf, spatKeys], nf, nfS]},
+      {Join[done, Association[(# -> ReplacePart[done[First[#]], 1 -> 0]) & /@ svKeys]],
+       defs, groups}]];
 
 (* Whether `frame` matches the unit-loop spec's assumption: every momentum is either an external
    depending only on `pSym`, or a loop whose every component is `dir·magSym` (proportional to the
@@ -3787,7 +3833,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                           Times @@
                             (
                               Function[dr,
-                                  $diagDrTable[dr]["Name"][resolveScale[$diagDrTable[dr]["Scale"]]]
+                                  resolveScale[$diagDrTable[dr]["Expr"]]
                                 ] /@ term[[3]]))
                     ] /@ p];
               colourNets[[d]] = "SUNNet{}"],
@@ -3816,7 +3862,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    The FACTOR nets (P, indices in factorNets) are EXCLUDED from the additive groups and appended as
    their own singleton trace groups at the tail of g — generated as traces but referenced only
    multiplicatively via lorFac, never summed into the integrand. nAdd marks the additive/factor
-   boundary; pGroupOf maps a P net (0-based) to its (0-based) trace-group ordinal. *)
+   boundary; pGroupOf maps a factor COMPONENT id to the list of {colour token, (0-based) trace-group
+   ordinal} pairs it was split into — one per distinct token, see the GatherBy below. *)
       Module[{adj, fund, additivePos, factorPos = (# + 1)& /@ factorNets, gAdd, gFactor},
         additivePos = Complement[Range[Length[diagData]], factorPos];
         adj = Select[additivePos, colToks[[#]] === "" && diagTokExpr[[#]] === 1 && lorFacOf[[#]] === None&];
@@ -3824,10 +3871,27 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         gAdd = Join[(# - 1)& /@ GatherBy[adj, diagData[[#]]&], List /@ (fund - 1)];
 (* each disconnected factor COMPONENT (possibly several colour-branch nets) fuses into ONE trace
    group, so its group trace = the component scalar (colour folded by the group sum). *)
-        gFactor = GatherBy[factorNets, factorCompOf[#]&];(* factorNets are 0-based net indices *)
+(* Gather by {component, COLOUR TOKEN}, not by component alone. A factor group's trace is the SUM
+   over its entries, and a diag-dressed entry carries a per-entry runtime colour-sum token — which
+   the assembly below can only apply to a whole group. Grouping by component alone therefore had
+   nowhere to put a factor entry's token and DROPPED it silently: the anchor multiplies in only its
+   OWN diagTokExpr, never its factor components'. (Measured on the A_0 quark propagator of
+   finite_T/QCD_Nf2/no_mesons: Zq lost 30 of 30 dressed nets, ZA 40 of 48.) Splitting the component
+   by token instead makes each subgroup single-token, so the component scalar is recovered exactly as
+       Σ_t token_t · traceRef[subgroup_t]     ( = Σ_entries token_e · trace_e )
+   with the token factored OUT of each subgroup's trace. Entries sharing a token still share one
+   trace, so a component with a single token (every undressed flow: all tokens are 1) yields exactly
+   the one group it did before, in the same order — GatherBy is stable and a constant second key
+   cannot regroup or reorder. Undressed kernels are byte-identical. *)
+        gFactor = GatherBy[factorNets, {factorCompOf[#], diagTokExpr[[# + 1]]}&];(* factorNets are 0-based net indices *)
         g = Join[gAdd, gFactor];
         nAdd = Length[gAdd];
-        pGroupOf = Association[MapIndexed[(factorCompOf[#1[[1]]] -> (nAdd + #2[[1]] - 1))&, gFactor]]];
+(* One component now maps to a LIST of {token, group ordinal} pairs, one per distinct token. *)
+        pGroupOf = Merge[
+            MapIndexed[
+                (factorCompOf[#1[[1]]] -> {diagTokExpr[[#1[[1]] + 1]], nAdd + #2[[1]] - 1})&,
+                gFactor],
+            Identity]];
 (* GlobalCollect folds ALL colour numerically (colToks all empty above), so this groups EVERY
    diagram by its dressing coefficient — the quark-loop colour channels that the legacy path kept
    as fundamental singletons now MERGE into their Feynman graph, collapsing the trace count toward
@@ -3847,7 +3911,11 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
               ] * diagTokExpr[[rep + 1]] *
               If[lorFacOf[[rep + 1]] === None,
                 1,
-                Times @@ (traceRef[pGroupOf[#]]& /@ lorFacOf[[rep + 1]])
+(* Each factor component contributes Σ_t token_t · traceRef[subgroup_t]; with one token (the
+   undressed case) this is the bare traceRef it always was, since token_t == 1. *)
+                Times @@ (
+                  Function[cid, Total[(First[#] traceRef[Last[#]])& /@ pGroupOf[cid]]] /@
+                    lorFacOf[[rep + 1]])
               ] * traceRef[gi - 1]],
           {gi, nAdd}]];
 (* ---- k-only dressing-lookup hoisting ("HoistLoopConstLookups") -----------------------------

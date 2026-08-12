@@ -46,6 +46,7 @@ $\sum_{\text{diagrams}}\text{coeff}\times\text{trace}$ shape again.
 | `ntElectricProj[q, mu, nu]` | finite-$T$ $P^E = P^T - P^M$ | [step-16](step-16.md) |
 | `ntMagneticProj[q, mu, nu]` | finite-$T$ spatial-transverse $P^M$ | [step-16](step-16.md) |
 | `ntUnitVec[i]` | constant unit basis vector $e_i$ — **engine-introduced**, not written by hand | [step-19](step-19.md) |
+| `ntSpatialVec[q]` | the *spatial part* of $q$ as a momentum, $\{0, q_1, q_2, q_3\}$ — **engine-introduced** from FormTracer's `vecs` | [step-16](step-16.md) |
 | **Dirac** | | |
 | `ntGamma[mu, din, dout]` | $\gamma^\mu$ with a Lorentz axis and two spinor axes | below |
 | `ntGamma5[din, dout]` | $\gamma_5$ | extensions |
@@ -56,8 +57,8 @@ $\sum_{\text{diagrams}}\text{coeff}\times\text{trace}$ shape again.
 | `ntSUNf[N, a, b, c]` | structure constant $f^{abc}$ | below |
 | `ntSUNDeltaFund[N, i, j]` | fundamental $\delta_{ij}$ | extensions |
 | `ntSUNDeltaAdj[N, a, b]` | adjoint $\delta^{ab}$ | extensions |
-| `ntSUNDiagFund[N, i, j, spec, scale]` | fundamental $\delta$ with a **per-component dressing** | [step-17](step-17.md) |
-| `ntSUNDiagAdj[N, a, b, spec, scale]` | adjoint $\delta$ with a per-component dressing | [step-17](step-17.md) |
+| `ntSUNDiagFund[N, i, j, spec]` | fundamental $\delta$ with a **per-component dressing** | [step-17](step-17.md) |
+| `ntSUNDiagAdj[N, a, b, spec]` | adjoint $\delta$ with a per-component dressing | [step-17](step-17.md) |
 | `ntEpsFund[N, i1, …, iN]` | fundamental Levi-Civita; contracted in **pairs** into $\delta$ determinants, never reaches C++ | extensions |
 | **Scalars** | | |
 | `ntSP[a, b]` | scalar product $a\cdot b$ | below |

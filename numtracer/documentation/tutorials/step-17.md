@@ -135,25 +135,28 @@ The last line of block B is the one that costs nothing to check and would be exp
 ## The front-end spelling
 
 ```mathematica
-ntSUNDiagFund[N, i, j, spec, scale]
-ntSUNDiagAdj [N, a, b, spec, scale]
+ntSUNDiagFund[N, i, j, spec]
+ntSUNDiagAdj [N, a, b, spec]
 ```
 
 `spec` is a **rules list** with 1-based component indices:
 
 ```mathematica
 (* u and d dressed differently inside one SU(2) flavour trace *)
-ntSUNDiagFund[2, i, j, {1 -> Zu, 2 -> Zd}, scale]
+ntSUNDiagFund[2, i, j, {1 -> Zu[scale], 2 -> Zd[scale]}]
 
 (* a gluon condensed along the SU(3) Cartan; the other six colours drop out with no dead terms *)
-ntSUNDiagAdj[3, a, b, {3 -> A03, 8 -> A08}, scale]
+ntSUNDiagAdj[3, a, b, {3 -> A03[scale], 8 -> A08[scale]}]
 ```
 
 Three details:
 
-* Each `namei` is an ordinary **scalar dressing parameter**, evaluated at the kinematic `scale` —
-  the same opaque-callable mechanism as [step-08](step-08.md).
-* A `Default -> defName` rule dresses every unnamed component.
+* Each `expri` is a **complete scalar dressing expression**, applied to its own kinematics by the
+  caller — the same opaque-callable mechanism as [step-08](step-08.md). Components may use different
+  scales. Kinematic heads (`ntVec`/`ntSP`/`ntSPS`) inside an `expri` are frame-resolved at kernel
+  generation, so they expand per diagram.
+* A `Default -> defExpr` rule dresses every unnamed component. A pure PROJECTOR component — one
+  that pins an index rather than carrying physics — is simply `c -> 1`.
 * Components with **neither a rule nor a `Default` are dropped**. That is a convenience and a trap:
   a typo in a component index silently removes that component instead of erroring.
 

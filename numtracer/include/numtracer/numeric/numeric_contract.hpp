@@ -56,7 +56,13 @@ namespace numtracer::numeric
   /// move-assignment and copy the vlc vector on every reallocation); the nXxx() builders are the only
   /// constructors, so the values are still effectively immutable in practice.
   struct NElem {
-    enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM };
+    enum Kind { Metric, Vector, Epsilon, ProjT, ProjL, ProjE, ProjM,
+                // Rank-1 pieces of the MAGNETIC projector, produced only by expand_magnetic
+                // (never by the network front-end, so elem_to_nelem has no case for them):
+                //   TimeSq    = u_a u_b            (u = heat-bath direction, component 0)
+                //   SpatialSq = k_a k_b * INVS(k)  (spatial components only)
+                // together with a plain Metric they spell P_M = delta - u(x)u - k_s(x)k_s/|k|^2.
+                TimeSq, SpatialSq };
     Kind kind = Metric;
     int a = 0, b = 0, c = 0, d = 0;
     std::vector<std::pair<double, int>> vlc; ///< momentum (Vector leg, or any projector's `k`)
@@ -504,6 +510,22 @@ namespace numtracer::numeric
             if (i > 0 && j > 0) mag = mag - (k[i] * k[j]) * atS; // P_M entry
             F.v[i * 4 + j] = full - mag;
           }
+      } else if (el.kind == NElem::TimeSq || el.kind == NElem::SpatialSq) {
+        // Dense fallback for the self-contracted (a == b) case; the split form lives in
+        // push_elem_factors. Spelled out rather than left to the Levi-Civita `else` below, which
+        // would silently return a rank-4 epsilon for a rank-2 element.
+        F.ids = {el.a, el.b};
+        F.v.assign(16, MPolyFactory::zero(nsym));
+        const auto k = mom_components(nsym, el.vlc, comp);
+        if (el.kind == NElem::TimeSq) {
+          F.v[0] = MPolyFactory::constant(nsym, Cx{1., 0});
+        } else {
+          const MPoly atS = MPolyFactory::atom(nsym, el.atomS);
+          for (int i = 1; i < 4; ++i)
+            for (int j = 1; j < 4; ++j)
+              F.v[static_cast<std::size_t>(i * 4 + j)] =
+                  k[static_cast<std::size_t>(i)] * k[static_cast<std::size_t>(j)] * atS;
+        }
       } else { // Levi-Civita ε_{a,b,c,d}
         F.ids = {el.a, el.b, el.c, el.d};
         F.v.assign(256, MPolyFactory::zero(nsym));
@@ -554,6 +576,31 @@ namespace numtracer::numeric
       }();
       // atomS must be a real id with a filled denominator; a malformed net falls back to dense
       // rather than silently building a wrong factor.
+      // The two magnetic pieces (expand_magnetic) are rank-1 by construction and always split; a
+      // self-contracted one (a == b) is a trace and falls through to the dense builder.
+      if ((el.kind == NElem::TimeSq || el.kind == NElem::SpatialSq) && el.a != el.b) {
+        const auto k = mom_components(nsym, el.vlc, comp);
+        Factor A, B;
+        A.ids = {el.a};
+        B.ids = {el.b};
+        A.v.reserve(4);
+        B.v.reserve(4);
+        const bool spatial = (el.kind == NElem::SpatialSq);
+        const MPoly atS = spatial ? MPolyFactory::atom(nsym, el.atomS) : MPolyFactory::zero(nsym);
+        for (int i = 0; i < 4; ++i) {
+          const std::size_t u = static_cast<std::size_t>(i);
+          // TimeSq: u = (1,0,0,0).  SpatialSq: (0, k1, k2, k3), with 1/|k⃗|² on one leg only.
+          MPoly a = spatial ? (i == 0 ? MPolyFactory::zero(nsym) : k[u] * atS)
+                            : (i == 0 ? MPolyFactory::constant(nsym, Cx{1., 0}) : MPolyFactory::zero(nsym));
+          MPoly b = spatial ? (i == 0 ? MPolyFactory::zero(nsym) : k[u])
+                            : (i == 0 ? MPolyFactory::constant(nsym, Cx{1., 0}) : MPolyFactory::zero(nsym));
+          A.v.push_back(std::move(a));
+          B.v.push_back(std::move(b));
+        }
+        out.push_back(std::move(A));
+        out.push_back(std::move(B));
+        return;
+      }
       const bool canSplit = rank1E && el.kind == NElem::ProjE && el.a != el.b && el.atom >= 0 &&
                             el.atomS >= 0 && static_cast<std::size_t>(el.atomS) < atomDen.size();
       if (!canSplit) {
@@ -579,6 +626,82 @@ namespace numtracer::numeric
       }
       out.push_back(std::move(A));
       out.push_back(std::move(B));
+    }
+
+    /// @brief Rewrite each MAGNETIC projector in one term as three rank-reduced pieces, expanding
+    ///        the term into 3^m terms (m = number of ProjM elements). Opt-in: `NT_RANK1_PROJM=1`.
+    ///
+    ///     P_M = delta - u (x) u - k_s (x) k_s * INVS(k)
+    ///
+    /// (check the corners: at (0,0) it is 1 - 1 - 0 = 0, and P_M has no temporal row; at (i,j) it is
+    /// delta_ij - k_i k_j/|k|^2, which is P_M.) Two of the three pieces are rank-1 and therefore cut
+    /// the network at that line, the same separator win @ref push_elem_factors gets for the electric
+    /// projector; the third is a bare metric, the cheapest two-index factor there is.
+    ///
+    /// NOT `P_M = P_T - P_E`, which is the obvious identity and is NOT AVAILABLE here: `nprojM`
+    /// carries `atom = -1`, i.e. a magnetic line has no `1/k^2` atom at all (only `1/|k|^2`), and
+    /// `P_T` needs one. Manufacturing it would mean allocating a new atom id and extending the
+    /// `atomDen` table, which is built upstream and shared across every trace.
+    ///
+    /// OFF BY DEFAULT: **MEASURED A LOSS** on SP_EM ZA4 (2026-08-11), and by a wide margin.
+    ///
+    ///   |                          | emitted SSA | generation |
+    ///   |--------------------------|------------:|-----------:|
+    ///   | rank-1 electric only     |      60,471 |      5.2 s |
+    ///   | + this (electric+magnet) |      98,295 |     43.8 s |
+    ///
+    /// 1.63x MORE emitted code and 8.5x slower to generate. The fan-out arithmetic predicts it: the
+    /// magnetic lines are distributed {0:102, 1:168, 2:219, 3:129, 4:33, 5:3} over the nets, so 3^m
+    /// turns 654 contractions into 9462 -- 14.5x -- and the per-term cut does not come close to
+    /// paying that back. Same binary, hatch flipped, so nothing else differed.
+    ///
+    /// Kept rather than deleted because the fan-out is per-net and this flow is a bad case: 3^m is
+    /// only 3x on the 168 nets carrying a single magnetic line, and a flow dominated by those could
+    /// still win. Re-measure before enabling anywhere; do not assume it transfers.
+    ///
+    /// Correctness is NOT the reason it is off. The identity is verified exactly in
+    /// `test_rank1_proje` (`tr P_M = 2` and the P_M.P_T chain both agree to 0.00e+00), and on the
+    /// full ZA4 kernel the two forms agree to ~1e-9 over 11000 sampled trace values -- the same
+    /// generator-side coefficient rounding that separates any two factorisations of this size.
+    ///
+    /// MUST run AFTER @ref fuse_projectors, which needs `P_M` intact for `P_E . P_M -> 0`,
+    /// `P_M . P_M -> P_M` and `tr P_M = 2`. Expanding first throws those cancellations away.
+    inline void expand_magnetic(const std::vector<NElem> &elems, Cx co,
+                                std::vector<std::pair<std::vector<NElem>, Cx>> &out)
+    {
+      static const bool on = [] {
+        const char *e = std::getenv("NT_RANK1_PROJM");
+        return e != nullptr && *e != '\0' && std::strcmp(e, "0") != 0;
+      }();
+      std::vector<std::size_t> mag;
+      if (on)
+        for (std::size_t i = 0; i < elems.size(); ++i)
+          if (elems[i].kind == NElem::ProjM && elems[i].a != elems[i].b) mag.push_back(i);
+      if (mag.empty()) { // hatch off, or no splittable magnetic line
+        out.emplace_back(elems, co);
+        return;
+      }
+      const std::size_t m = mag.size();
+      std::size_t n = 1;
+      for (std::size_t b = 0; b < m; ++b) n *= 3;
+      out.reserve(out.size() + n);
+      for (std::size_t code = 0; code < n; ++code) {
+        std::vector<NElem> e = elems;
+        Cx c = co;
+        std::size_t q = code;
+        for (std::size_t b = 0; b < m; ++b) {
+          NElem &el = e[mag[b]];
+          const std::size_t pick = q % 3;
+          q /= 3;
+          if (pick == 0) {
+            el = nmet(el.a, el.b); // +delta
+          } else {
+            el.kind = (pick == 1) ? NElem::TimeSq : NElem::SpatialSq; // -u(x)u , -k_s(x)k_s*INVS
+            c = Cx{-c.re, -c.im};
+          }
+        }
+        out.emplace_back(std::move(e), c);
+      }
     }
 
     /// First-seen-ordered union of all Lorentz ids carried by a factor group (duplicates dropped). The
@@ -1071,18 +1194,24 @@ namespace numtracer::numeric
       Cx co = nt.coeff;
       ndetail::fuse_projectors(elems, co);
       if (co.re == 0 && co.im == 0) continue;
-      std::vector<ndetail::Factor> facs = loops;
-      facs.reserve(loops.size() + elems.size());
-      for (const NElem &el : elems)
-        ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
-      // contract_factors consumes its `facs` argument by value — move so the per-term
-      // factor list is built once, not copied again into the call.
-      MPoly term = ndetail::contract_factors(nsym, std::move(facs));
-      // `scaled`, not `* constant(co)`: same coefficient product (Cx multiply is commutative
-      // bit-for-bit), same monomials in the same order, but without the |term|-entry scratch and the
-      // `from_scratch` sort that multiplying by a one-term polynomial otherwise pays.
-      term = MPolyFactory::scaled(nsym, term, co);
-      result = std::move(result) + std::move(term);
+      // One entry unless NT_RANK1_PROJM expanded the magnetic lines; the loop body below is what
+      // the single-term path always was.
+      std::vector<std::pair<std::vector<NElem>, Cx>> pieces;
+      ndetail::expand_magnetic(elems, co, pieces);
+      for (auto &[pel, pco] : pieces) {
+        std::vector<ndetail::Factor> facs = loops;
+        facs.reserve(loops.size() + pel.size());
+        for (const NElem &el : pel)
+          ndetail::push_elem_factors(facs, nsym, el, comp, atomDen);
+        // contract_factors consumes its `facs` argument by value — move so the per-term
+        // factor list is built once, not copied again into the call.
+        MPoly term = ndetail::contract_factors(nsym, std::move(facs));
+        // `scaled`, not `* constant(co)`: same coefficient product (Cx multiply is commutative
+        // bit-for-bit), same monomials in the same order, but without the |term|-entry scratch and
+        // the `from_scratch` sort that multiplying by a one-term polynomial otherwise pays.
+        term = MPolyFactory::scaled(nsym, term, pco);
+        result = std::move(result) + std::move(term);
+      }
     }
     if (lorentz.empty())
       result = ndetail::close_loops(nsym, loops, atomDen);
@@ -1192,7 +1321,9 @@ namespace numtracer::numeric
     for (const network::PTerm &pt : lor) {
       // build the numeric element list, then fold same-momentum projector chains before expansion.
       Cx co = pt.coeff;
-      std::vector<ndetail::Factor> facs;
+      // `pieces` holds one entry unless NT_RANK1_PROJM split the magnetic lines; with the hatch off
+      // this is the single-term path verbatim, one vector allocation heavier.
+      std::vector<std::pair<std::vector<NElem>, Cx>> pieces;
       {
         NT_STAT_TIMER(t_elem);
         std::vector<NElem> elems;
@@ -1201,22 +1332,29 @@ namespace numtracer::numeric
           elems.push_back(elem_to_nelem(el));
         ndetail::fuse_projectors(elems, co);
         if (co.re == 0 && co.im == 0) continue;
-        facs = loops;
-        facs.reserve(loops.size() + elems.size());
-        for (const NElem &el : elems)
-          ndetail::push_elem_factors(facs, nsym, el, comp, aden);
+        ndetail::expand_magnetic(elems, co, pieces);
       }
-      // move the per-term factor list into contract_factors (consumed by value) — avoids
-      // a redundant deep copy of every Factor's MPoly entries.
-      MPoly term;
-      {
-        NT_STAT_TIMER(t_contract);
-        term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
+      for (auto &[pel, pco] : pieces) {
+        std::vector<ndetail::Factor> facs;
+        {
+          NT_STAT_TIMER(t_elem);
+          facs = loops;
+          facs.reserve(loops.size() + pel.size());
+          for (const NElem &el : pel)
+            ndetail::push_elem_factors(facs, nsym, el, comp, aden);
+        }
+        // move the per-term factor list into contract_factors (consumed by value) — avoids
+        // a redundant deep copy of every Factor's MPoly entries.
+        MPoly term;
+        {
+          NT_STAT_TIMER(t_contract);
+          term = ndetail::contract_factors(nsym, std::move(facs), aden, units);
+        }
+        // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
+        // scratch + sort. Once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
+        term = MPolyFactory::scaled(nsym, term, pco);
+        result = std::move(result) + std::move(term);
       }
-      // `scaled` instead of `* constant(co)`: bit-identical (see MPolyFactory::scaled) without the
-      // scratch + sort. This runs once per Lorentz PTerm per trace, on the FULLY CONTRACTED term.
-      term = MPolyFactory::scaled(nsym, term, co);
-      result = std::move(result) + std::move(term);
     }
     if (lor.empty())
       result = ndetail::close_loops(nsym, loops, aden, units);

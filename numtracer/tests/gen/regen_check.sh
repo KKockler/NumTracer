@@ -136,6 +136,18 @@ DEFAULT_FLOWS=(
   # so without them that whole code path had no regeneration coverage at all.
   gen_discdirac_numeric gen_flavour_ingroup gen_flavour_split gen_ftproj_numeric
   gen_glu_quark gen_gluon_condensate gen_pion_quark gen_proj_numeric gen_sigl_dirac
+  # The finite-T ELECTRIC/MAGNETIC VERTEX SPLIT gate (ctest emvertex_num). Three projectors on three
+  # DIFFERENT external momenta through a shared three-index core — the structure arXiv:1708.03482
+  # App. B puts under the gluonic vertices, and the front-end path SP_EM depends on. gen_ftproj_numeric
+  # above does NOT cover it: there both projectors sit on the same momentum. Emits four kernels
+  # (a non-zero control plus the two zero-identities).
+  gen_emvertex_numeric
+  # The finite-T SPATIAL VECTOR gate (ctest spatialvec_num): FormTracer's `vecs[q,mu]` and the
+  # spatial pslash, routed through the ntSpatialVec momentum leaf. gen_ftproj_numeric above covers
+  # only the SCALAR spatial product ntSPS, which never reaches the engine — it folds into the
+  # coefficient — so nothing there exercises a spatial momentum going through a Dirac trace. Emits
+  # three kernels (two non-zero oracle checks plus the ntSPS-vs-leaf zero identity).
+  gen_spatialvec_numeric
 )
 FLOWS=("$@")
 [[ ${#FLOWS[@]} -eq 0 ]] && FLOWS=("${DEFAULT_FLOWS[@]}")
