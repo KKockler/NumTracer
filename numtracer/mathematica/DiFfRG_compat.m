@@ -159,6 +159,25 @@ Options[MakeNTKernelDiFfRG] =
     ,
     "CoordinateArguments" -> {"p"}
     ,
+(* Regulator for the emitted integrator class. Forwarded verbatim to DiFfRG's MakeKernel, which
+   turns the pair into
+
+     <optDef>
+     using Regulator = <Regulator><<optName>>;
+
+   inside flows/<Name>/<Name>.hh via DiFfRG`CodeTools`Regulator`getRegulator. "RegulatorOpts" is
+   {optName, optDef}: leave it at {"", ""} to instantiate the regulator's own default option struct
+   (`Regulator<>`), or pass e.g.
+
+     "Regulator" -> "DiFfRG::RationalExpRegulator",
+     "RegulatorOpts" -> {"REGOPTS", "struct REGOPTS { static constexpr int order = 8; ... };"}
+
+   to bake a custom one. Without this passthrough every NumTracer-emitted kernel silently inherited
+   MakeKernel's default, so an app could not choose its own regulator at all. *)
+    "Regulator" -> "DiFfRG::PolynomialExpRegulator"
+    ,
+    "RegulatorOpts" -> {"", ""}
+    ,
     "Device" -> "GPU"
     ,
     "d" -> 4
@@ -185,7 +204,15 @@ Options[MakeNTKernelDiFfRG] =
        them when the flows library is built — keeping the notebook out of the C++ build and giving the
        generation `make -j` parallelism across every flow at once. Pass "Offline" -> False (or set
        NT_OFFLINE=0) to generate inline as before. *)
-    "Offline" -> True
+    "Offline" -> True,
+    (* Forwarded to MakeNTKernel, and DELIBERATELY still False here. A DiFfRG flow consumer really is
+       real-valued — the integrator instantiates KERNEL::kernel(...) into a `double` accumulator, so a
+       verdict-0 flow does not merely waste a lowered body, it fails to compile at all (a concept wall
+       in QuadratureIntegrator, naming the integrator rather than the flow). It is therefore tempting
+       to default this to True here. Do not: with the complex body gone, verdict 0 silently becomes
+       Re[Integral[flow]], and choosing to truncate the flow equation belongs to whoever is doing the
+       physics, not to the scaffolding. Set it explicitly when that is what you mean. *)
+    "RealOutput" -> False
   };
 
 MakeNTKernelDiFfRG::noname = "\"Name\" is required (the flow name, e.g. \"ZA\").";
@@ -406,7 +433,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    saying so. Scoping it makes "FlowDirectory" mean what it says for both halves of the emission. *)
     Internal`InheritedBlock[{DiFfRG`CodeTools`Directory`flowDir},
       DiFfRG`CodeTools`Directory`flowDir = flowDir;
-      ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"]]]]];
+      ntReportDiFfRG[name, flowDir, Last @ ntCapturePrint[DiFfRG`CodeTools`MakeKernel`MakeKernel[body, "Name" -> name, "Integrator" -> OptionValue["Integrator"], "d" -> OptionValue["d"], "AD" -> OptionValue["AD"], "ctype" -> OptionValue["ctype"], "Device" -> device, "Type" -> OptionValue["Type"], "Parameters" -> params, "IntegrationVariables" -> OptionValue["IntegrationVariables"], "Coordinates" -> OptionValue["Coordinates"], "CoordinateArguments" -> OptionValue["CoordinateArguments"], "Regulator" -> OptionValue["Regulator"], "RegulatorOpts" -> OptionValue["RegulatorOpts"]]]]];
 (* (2) NumTracer overwrites kernel.hh + writes kernels.hh with the real, numerically-traced kernel.
 
    Guarded, because step (1) has already written a PLACEHOLDER kernel.hh whose body is literally
@@ -419,7 +446,7 @@ MakeNTKernelDiFfRG[ntk_NTKernel, opts : OptionsPattern[]] :=
    kernels. *)
     $ntLastHoistCount = 0;
     If[TrueQ @ CheckAbort[
-         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
+         MakeNTKernel[ntk, genFile, kernelFile, tracesFile, "Name" -> name <> "_kernel", "Namespace" -> nsTag, "AngleDefs" -> OptionValue["AngleDefs"], "Decorator" -> decor, "DeviceTarget" -> (device === "GPU"), "Dressings" -> dress, "DressingType" -> dressTy, "ShareInterpolatorIndex" -> shareInterpIdx, "HoistLoopConstLookups" -> shareInterpIdx, "CrossTraceCSE" -> OptionValue["CrossTraceCSE"], "RealOutput" -> OptionValue["RealOutput"], "ScalarParams" -> scalarParams, "ADParams" -> adParams, "Constant" -> OptionValue["Constant"], "Offline" -> OptionValue["Offline"], "CoordinateArgs" -> OptionValue["CoordinateArguments"], "MatsubaraVar" -> ntMatsubaraVar[OptionValue["MatsubaraVar"], OptionValue["Integrator"], OptionValue["IntegrationVariables"]], "RuntimeInclude" -> None, "ExtraIncludes" -> {"DiFfRG/physics/interpolation.hh", "DiFfRG/physics/physics.hh"}, "KernelNamespace" -> "DiFfRG", "SupportNamespace" -> "DiFfRG", "RegulatorTemplate" -> True, "RegulatorAlias" -> True];
          True,
          False],
       Null,

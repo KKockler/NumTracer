@@ -159,15 +159,26 @@ elseif(MODE STREQUAL "probe")
       "numtrace: imaginary-part probe for '${FLOW}' failed (exit ${_rc}).\n${_err}${_out}")
   endif()
 
-  # stdout is "mim mdiff mre mrim mrdiff npoints verdict"; report the last two in words and keep the
-  # relative imaginary part, which is the number worth seeing when a flow unexpectedly stays complex.
+  # stdout is "mim mdiff mre mrim mrdiff mrrep nrep ok verdict"; report the verdict in words and keep
+  # the relative imaginary part, which is the number worth seeing when a flow unexpectedly stays
+  # complex.
+  #
+  # Indices are taken from the END, not the front. This block used to test `_nf EQUAL 7` against a
+  # layout that had since grown to 9 fields, so EVERY offline build silently fell through to the bare
+  # "probed" message and no verdict was ever reported — the failure mode of a hard-coded count is that
+  # it goes quiet rather than complaining. verdict/ok are appended last and mrim sits in a stable
+  # prefix, so this survives the next field being added too.
+  # REGEX on runs of whitespace, not string(REPLACE " " ";"): the latter turns a double space into an
+  # empty list element, which keeps LENGTH plausible while shifting every index past it.
   string(STRIP "${_out}" _out)
-  string(REPLACE " " ";" _fields "${_out}")
+  string(REGEX REPLACE "[ \t]+" ";" _fields "${_out}")
   list(LENGTH _fields _nf)
-  if(_nf EQUAL 7)
+  if(_nf GREATER_EQUAL 9)
+    math(EXPR _iv "${_nf} - 1")
+    math(EXPR _ipts "${_nf} - 2")
     list(GET _fields 3 _relim)
-    list(GET _fields 5 _npts)
-    list(GET _fields 6 _v)
+    list(GET _fields ${_ipts} _npts)
+    list(GET _fields ${_iv} _v)
     if(_v EQUAL 2)
       set(_word "Pure (imaginary coefficients dropped)")
     elseif(_v EQUAL 1)
@@ -175,9 +186,19 @@ elseif(MODE STREQUAL "probe")
     else()
       set(_word "complex")
     endif()
-    message(STATUS "NumTracer: ${FLOW} verdict = ${_word}, rel|Im|=${_relim} over ${_npts} pts")
+    if(_v EQUAL 0)
+      # Not a STATUS line: a DiFfRG flow consumer accumulates into a `double`, so a complex kernel
+      # body does not merely waste a lowered body — it fails to compile, far downstream, as a concept
+      # error naming the integrator rather than this flow. Say so here, where the cause is known.
+      message(WARNING
+        "NumTracer: ${FLOW} probed ${_word} (rel|Im|=${_relim} over ${_npts} pts). A real-valued "
+        "consumer cannot instantiate the complex kernel body. Either give this flow a complex "
+        "integrator, or regenerate it with \"RealOutput\" -> True to take Re[...] deliberately.")
+    else()
+      message(STATUS "NumTracer: ${FLOW} verdict = ${_word}, rel|Im|=${_relim} over ${_npts} pts")
+    endif()
   else()
-    message(STATUS "NumTracer: ${FLOW} probed")
+    message(STATUS "NumTracer: ${FLOW} probed (unrecognised probe output: ${_nf} field(s))")
   endif()
 
 elseif(MODE STREQUAL "mark")

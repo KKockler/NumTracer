@@ -3282,6 +3282,7 @@ Options[mkGenerateKernel] =
     "RealProbe" -> True,
     "PruneRealTraces" -> False,
     "ComplexRuntimeProjection" -> False,
+    "RealOutput" -> False,
     "Constant" -> 0.,
     (* "Offline" -> True: emit the generator + probe sources and a per-flow numtrace.json switch set to
        0, but do NOT compile or run anything — the `numtrace` CMake target does that as a build step,
@@ -3320,6 +3321,19 @@ Options[mkGenerateKernel] =
    Requires the type-generic powr (see ntProbeSource / the generator runtime): a denominator raised
    to a power is exactly what these flows contain. *)
 $ntComplexRuntimeProjection = False;
+
+(* "RealOutput" -> False (default OFF): the consumer's kernel return type. OFF, a complex flow emits
+   all three bodies (Pure / RePart / untouched complex) and the probe's verdict picks one through the
+   preprocessor. ON, the consumer is declaring it takes a REAL value, so the complex body — which such
+   a consumer can never instantiate — is not lowered at all. That body is the expensive one (COEN CSEs
+   the whole complex expression), and skipping it is the difference between a generation that finishes
+   and one that appears to hang after the two real bodies are done.
+   The catch, and why this is NOT the default and why MakeNTKernelDiFfRG does NOT set it either: with
+   the complex body gone, verdict 0 — the probe saying the imaginary part genuinely survives — has
+   nowhere to go but the RePart body. That yields Re[Integral[flow]], which is a TRUNCATION of the
+   flow equation rather than an identity. It is frequently the right thing to want; it is never
+   something to be given silently, so the emitted header carries a #warning in exactly that case.
+   A consumer that wants it asks for it by hand. *)
 
 (* "RealProbe" -> True (default): when the syntactic complexQ trips (some diagram coeff carries an `i`),
    compile+run a probe over the JUST-generated real traces to test whether Im(integrand) actually
@@ -3642,6 +3656,27 @@ ntProbeSource[integrand_, args_, fillArgs_, angleDefs_, angleDecls_, nsHome_, he
       ];
     src];
 
+(* ---- bounded compiler-log reporting ---------------------------------------------------------
+   A failing compile can produce a MULTI-MEGABYTE log, and a Mathematica message carrying the whole
+   thing is not a diagnostic — the front end renders it as an opaque `<<16319431>>` placeholder. That
+   is exactly how a one-line `cannot convert std::complex<double> to double` stayed invisible inside a
+   16.3 MB probe log: the message was there, unreadable, and the actual cause (a double-only powr)
+   took a separate investigation to find.
+   So: show the head, say how much was dropped, and name the file BOTH times, so the full text is one
+   `less` away. Empty and missing logs are normal here (a run failure often writes nothing to stderr),
+   hence the EndOfFile guard — ReadString returns EndOfFile, not "", for an empty file, and
+   StringSplit would fail on it. *)
+ntLogHead[path_String, nshow_Integer : 50] :=
+  Module[{raw, lines, head},
+    raw = If[FileExistsQ[path], Quiet@Check[ReadString[path], ""], ""];
+    lines = If[StringQ[raw] && raw =!= "", StringSplit[raw, "\n"], {}];
+    head = Take[lines, UpTo[nshow]];
+    "--- first " <> ToString[Length[head]] <> " of " <> ToString[Length[lines]] <>
+      " line(s) of " <> path <> " ---\n" <> StringRiffle[head, "\n"] <>
+      If[Length[lines] > nshow,
+        "\n... (" <> ToString[Length[lines] - nshow] <> " more line(s) in " <> path <> ")",
+        ""]];
+
 (* Compile + run the probe program. `verdictFile`/`macro` (both or neither) make it write the verdict
    header. Any failure ABORTS: the verdict now selects a preprocessor branch in a committed header, so
    the old conservative "assume Complex" fallback would silently swap the flow onto the complex body —
@@ -3655,11 +3690,11 @@ ntRunProbe[srcFile_String, tracesDir_String, verdictFile_ : None, macro_ : None]
     bin = FileNameJoin[{$TemporaryDirectory, FileBaseName[srcFile]}];
     rc = Run[cxx <> " -std=c++20 -O1 -w -I '" <> tracesDir <> "' '" <> srcFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
     If[rc =!= 0,
-      Message[ntRunProbe::probefail, "compile rc=" <> ToString[rc] <> "\n" <> Quiet@Check[Import[bin <> ".cerr", "Text"], ""]]; Abort[]];
+      Message[ntRunProbe::probefail, "compile rc=" <> ToString[rc] <> "\n" <> ntLogHead[bin <> ".cerr"]]; Abort[]];
     oflag = If[StringQ[verdictFile] && StringQ[macro], " -o '" <> verdictFile <> "' -m '" <> macro <> "'", ""];
     rc = Run["'" <> bin <> "'" <> oflag <> " > '" <> bin <> ".out' 2> '" <> bin <> ".rerr'"];
     If[rc =!= 0,
-      Message[ntRunProbe::probefail, "run rc=" <> ToString[rc] <> "\n" <> Quiet@Check[Import[bin <> ".rerr", "Text"], ""]]; Abort[]];
+      Message[ntRunProbe::probefail, "run rc=" <> ToString[rc] <> "\n" <> ntLogHead[bin <> ".rerr"]]; Abort[]];
     out = If[FileExistsQ[bin <> ".out"], Import[bin <> ".out", "Text"], ""];
     parsed = Quiet @ Check[ToExpression[StringReplace[#, {"e+" -> "*^", "e-" -> "*^-", "e" -> "*^"}]]& /@ StringSplit[StringTrim[out]], $Failed];
     If[!MatchQ[parsed, {_?NumericQ ..}] || Length[parsed] =!= 9,
@@ -3709,7 +3744,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
    gen_flavour_ingroup, gen_gluon_condensate). The TU is tiny, so inlining the bodies is free. *)
     rc = Run[cxx <> " -std=c++20 -O1 -w -DNUMTRACER_HEADER_ONLY=1 -I '" <> includeDir <> "' '" <> cppFile <> "' -o '" <> bin <> "' 2> '" <> bin <> ".cerr'"];
     If[rc =!= 0,
-      Print["[diagpoly] compile failed (rc=", rc, "):\n", Quiet @ Check[Import[bin <> ".cerr", "Text"], ""]];
+      Print["[diagpoly] compile failed (rc=", rc, "):\n", ntLogHead[bin <> ".cerr"]];
       Abort[]];
 (* The RUN's exit code is checked, exactly like the compile's above. It used to be discarded, so a
    crashed helper fell through to `If[FileExistsQ[...]]` and either read a stale `.out` (see the
@@ -3719,7 +3754,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
     Quiet @ DeleteFile[bin <> ".out"];
     rc = Run["'" <> bin <> "' > '" <> bin <> ".out'"];
     If[rc =!= 0 || !FileExistsQ[bin <> ".out"],
-      Print["[diagpoly] helper run failed (rc=", rc, "):\n", Quiet @ Check[Import[bin <> ".cerr", "Text"], ""]];
+      Print["[diagpoly] helper run failed (rc=", rc, "):\n", ntLogHead[bin <> ".cerr"]];
       Abort[]];
     out = Import[bin <> ".out", "Text"];
     lines = Select[StringSplit[StringTrim[out], "\n"], # =!= ""&];
@@ -3757,7 +3792,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -4441,24 +4476,52 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
         AbsoluteTiming[
 (* the kernel body/bodies.
    A real flow has exactly one. A COMPLEX one has three — the untouched complex form and the two real
-   projections (ntPureIntegrand / ntRePartIntegrand) — spliced under an `#if` on the verdict macro that
+   projections (ntPureIntegrand / ntRePartIntegrand) — or TWO under "RealOutput", which drops the
+   complex form a real consumer could never instantiate anyway; spliced under an `#if` on the macro that
    the imaginary-part probe writes into numtrace_verdict.hh. Which is valid depends on the numerical
    values of the generated traces, so the choice cannot be made here; emitting all three and letting the
    preprocessor pick is what lets the whole generation run offline, as a build step. Each body goes
    through its own MakeCppFunction so COEN's CSE spans the whole expression, exactly as when Mathematica
    used to re-lower the single chosen one after the probe. *)
           mkKernelFn = Function[expr, ntShareInterpIndices[FunKit`MakeCppFunction[expr, "Name" -> "kernel", "Prefix" -> decor, "Return" -> "auto", "CodeParser" -> "Cpp", "Parameters" -> kernelParams, "Body" -> preamble], If[TrueQ[OptionValue["ShareInterpolatorIndex"]], dress, {}]]];
+(* Per-body timing. The aggregate [prof] line above also covers constFn, the class and the header, so
+   the cost of one BODY — which is what "RealOutput" removes — is invisible in it. Without this the
+   only evidence for the option's value would be the downstream report's numbers. *)
+          timedBody = Function[{label, expr},
+            Module[{t, res}, {t, res} = AbsoluteTiming[mkKernelFn[expr]];
+              ntLog["[prof]   body ", label, ": ", t, " s"]; res]];
+          realOut = TrueQ[OptionValue["RealOutput"]];
           kernelFn =
             If[!complexQ,
-              mkKernelFn[integrand],
-              StringRiffle[{
-                "#if " <> verdictMacro <> " == 2   // Pure: the Complex -> Re projection is exact",
-                mkKernelFn[ntPureIntegrand[integrand]],
-                "#elif " <> verdictMacro <> " == 1   // RePart: real value via complex trace(s), re/im split",
-                mkKernelFn[ntRePartIntegrand[integrand]],
-                "#else                              // the imaginary part survives: genuinely complex",
-                mkKernelFn[integrand],
-                "#endif"}, "\n"]];
+              timedBody["real", integrand],
+(* REAL-OUTPUT mode: the consumer takes a double, so the untouched complex body can never be
+   instantiated — and it is the expensive one to lower (COEN CSEs the full complex expression). Emit
+   the two real projections only. Verdict 0 then falls through to RePart, which is a TRUNCATION of the
+   flow equation, not an identity: the imaginary part is discarded pointwise. It is a legitimate thing
+   to ask for — Re of the integral is often what the physics wants, and Im can integrate to zero over
+   the loop angle even where it is nonzero pointwise — but it must never happen silently, hence the
+   #warning. It has to be a PREPROCESSOR warning rather than an ntLog: for a DiFfRG flow "Offline" is
+   the default, so the probe runs at `make numtrace` time and the verdict is simply not known here.
+   NOT the default, and MakeNTKernelDiFfRG does not set it either: opting into a truncation is the
+   consumer's decision to make explicitly. *)
+              If[realOut,
+                StringRiffle[{
+                  "#if " <> verdictMacro <> " == 2   // Pure: the Complex -> Re projection is exact",
+                  timedBody["Pure", ntPureIntegrand[integrand]],
+                  "#else                              // 1 = RePart; 0 = complex, truncated by RealOutput",
+                  "#  if " <> verdictMacro <> " == 0",
+                  "#    warning \"NumTracer: flow '" <> ns <> "' probed GENUINELY COMPLEX (verdict 0) but was generated with RealOutput -> True. The kernel returns only the real part; the imaginary part of the integrand is discarded. That is a truncation of the flow equation, not an identity. If it is not what you intended, regenerate without RealOutput and give the consumer a complex integrator.\"",
+                  "#  endif",
+                  timedBody["RePart", ntRePartIntegrand[integrand]],
+                  "#endif"}, "\n"],
+                StringRiffle[{
+                  "#if " <> verdictMacro <> " == 2   // Pure: the Complex -> Re projection is exact",
+                  timedBody["Pure", ntPureIntegrand[integrand]],
+                  "#elif " <> verdictMacro <> " == 1   // RePart: real value via complex trace(s), re/im split",
+                  timedBody["RePart", ntRePartIntegrand[integrand]],
+                  "#else                              // the imaginary part survives: genuinely complex",
+                  timedBody["Complex", integrand],
+                  "#endif"}, "\n"]]];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
 (* MATSUBARA EVENNESS, second half. The generator proves it for the TRACES; this proves it for
    everything else the kernel body does with the frequency — dressing arguments, regulator
@@ -4684,22 +4747,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             If[cc === 0 && !cacheOff,
               Quiet @ Export[keyFile, srcKey, "Text"]];
             Print["[time]   generator compile (", cxx, ", ", Length[unitFiles], " parallel units + main): ", tcc, " s"]]];
+(* ntLogHead is the shared bounded reporter — see there. This site is where the 50-line cap was first
+   written; the probe and diagpoly compiles used to dump their logs whole. *)
         If[cc =!= 0,
-          Module[{
-            lines =
-              If[FileExistsQ[clog],
-                StringSplit[ReadString[clog], "\n"],
-                {}],
-            head,
-            nshow = 50},
-            head = Take[lines, UpTo[nshow]];
-            Message[
-              mkGenerateKernel::genfail,
-              cxx <> " compile/link rc=" <> ToString[cc] <> "\n--- first " <> ToString[Length[head]] <> " of " <> ToString[Length[lines]] <> " line(s) of " <> clog <> " ---\n" <> StringRiffle[head, "\n"] <>
-                If[Length[lines] > nshow,
-                  "\n... (" <> ToString[Length[lines] - nshow] <> " more line(s) in " <> clog <> ")",
-                  ""]];
-            Abort[]]]];
+          Message[mkGenerateKernel::genfail,
+            cxx <> " compile/link rc=" <> ToString[cc] <> "\n" <> ntLogHead[clog]];
+          Abort[]]];
 (* Free the per-generation codegen memo caches BEFORE launching the generator subprocess (hygiene:
    they're needed only to EMIT the source, already on disk, and re-cleared next generation anyway).
    NOTE (measured 2026-07-22): this is MINOR — the four caches together are only ~50 MB. The real
@@ -4776,7 +4829,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 

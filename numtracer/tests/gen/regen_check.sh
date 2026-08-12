@@ -140,6 +140,13 @@ DEFAULT_FLOWS=(
   # that regenerates ntRePartIntegrand/ntPureIntegrand on a token polynomial rather than a linear
   # form. Cheap (~15 s, hand-built DSL, no FunKit).
   gen_cplxdisc_numeric
+  # FINITE DENSITY: a Complex under a NEGATIVE POWER, i.e. 1/(l0 + I*muq + Ep)^2 — the only flow whose
+  # coefficient the re/imaginary split cannot read off, and where getting it wrong is SILENT (Coefficient
+  # power-series expands the rational function and returns the leading term, deleting muq). Regenerates
+  # ntSplitRealImag's deferral path and the type-generic powr. Emits TWO kernels: the ordinary one and a
+  # "RealOutput" -> True twin with the untouched complex body dropped, which is also the only coverage
+  # of what RealOutput does at verdict 0 (this flow probes complex, by construction). Cheap (~30 s).
+  gen_cplxrt_numeric
   gen_discdirac_numeric gen_flavour_ingroup gen_flavour_split gen_ftproj_numeric
   gen_glu_quark gen_gluon_condensate gen_pion_quark gen_proj_numeric gen_sigl_dirac
   # The finite-T ELECTRIC/MAGNETIC VERTEX SPLIT gate (ctest emvertex_num). Three projectors on three
