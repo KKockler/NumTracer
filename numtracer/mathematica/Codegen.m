@@ -3070,7 +3070,7 @@ ntWriteManifest[flowDir_String, name_String, ns_String, genFile_String, tracesFi
     "device"        -> ntDeviceTargetQ[deviceTarget, decor],
     "complex"       -> TrueQ[complexQ],
     "kernels"       -> ntRelativePath[flowDir, tracesFile]|>;
-  If[TrueQ[complexQ],
+  If[TrueQ[complexQ] && StringQ[probeFile],
     manifest = Join[manifest, <|
       "probe"         -> FileNameTake[probeFile],
       "verdict_macro" -> ntVerdictMacro[ns],
@@ -3282,6 +3282,7 @@ Options[mkGenerateKernel] =
     "RealProbe" -> True,
     "PruneRealTraces" -> False,
     "ComplexRuntimeProjection" -> False,
+    "ComplexEndProjection" -> False,
     "RealOutput" -> False,
     "Constant" -> 0.,
     (* "Offline" -> True: emit the generator + probe sources and a per-flow numtrace.json switch set to
@@ -3321,6 +3322,14 @@ Options[mkGenerateKernel] =
    Requires the type-generic powr (see ntProbeSource / the generator runtime): a denominator raised
    to a power is exactly what these flows contain. *)
 $ntComplexRuntimeProjection = False;
+
+(* "ComplexEndProjection" -> False (default OFF): for a real-valued consumer that wants
+   Re[full complex integrand], skip the symbolic Pure/RePart projections entirely and emit one
+   kernel body `ntRe[integrand]`. This keeps finite-density denominators complex until C++ runtime
+   and projects only after the complete complex expression is assembled. It is algebraically the
+   real part of the pointwise integrand, not a proof that the imaginary part cancels. Because the
+   mode does not need a Pure/RePart verdict, it also skips the imaginary-part probe. Requires
+   RealOutput -> True and is most useful together with ComplexRuntimeProjection -> True. *)
 
 (* "RealOutput" -> False (default OFF): the consumer's kernel return type. OFF, a complex flow emits
    all three bodies (Pure / RePart / untouched complex) and the probe's verdict picks one through the
@@ -3792,7 +3801,7 @@ diagColPolys[colnetStrs_, includeDir_] :=
         the fundamental symbols and calls the generated trN(f). *)
 
 mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPattern[]] :=
-  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
+  Module[{name, ns, dress, scalarParams, adParams, adNames, scalarTy, args, sigArgs, frame, env, nc, mask, ncomp, fillArgs, fillArgSig, constArgQ, invNets, invRest, g, colourNets, gcol, preamble, integrand, kernelParams, constParams, mkParam, kernelFn, constFn, classStr, header, hdrInc, incDir, genPre, genUnits, genDecl, genMain, declFile, pchFile, unitFiles, genSrc, bin, run, hasFund, complexQ, colDecls, colToks, angleDefs, angleDecls, crossCSE, traceRef, nGrp, decor, tarrDecl, kns, sns, runInc, extraInc, interpTy, nsHome, regTemplate, regAlias, offline, mkKernelFn, timedBody, realOut, endProject, verdictMacro, probeFile = None, mainOptForManifest, symDefs = <||>, dmono = {}, atomStrs = {}, groupCombos = {}, groupContribs = {}, realOnlyG = {}, pruneG = {}, probeWillRun = False, probeVerdict = None, genPass, mVarIdx = -1, mEvenBody = False, dressedIdx = {}, diagTokExpr = {}, factorNets = {}, lorFacOf = {}, pGroupOf = <||>, nAdd = 0, factorCompOf = <||>,
 (* diagData lives HERE, in the outer Module, not in the net-build Module below that assigns it.
    It used to be declared local to that inner Module (which spans the net-build loop and closes
    right after the `integrand` Sum), while `pruneG` reads it AFTER that close. Out of scope there,
@@ -4297,7 +4306,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    would touch every one. Assigned UNCONDITIONALLY so a generation cannot inherit the previous
    flow's setting — this is a package-global, and MakeNTKernel is called once per flow in a script
    that generates many. See the "ComplexRuntimeProjection" note above. *)
-    $ntComplexRuntimeProjection = TrueQ[OptionValue["ComplexRuntimeProjection"]];
+    endProject = TrueQ[OptionValue["ComplexEndProjection"]];
+    If[endProject && !TrueQ[OptionValue["RealOutput"]],
+      Print["[NumTracer] ERROR: ComplexEndProjection requires RealOutput -> True; otherwise the ",
+        "consumer would receive a complex kernel return value instead of the requested endpoint real ",
+        "projection."];
+      Abort[]];
+    $ntComplexRuntimeProjection = TrueQ[OptionValue["ComplexRuntimeProjection"]] || endProject;
 (* OPTIMIZATION (opt-in, "PruneRealTraces"): a group whose dressing coefficient is REAL has only
    Re(trace) consumed (the consumer takes Re of the whole kernel; a real coeff cannot move
    Im(trace) into the real part). Flag it so the generator emits a `double` trace and never
@@ -4494,6 +4509,12 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           kernelFn =
             If[!complexQ,
               timedBody["real", integrand],
+            If[endProject,
+(* END-PROJECTION mode: build exactly one body, keep the complete assembled expression complex,
+   and return its real part at the final C++ level. This avoids the symbolic Pure/RePart projection
+   and the probe/verdict machinery. The price is runtime complex arithmetic; the benefit is much
+   cheaper Mathematica lowering for finite-density denominators. *)
+              timedBody["EndRe", Global`ntRe[integrand]],
 (* REAL-OUTPUT mode: the consumer takes a double, so the untouched complex body can never be
    instantiated — and it is the expensive one to lower (COEN CSEs the full complex expression). Emit
    the two real projections only. Verdict 0 then falls through to RePart, which is a TRUNCATION of the
@@ -4521,7 +4542,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
                   timedBody["RePart", ntRePartIntegrand[integrand]],
                   "#else                              // the imaginary part survives: genuinely complex",
                   timedBody["Complex", integrand],
-                  "#endif"}, "\n"]]];
+                  "#endif"}, "\n"]]]];
           constFn = ntConstFn[OptionValue["Constant"], decor, constParams, sns];
 (* MATSUBARA EVENNESS, second half. The generator proves it for the TRACES; this proves it for
    everything else the kernel body does with the frequency — dressing arguments, regulator
@@ -4558,7 +4579,8 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
           header =
             FunKit`MakeCppHeader[
 (* the numeric kernel is flat straight-line arithmetic: the generated trace functions (hdrInc) plus
-   the support runtime; no tensor-engine headers. A complex flow also pulls the verdict header. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}, If[complexQ, {ntVerdictFile}, {}]], "Body" -> ntWrapBody[kns, classStr, name]
+   the support runtime; no tensor-engine headers. A complex flow pulls the verdict header unless
+   ComplexEndProjection emits an unconditional end-real body with no probe/verdict. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}, If[complexQ && !endProject, {ntVerdictFile}, {}]], "Body" -> ntWrapBody[kns, classStr, name]
             ];],
       " s"];
     (* emit the generator source (the numeric matrix-product backend is the single generation path).
@@ -4794,7 +4816,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    assembled flow is actually real depends on the trace VALUES. The probe settles it against the
    generated traces and writes the verdict macro that selects one of the three bodies emitted above.
    Offline the same probe source is compiled and run by the `numtrace` build target instead. *)
-    If[complexQ,
+    If[complexQ && !endProject,
       probeFile = FileNameJoin[{DirectoryName[genFile], "probe_" <> ns <> ".cpp"}];
       ntExportCpp[probeFile, ntProbeSource[integrand, args, fillArgs, angleDefs, angleDecls, nsHome, headerFile, $drTable, "TraceArrayDecl" -> If[crossCSE, tarrDecl, ""]]];
       Print["wrote probe: ", probeFile];
@@ -4829,7 +4851,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
    the fundamental symbols and calls the traces. Options are forwarded to the generator
    (see Options[mkGenerateKernel] for the set). *)
 
-Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
+Options[MakeNTKernel] = {"Name" -> "nt_kernel", "Namespace" -> Automatic, "Dressings" -> {}, "ScalarParams" -> {}, "ADParams" -> {}, "Decorator" -> "static inline", "DeviceTarget" -> Automatic, "IncludeDir" -> Automatic, "RunGenerator" -> True, "FullParallel" -> False, "AngleDefs" -> {}, "CrossTraceCSE" -> False, "Components" -> Automatic, "SymbolDefs" -> <||>, "RuntimeInclude" -> "numtracer/codegen/runtime.hpp", "ExtraIncludes" -> {}, "KernelNamespace" -> "numtracer_kernels", "SupportNamespace" -> "numtracer", "DressingType" -> Automatic, "ShareInterpolatorIndex" -> False, "HoistLoopConstLookups" -> False, "RegulatorTemplate" -> False, "RegulatorAlias" -> False, "RealProbe" -> True, "PruneRealTraces" -> False, "ComplexRuntimeProjection" -> False, "ComplexEndProjection" -> False, "RealOutput" -> False, "Constant" -> 0., "Offline" -> False, "CoordinateArgs" -> Automatic, "MatsubaraVar" -> None};
 
 MakeNTKernel::nfiles = "MakeNTKernel needs three output files: MakeNTKernel[ntk, genFile, kernelFile, tracesFile].";
 
