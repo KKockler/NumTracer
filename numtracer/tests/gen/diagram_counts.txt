@@ -21,6 +21,7 @@ gen_qcd_za4_gpu	54
 gen_zaaqbq1_small_numeric	6
 gen_ym_za4_numeric	51
 gen_lambda3d_small_numeric	6,6
+gen_cplxdisc_numeric	3
 gen_discdirac_numeric	3
 gen_flavour_ingroup	2
 gen_flavour_split	4

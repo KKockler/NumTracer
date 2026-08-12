@@ -134,6 +134,12 @@ DEFAULT_FLOWS=(
   # gen_flavour_ingroup and gen_gluon_condensate matter beyond that: they are the ONLY flows that
   # reach diagColPolys (the group-diagonal SU(N) dressing fold, which shells out to a helper binary),
   # so without them that whole code path had no regeneration coverage at all.
+  # The COMPLEX x MULTI-TRACE intersection. gen_discdirac_numeric below is multi-trace but REAL, so
+  # MakeNTKernel emits one body for it and neither real projection is ever built; every complex flow
+  # in this list is LINEAR in its trace tokens. This is the only flow with both, i.e. the only one
+  # that regenerates ntRePartIntegrand/ntPureIntegrand on a token polynomial rather than a linear
+  # form. Cheap (~15 s, hand-built DSL, no FunKit).
+  gen_cplxdisc_numeric
   gen_discdirac_numeric gen_flavour_ingroup gen_flavour_split gen_ftproj_numeric
   gen_glu_quark gen_gluon_condensate gen_pion_quark gen_proj_numeric gen_sigl_dirac
   # The finite-T ELECTRIC/MAGNETIC VERTEX SPLIT gate (ctest emvertex_num). Three projectors on three
