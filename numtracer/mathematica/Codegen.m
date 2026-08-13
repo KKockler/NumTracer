@@ -3228,6 +3228,14 @@ ntRuntimeIncludes[runInc_] := If[runInc === None || runInc === "",
     {},
     {runInc}];
 
+ntApplyTraceComplexOverride[header_String, hdrInc_String, kns_String, sns_String, complexQ_] :=
+  If[TrueQ[complexQ] && kns === "DiFfRG" && sns === "DiFfRG",
+    StringReplace[header,
+      "#include \"" <> hdrInc <> "\"" ->
+        "#ifndef NT_TRACE_COMPLEX\n#define NT_TRACE_COMPLEX DiFfRG::complex<double>\n#endif\n#include \"" <> hdrInc <> "\"",
+      1],
+    header];
+
 (* the dressing-parameter type: Automatic -> `const auto&` (fully generic, self-contained);
    else the given concrete type string (e.g. a consumer's interpolator type). *)
 
@@ -4618,10 +4626,13 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
             decor, regTemplate, regAlias, If[complexQ, {ntReImDefs[decor]}, {}]];
           hdrInc = FileNameTake[headerFile];
           header =
-            FunKit`MakeCppHeader[
+            ntApplyTraceComplexOverride[
+              FunKit`MakeCppHeader[
 (* the numeric kernel is flat straight-line arithmetic: the generated trace functions (hdrInc) plus
    the support runtime; no tensor-engine headers. A complex flow pulls the verdict header unless
    ComplexEndProjection emits an unconditional end-real body with no probe/verdict. *)"Includes" -> Join[extraInc, ntRuntimeIncludes[runInc], {"numtracer/sun/sun_data.hpp", hdrInc}, If[complexQ && !endProject, {ntVerdictFile}, {}]], "Body" -> ntWrapBody[kns, classStr, name]
+              ],
+              hdrInc, kns, sns, complexQ
             ];],
       " s"];
     (* emit the generator source (the numeric matrix-product backend is the single generation path).
