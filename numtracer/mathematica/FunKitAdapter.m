@@ -246,6 +246,8 @@ FromFunKit[expr_, OptionsPattern[]] := Module[{nf, map, hasIso, isoRewritten, re
       If[leftover =!= {}, Message[FromFunKit::untranslated, leftover]; Abort[]]]];
   $ntDressCollect = TrueQ[OptionValue["DressingCollection"]];
   ntLog["[prof] FromFunKit (head rewrite + expandBridges): ",
-    First@AbsoluteTiming[res = contractFlavour @ expandBridges[
+   (* Normalize fixed Lorentz components before expandBridges tests whether a
+      finite-T spatial slash is a collectible dressed Dirac numerator. *)
+   First@AbsoluteTiming[res = contractFlavour @ expandBridges @ expandFixedComponents[
       isoRewritten //. (h_Symbol)[a___] /; KeyExistsQ[map, SymbolName[h]] :> map[SymbolName[h]][a]]], " s"];
   res];

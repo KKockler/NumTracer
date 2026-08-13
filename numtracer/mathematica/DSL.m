@@ -340,7 +340,11 @@ commonFactorMultiset[factLists_] := Module[{cnts = Counts /@ factLists, keys},
   Flatten[Function[k, ConstantArray[k, Min[(Lookup[#, k, 0] &) /@ cnts]]] /@ keys]];
 
 dressedNumDecompose[p_Plus] := Module[
-  {rows = dressedNumTerm /@ (List @@ p), din, dout, others, common, scalFacs, commonScal, opts},
+   (* Flatten only this local numerator sum. At finite T, psdash[p] contains
+      gamma.mu vecs[p, mu]; after fixed-component normalization the temporal
+      subtraction must become a separate slash option rather than making the
+      complete propagator numerator non-collectible. *)
+   {rows = dressedNumTerm /@ (List @@ Expand[p]), din, dout, others, common, scalFacs, commonScal, opts},
   If[MemberQ[rows, $Failed], Return[$Failed]];
   {din, dout} = rows[[1, {1, 2}]];
   If[! AllTrue[rows, #[[1]] === din && #[[2]] === dout &], Return[$Failed]]; (* all terms din→dout *)
