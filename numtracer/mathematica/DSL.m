@@ -35,7 +35,7 @@ ntEnvFlag[name_String] :=
    Express that by matching only a non-integer second arg here (an integer arg falls through to False). *)
 tensorQ[_ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
         _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
-        _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
+        _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
         _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot] = True;
 tensorQ[_] = False;
 
@@ -68,6 +68,7 @@ labelsOf[ntSUNf[_, a_, b_, c_]]      := {a, b, c};
 labelsOf[ntSUNDeltaAdj[_, a_, b_]]   := {a, b};
 labelsOf[ntGamma[mu_, din_, dout_]]  := {mu, din, dout};
 labelsOf[ntGamma5[din_, dout_]]      := {din, dout};
+labelsOf[ntC[din_, dout_]]           := {din, dout};
 (* ntSigma's OPEN Lorentz labels are its FREE legs (gluon ids); slashed legs carry a momentum, not an
    open id. The spinor axes din,dout are always open. *)
 labelsOf[ntSigma[legA_, legB_, din_, dout_]] :=
@@ -98,6 +99,7 @@ labelsOf[ntDiracSlot[_, din_, dout_, legs_]] := Join[legs, {din, dout}];
    never contracts a spinor axis against a Lorentz/colour axis sharing an id. *)
 spinorLabelsHead[ntGamma[_, din_, dout_]] := {din, dout};
 spinorLabelsHead[ntGamma5[din_, dout_]]   := {din, dout};
+spinorLabelsHead[ntC[din_, dout_]]        := {din, dout};
 spinorLabelsHead[ntSigma[_, _, din_, dout_]] := {din, dout};
 spinorLabelsHead[ntDeltaDirac[din_, dout_]] := {din, dout};
 spinorLabelsHead[ntDressedNum[_, din_, dout_]] := {din, dout};
@@ -160,7 +162,7 @@ splitSelfTraces[factors_List] := Module[{res = {}, conns = {}},
 (* Whether a (sub)expression carries no tensor head — a pure scalar coefficient. *)
 scalarQ[e_] := FreeQ[e, _ntMetric | ntVec[_, Except[_Integer]] | _ntTransProj | _ntLongProj |
                        _ntElectricProj | _ntMagneticProj | _ntSUNf | _ntSUNDeltaAdj |
-                       _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
+                       _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntSUNT | _ntSUNDeltaFund | _ntEpsilon |
                        _ntSUNDiagFund | _ntSUNDiagAdj | _ntEpsFund | _ntDressedNum | _ntDiracSlot];
 
 (* The free (uncontracted) index labels of a tensor (sub)expression. A product sums
@@ -325,6 +327,10 @@ diracParities[Power[b_, n_Integer?Positive]] := With[{s = diracParities[b]},
    pulled out of the enclosing Times), and level spec Infinity means {1, Infinity} — it would skip
    level 0 and count that γ as zero. The old diagram-global test never hit this because it always
    ran on a whole Times, where every γ sits at level 1. *)
+(* Counts _ntGamma ONLY. ntC is deliberately not counted: C = gamma^2 gamma^4 is two gammas, i.e.
+   0 mod 2, and (like gamma5 and ntSigma) it is block-DIAGONAL in the Weyl basis, so it cannot turn a
+   vanishing odd trace into a non-vanishing one. The C++ parity counters agree — see the "keep in
+   step" note on nAntidiag in numeric_contract.hpp / network/dirac.hpp. *)
 diracParities[e_] := {Mod[Count[e, _ntGamma, {0, Infinity}], 2]};
 
 (* The odd-trace verdict itself: a γ5-free diagram every one of whose branches is an odd closed
@@ -428,8 +434,10 @@ diracSlotSumQ[_] := False;
    legs]`, where each option is `{residualScalarCoeff, structureProduct}` and `structureProduct` is the
    term's Dirac + Lorentz-net factors (colour and the common scalar factored out). $Failed if the colour
    factor is not common across terms (then the sum is left to distribute). *)
+NumTrace::slotorient = "diracSlotDecompose: a collected Dirac slot has `1` candidate in-legs, not 1. A slot is an OPEN chain din->dout, so exactly one of its open spinor labels must be some head's IN leg and no head's OUT leg; two means both ends are IN (an anomalous qq vertex), zero means both are OUT (its q̄q̄ conjugate). Either way the chain has no orientation, and the slot's tokens are spliced into the surrounding spinor loop IN CHAIN ORDER — so guessing one would emit that segment backwards, silently. Open spinor labels: `2`. First term: `3`. Aborting instead of guessing.";
+
 diracSlotDecompose[p_Plus] := Module[
-  {terms = List @@ Expand[p], legs, opens, din, dout, io, ins, outs, rows, cols, common, scals, commonScal, opts},
+  {terms = List @@ Expand[p], legs, opens, din, dout, io, ins, outs, dinCands, rows, cols, common, scals, commonScal, opts},
   If[! diracSlotSumQ[p], Return[$Failed]];
   legs   = Sort @ openLorentzOf[First[terms]];
   opens  = openSpinorOf[First[terms]];
@@ -438,9 +446,19 @@ diracSlotDecompose[p_Plus] := Module[
      Orientation matters — the option's tokens are spliced in chain order, so a reversed din/dout would
      emit the trace backwards. *)
   io = Cases[If[Head[First[terms]] === Times, List @@ First[terms], {First[terms]}],
-        ntGamma[_, a_, b_] | ntGamma5[a_, b_] | ntDeltaDirac[a_, b_] | ntSigma[_, _, a_, b_] :> {a, b}];
+        ntGamma[_, a_, b_] | ntGamma5[a_, b_] | ntC[a_, b_] | ntDeltaDirac[a_, b_] |
+        ntSigma[_, _, a_, b_] :> {a, b}];
   ins = io[[All, 1]]; outs = io[[All, 2]];
-  din  = SelectFirst[opens, MemberQ[ins, #] && ! MemberQ[outs, #] &, First[opens]];
+  (* ORIENTATION GUARD. An open chain has EXACTLY ONE open spinor label that is some head's `in` and
+     no head's `out` — that is what "the chain runs din→dout" means. Two such labels (both ends are
+     `in`, an anomalous qq vertex) or none (both are `out`, its q̄q̄ conjugate) means the slot has no
+     well-defined orientation. The old `SelectFirst[..., First[opens]]` default silently picked one
+     anyway, and since the option's tokens are spliced into the surrounding loop IN CHAIN ORDER, a
+     wrongly-oriented slot emits that segment backwards with no diagnostic. Refuse instead. *)
+  dinCands = Select[opens, MemberQ[ins, #] && ! MemberQ[outs, #] &];
+  If[Length[dinCands] =!= 1,
+    Message[NumTrace::slotorient, Length[dinCands], Short[opens, 4], Short[First[terms], 6]]; Abort[]];
+  din  = First[dinCands];
   dout = First[DeleteCases[opens, din], Last[opens]];
   (* per term -> {scalar, sorted colour factors, sorted structure (Dirac + Lorentz-net, no colour/scalar)} *)
   rows = Function[t, Module[{facs = If[Head[t] === Times, List @@ t, {t}], scal, col, struct},
@@ -1021,7 +1039,7 @@ analyseDiagram[diagram_] := Module[{factors, tensorF, ids},
     "Components" -> (<|"Factors" -> orderFactors[#],
                        "Constant" -> FreeQ[#, _ntVec | _ntTransProj | _ntLongProj |
                                               _ntElectricProj | _ntMagneticProj | _ntDressedNum | _ntDiracSlot |
-                                              _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac |
+                                              _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac |
                                               _ntMetric | _ntEpsilon]|> &
                      /@ connectedComponents[tensorF])
   |>

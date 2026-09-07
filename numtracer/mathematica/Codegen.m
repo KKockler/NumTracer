@@ -913,7 +913,7 @@ ntSigmaTermInfo[term_] := Module[{tf, gs, g1, g2, first, second, din, dout},
       Return[$Failed]];
 (* the two γ's (and their ntVecs) must be the term's ONLY tensor structure — no colour, projector,
    metric, other Dirac heads: anything else means the Plus is not a clean bare commutator. *)
-    If[!FreeQ[tf, _ntGamma5 | _ntDeltaDirac | _ntSigma | _ntSUNT | _ntSUNDeltaFund | _ntSUNf | _ntSUNDeltaAdj | _ntTransProj | _ntLongProj | _ntMetric | _ntEpsilon],
+    If[!FreeQ[tf, _ntGamma5 | _ntC | _ntDeltaDirac | _ntSigma | _ntSUNT | _ntSUNDeltaFund | _ntSUNf | _ntSUNDeltaAdj | _ntTransProj | _ntLongProj | _ntMetric | _ntEpsilon],
       Return[$Failed]];
     {g1, g2} = gs;
     Which[
@@ -990,7 +990,7 @@ foldDiracSigma[factors_List] := Module[{commPlus, recognized},
 
 splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
   Module[{factors = foldDiracSigma[factors0], entangledQ, needExpand, keepAll, distributed, terms, branchNets, groups},
-    entangledQ[x_] := Head[x] === Plus && (colourEntangledQ[x] || !FreeQ[x, _ntGamma | _ntGamma5 | _ntDeltaDirac]);
+    entangledQ[x_] := Head[x] === Plus && (colourEntangledQ[x] || !FreeQ[x, _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac]);
     needExpand = Select[factors, entangledQ];
     keepAll = Select[factors, !entangledQ[#]&];
     distributed = Expand[Times @@ needExpand];(* small: product of the entangled Pluses only *)
@@ -1019,7 +1019,7 @@ splitColourGroups[factors0_, ids_, env_, nonzeroCompMask_] :=
               Abort[]];
             {
               colProd,
-              If[!FreeQ[rest, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
+              If[!FreeQ[rest, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
                 {compileDirac[rest, ids, env, nonzeroCompMask]},
                 (* gamma chain: {core, scal, projectorRest} *)
                 ({#[[1]], #[[2]], ""}&) /@ chunkLorentz[Times @@ rest, ids, env, nonzeroCompMask]]}]
@@ -1180,6 +1180,8 @@ diracIn[ntGamma[_, a_, _]] := a; diracOut[ntGamma[_, _, b_]] := b;
 
 diracIn[ntGamma5[a_, _]] := a; diracOut[ntGamma5[_, b_]] := b;
 
+diracIn[ntC[a_, _]] := a; diracOut[ntC[_, b_]] := b;
+
 diracIn[ntSigma[_, _, a_, _]] := a; diracOut[ntSigma[_, _, _, b_]] := b;
 
 diracIn[ntDeltaDirac[a_, _]] := a; diracOut[ntDeltaDirac[_, b_]] := b;
@@ -1187,6 +1189,17 @@ diracIn[ntDeltaDirac[a_, _]] := a; diracOut[ntDeltaDirac[_, b_]] := b;
 diracIn[ntDressedNum[_, a_, _]] := a; diracOut[ntDressedNum[_, _, b_]] := b;
 
 diracIn[ntDiracSlot[_, a_, _, _]] := a; diracOut[ntDiracSlot[_, _, b_, _]] := b;
+
+(* SPINOR-SLOT SYMMETRY. `diracIn`/`diracOut` name a head's two spinor slots, but only for the heads
+   whose two slots play DIFFERENT roles (row vs column, i.e. the two ends of a fermion arrow) is that
+   naming meaningful. The spinor delta is symmetric, δ_{ab} = δ_{ba}, so it may be traversed either
+   way with the same value and has no orientation to record — which is why the walk below can be
+   undirected at all (a loop closed by a symmetric external projector). Everything else (γ, γ5, σ, a
+   collected numerator or vertex slot) is an ordinary matrix whose two slots are NOT interchangeable,
+   so traversing it against the arrow means the network wants its TRANSPOSE — which `orderDiracFacs`
+   records with an `ntTransposed` wrapper and the engine honours. *)
+diracSpinorSymmetricQ[_ntDeltaDirac] := True;
+diracSpinorSymmetricQ[_]             := False;
 
 (* The LEGACY symbolic gamma-trace path used to live here: orderDiracChain / rawGammaTrace /
    canonGammaTrace / gammaTraceSum / gammaTraceSum5 / diracTrace / expandDiracComponent, which
@@ -1221,7 +1234,7 @@ $ntDiracFree = 900000;(* fresh Lorentz-label base for slash–slash pairings: ab
    adjacency closes the cycle correctly regardless of start/orientation (the trace is cyclic). *)
 
 orderDiracFacs[facs_] :=
-  Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok},
+  Module[{nodeFacs = Association[], cur = 1, prevLabel, out = {}, seen = {}, labels, exitLabel, nexts, nTok, revs = {}, fwds = {}, revQ},
     Do[
       Module[{ls = spinorLabelsHead[facs[[i]]]},
         (nodeFacs[#] = Append[Lookup[nodeFacs, #, {}], i])& /@ ls],
@@ -1230,8 +1243,24 @@ orderDiracFacs[facs_] :=
     While[
       !MemberQ[seen, cur],
       AppendTo[seen, cur];
-      If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntSigma | _ntDressedNum | _ntDiracSlot],
-        AppendTo[out, facs[[cur]]]];
+(* ORIENTATION. A closed spinor loop is a cycle in a degree-2 index network, and following that cycle
+   IS a matrix product: entering a factor on its `diracIn` (row) and leaving on its `diracOut` (column)
+   uses the factor as declared, because a fermion line multiplies as M1.M2 with M1's column contracted
+   against M2's row. Entering on the OTHER slot means the network wants this factor TRANSPOSED.
+
+   That is not an identity about gamma matrices — it is what "follow the cycle" means:
+     sum_{l0..l(n-1)} M1[l0,l1] M2[l1,l2] .. Mn[l(n-1),l0]  =  tr(N1 N2 .. Nn),   Nk = Mk or Mk^T.
+   So a reversed factor is simply MARKED here and transposed by the engine. No sign rule, no
+   charge-conjugation identity, no case analysis — those were tried and measured: the walk's verbatim
+   output agrees with the network only up to a sign that segment parity does NOT predict.
+
+   `revs`/`fwds` are kept for the diagnostic and the slot guard below. The spinor delta is symmetric,
+   so it has no orientation to record and carries no token anyway. *)
+      revQ = ! diracSpinorSymmetricQ[facs[[cur]]] && prevLabel =!= diracIn[facs[[cur]]];
+      If[! diracSpinorSymmetricQ[facs[[cur]]],
+        If[revQ, AppendTo[revs, facs[[cur]]], AppendTo[fwds, facs[[cur]]]]];
+      If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDressedNum | _ntDiracSlot],
+        AppendTo[out, If[revQ, ntTransposed[facs[[cur]]], facs[[cur]]]]];
       labels = spinorLabelsHead[facs[[cur]]];
       exitLabel = First[DeleteCases[labels, prevLabel], Missing[]];(* the OTHER endpoint *)
       If[MissingQ[exitLabel],
@@ -1245,10 +1274,19 @@ orderDiracFacs[facs_] :=
    (a fragmented / improperly-closed loop), the emitted trace would silently drop γ structure (the
    historical hSigL meson-sector collapse: a single surviving γ5 → tr(γ5)=0). Abort rather than emit a
    wrong kernel. The δ-only "connector" factors carry no token, so they are excluded from the count. *)
-    nTok = Count[facs, _ntGamma | _ntGamma5 | _ntSigma | _ntDressedNum | _ntDiracSlot];
+    nTok = Count[facs, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDressedNum | _ntDiracSlot];
     If[Length[out] =!= nTok,
       Print["[NumTracer] ERROR: orderDiracFacs walk consumed ", Length[out], " of ", nTok, " token-bearing Dirac factors — a spinor loop did not close (would silently drop γ ", "structure → collapsed trace). Loop factors:\n  ", facs];
       Abort[]];
+(* Guard 2 (orientation) is GONE, and deliberately so. Reversed factors are marked `ntTransposed`
+   above and transposed by the engine — fixed tokens via DFac::transposed, collected slots via
+   dtrslot(k), which reverses the option's chain at the dress_enumerate splice. A mixed loop (the
+   anomalous qq / q-bar q-bar diquark case) is therefore representable, not an error.
+
+   What replaced the guard is a PROPERTY TEST, not a proof: section J of tests/test_numeric_contract.cpp
+   grades the engine against a direct index-network contraction (a brute-force sum over all label
+   assignments) on thousands of randomly scrambled nets. Disabling the transpose makes 220 of them
+   fail, so the check is live. *)
     out];
 
 (* A component may contain SEVERAL independent closed spinor loops (a quark loop + the
@@ -1355,11 +1393,11 @@ orderOpenChain[facs_, din_] :=
   Module[{nodeFacs = <||>, cur, prevLabel = din, out = {}, seen = {}, exitLabel, nexts, start},
     Do[(nodeFacs[#] = Append[Lookup[nodeFacs, #, {}], i]) & /@ spinorLabelsHead[facs[[i]]], {i, Length[facs]}];
     start = Lookup[nodeFacs, din, {}];
-    If[start === {}, Return[Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma] &]]]; (* fallback: no din endpoint *)
+    If[start === {}, Return[Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma] &]]]; (* fallback: no din endpoint *)
     cur = First[start];
     While[! MemberQ[seen, cur],
       AppendTo[seen, cur];
-      If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntSigma], AppendTo[out, facs[[cur]]]];
+      If[MatchQ[facs[[cur]], _ntGamma | _ntGamma5 | _ntC | _ntSigma], AppendTo[out, facs[[cur]]]];
       exitLabel = First[DeleteCases[spinorLabelsHead[facs[[cur]]], prevLabel], Missing[]];
       If[MissingQ[exitLabel], Break[]];
       nexts = Select[DeleteCases[Lookup[nodeFacs, exitLabel, {}], cur], ! MemberQ[seen, #] &];
@@ -1384,9 +1422,9 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
           (* μ -> slash momentum q (an ntVec sharing a γ's Lorentz leg) *)
           vecOf = Association[Reverse[Cases[facs, ntVec[q_, m_] :> (m -> q)]]];
           gammaLegs = Cases[facs, ntGamma[gm_, _, _] :> gm];
-          diracFacs = Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &];
+          diracFacs = Select[facs, MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac] &];
           (* Lorentz-net factors = non-Dirac tensors that are NOT a slash-vec (a slash-vec's μ is a γ leg) *)
-          lorFacs = Select[facs, (tensorQ[#] && ! MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac] &&
+          lorFacs = Select[facs, (tensorQ[#] && ! MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac] &&
                           ! MatchQ[#, ntVec[_, m_ /; MemberQ[gammaLegs, m]]]) &];
           (* an ntSigma leg → C++ arg (free open leg id, or a slashed-leg vlc) *)
           legStr[{"slash", pairs_List}] :=
@@ -1400,7 +1438,15 @@ diracSlotStrBody[ntDiracSlot[opts_, din_, dout_, legs_], ids_, env_, nonzeroComp
           ordered = orderOpenChain[diracFacs, din];
           toks = Function[gf2,
             Which[
+(* orderOpenChain does NOT mark transposes: a slot's internal chain runs din->dout by construction,
+   and DSL.m's NumTrace::slotorient guard refuses a slot whose orientation is ambiguous. So a marker
+   here would mean that guard was relaxed without teaching this emitter — refuse rather than fall
+   through to the ntGamma branch, which would read First[ntTransposed[..]] as a Lorentz index. *)
+              MatchQ[gf2, _ntTransposed],
+                (Print["[NumTracer] ERROR: a transposed token reached the slot emitter, which cannot ",
+                       "represent one (see orderOpenChain). Token:\n  ", gf2]; Abort[]),
               MatchQ[gf2, _ntGamma5], "dg5()",
+              MatchQ[gf2, _ntC], "dc()",
               MatchQ[gf2, _ntSigma], sigStr[gf2[[1]], gf2[[2]]],
               True, With[{mu = First[gf2]},   (* ntGamma: slash if its leg is an ntVec momentum, else a free open leg *)
                 If[KeyExistsQ[vecOf, mu],
@@ -1441,7 +1487,7 @@ compileDirac[factors_, ids_, env_, nonzeroCompMask_] := Module[
    whole factor list for every gamma token, which is quadratic in the factor count. Reverse before
    building the Association so a duplicate μ keeps the FIRST match, matching the old `First[...]`. *)
     vecOf = Association[Reverse[Cases[factors, ntVec[q_, m_] :> (m -> q)]]];
-    diracFacs = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&];
+    diracFacs = Select[factors, MatchQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&];
     If[diracFacs === {},
       Return[Append[compileLorentz[Times @@ factors, ids, env, nonzeroCompMask], ""]]];
     loops = orderDiracLoops[diracFacs];(* one ordered token list per independent spinor loop *)
@@ -1479,6 +1525,20 @@ compileDirac[factors_, ids_, env_, nonzeroCompMask_] := Module[
     tokenOf =
       Function[gf,
         Which[
+(* TRANSPOSE MARKER. `orderDiracFacs` wraps a factor the walk traversed against its declared
+   (diracIn,diracOut) order; the engine must multiply M^T there. Recurse for the inner token's string
+   and wrap it in `dtr(...)`. The marker MUST reach the emitted text: chains are interned by string
+   (dsInt/dcInt/dlInt below), so a transposed and an untransposed chain would otherwise collide in the
+   trace table. A `dressed` chain wraps this from the OUTSIDE, giving dtfix(dtr(...)). *)
+          MatchQ[gf, _ntTransposed],
+(* A FIXED token wraps in dtr(...); a SLOT is a different C++ type (DChainTok, not DFac) and takes
+   the dtrslot(k) spelling, which reverses the option's chain and transposes each token at the
+   dress_enumerate splice. Recurse first so the slot is registered exactly as it would be untransposed
+   (same $dslCache key — the transpose lives on the reference, not on the slot). *)
+            With[{inner = tokenOf[First[gf]]},
+              If[StringMatchQ[inner, "dtslot(" ~~ __],
+                StringReplace[inner, StartOfString ~~ "dtslot(" -> "dtrslot("],
+                "dtr(" <> inner <> ")"]],
           MatchQ[gf, _ntDressedNum],
             (
               AppendTo[slots, dressedSlotStr[gf, env]];
@@ -1495,6 +1555,10 @@ compileDirac[factors_, ids_, env_, nonzeroCompMask_] := Module[
             If[dressed,
               "dtfix(dg5())",
               "dg5()"],
+          MatchQ[gf, _ntC],
+            If[dressed,
+              "dtfix(dc())",
+              "dc()"],
           MatchQ[gf, _ntSigma],
             With[{s = sigStr[gf[[1]], gf[[2]]]},
               If[dressed,
@@ -1553,7 +1617,7 @@ compileDirac[factors_, ids_, env_, nonzeroCompMask_] := Module[
    sector, ~1% of FORM). Detect it and abort with the offending factor rather than emit a wrong kernel.
    A correctly-handled diagram has all Dirac structure in `diracFacs` (bare heads or ntDressedNum), so
    `restFacs` is Dirac-free; this never trips on the validated flows. *)
-    With[{leak = Select[restFacs, !FreeQ[#, _ntGamma | _ntGamma5 | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&]},
+    With[{leak = Select[restFacs, !FreeQ[#, _ntGamma | _ntGamma5 | _ntC | _ntSigma | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot]&]},
       If[leak =!= {},
         Print["[NumTracer] ERROR: un-handled Dirac structure in a non-Dirac factor — a dressed ", "propagator-numerator sum was NEITHER distributed NOR collected into ntDressedNum, so the ", "numeric backend would silently drop/leak its gamma structure (collapsed trace or ", "untranslated C++). This is a front-end collection gap (collectibleDiracSumQ rejected a sum ", "that distributeQ also skipped). Offending factor(s):\n  ", leak];
         Abort[]]];
@@ -4557,7 +4621,7 @@ mkGenerateKernel[NTKernel[k_], genFile_, kernelFile_, headerFile_, OptionsPatter
        fold into ONE product net (disjoint ids make the C++ contract_factors multiply them). *)
                           (
                             nNonConst++;
-                            If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
+                            If[colourEntangledQ[comp["Factors"]] || !FreeQ[comp["Factors"], _ntGamma | _ntGamma5 | _ntC | _ntDeltaDirac | _ntDressedNum | _ntDiracSlot],
                               (
                                 nNCDirCol++;
                                 AppendTo[diracComps, splitColourGroups[comp["Factors"], diag["Ids"], env, nonzeroCompMask]]

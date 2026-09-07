@@ -6,13 +6,13 @@
 /// entries are polynomials in the frame's scalar symbols (@ref numtracer::numeric::MPoly): the γ
 /// matrices stay numeric (constant entries) while only the user's momentum data enters as
 /// polynomial coefficients. This header holds that matrix type (`Mat4`), its product/trace, and
-/// the two leaf builders — `gammaC` (a numeric γ^μ) and `slashC` (a slashed momentum from explicit
-/// per-component polynomials). It depends on `mpoly.hpp` (for `MPoly`) and `dirac/dirac_data.hpp`
-/// (for the typed-out Weyl γ table `kGamma`); `Mat4` cannot live in `core/` because its entries are
-/// `MPoly`, a numeric-backend type.
+/// the leaf builders — `gammaC` (a numeric γ^μ), `cmatC` (the charge-conjugation matrix C) and
+/// `slashC` (a slashed momentum from explicit per-component polynomials). It depends on `mpoly.hpp`
+/// (for `MPoly`) and `dirac/dirac_data.hpp` (for the typed-out Weyl tables `kGamma` and `kC`);
+/// `Mat4` cannot live in `core/` because its entries are `MPoly`, a numeric-backend type.
 #pragma once
 
-#include "numtracer/dirac/dirac_data.hpp" // kGamma (Euclidean Weyl)
+#include "numtracer/dirac/dirac_data.hpp" // kGamma, kC (Euclidean Weyl)
 #include "numtracer/numeric/mpoly.hpp"    // MPoly
 
 #include <array>
@@ -62,6 +62,22 @@ namespace numtracer::numeric
         const Cx g = numtracer::dirac::kGamma[mu][i][j];
         if (g.re == 0 && g.im == 0) continue;
         S.entries[i][j] = MPolyFactory::constant(nsym, g);
+      }
+    return S;
+  }
+
+  /// @brief The numeric charge-conjugation matrix `C` (a constant 4×4 of `MPoly`).
+  ///
+  /// Reads @ref numtracer::dirac::kC, which is the single source of truth for `C`; the fold in
+  /// `numeric_dirac` takes this matrix's DIAGONAL Weyl blocks (C is block-diagonal, unlike γ^μ).
+  inline Mat4 cmatC(int nsym)
+  {
+    Mat4 S(nsym);
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < 4; ++j) {
+        const Cx c = numtracer::dirac::kC[i][j];
+        if (c.re == 0 && c.im == 0) continue;
+        S.entries[i][j] = MPolyFactory::constant(nsym, c);
       }
     return S;
   }

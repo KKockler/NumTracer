@@ -659,6 +659,22 @@ if(NUMTRACER_BUILD_TESTS)
                      -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_flavour_contract.wls")
     set_tests_properties(wolfram_flavour_contract PROPERTIES LABELS wolfram TIMEOUT 300)
 
+    # Spinor-loop ORIENTATION. A closed loop is emitted as a left-to-right 4x4 matrix product, and
+    # orderDiracFacs recovers its order by walking the loop UNDIRECTED — so the walk always closes
+    # and the pre-existing "loop did not close" guard cannot see an INCONSISTENT arrow structure
+    # (two IN slots meeting, as at an anomalous qq / q-bar-q-bar diquark vertex). That loop needs a
+    # transposed segment, which the product cannot express, so it would emit a silently WRONG
+    # number; every other check is blind to it because spinor labels carry no orientation. Pins
+    # both directions: a MIXED loop must abort, and a UNIFORMLY reversed one must NOT — the sigL /
+    # etaPiL meson closures traverse every factor backwards (the walk seeds on a symmetric
+    # ntDeltaDirac whose label order is arbitrary), which is harmless because reversing a closed
+    # gamma loop is worth (-1)^(#gamma) and odd-gamma traces already vanish. A guard keyed on
+    # direction instead of on mixture would turn every meson flow red.
+    add_test(NAME wolfram_orientation_guard
+             COMMAND "${NT_WOLFRAM_EXE}" -noprompt
+                     -script "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_orientation_guard.wls")
+    set_tests_properties(wolfram_orientation_guard PROPERTIES LABELS wolfram TIMEOUT 300)
+
     # The C++ TYPE of each runtime kernel parameter: an AD-flagged scalar must be emitted
     # `const auto&` (an abbreviated template, the only thing that binds autodiff::real) and not
     # `const double&`. The ParameterOrder rework lost that to a With[] that closed one line early,

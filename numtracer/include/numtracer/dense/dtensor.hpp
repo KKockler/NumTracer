@@ -465,6 +465,22 @@ NT_END_NO_LOOP_VECTORIZE
     return t;
   }
 
+  /// @brief The charge-conjugation matrix @f$C=\gamma^2\gamma^4@f$ (two spinor axes).
+  ///
+  /// This path contracts by AXIS LABEL, so it is indifferent to which slot is the row and which the
+  /// column — a transposed factor is just the same tensor with its two labels named the other way
+  /// round. That makes it the independent oracle for anything involving `C`: it needs no orientation
+  /// model and no charge-conjugation rewrite, so it grades both the `DFac::C` engine token and the
+  /// front-end fold without sharing any machinery with either.
+  template <int Din, int Dout> constexpr auto C()
+  {
+    DTensor<AxList<Ax<Din, 4>, Ax<Dout, 4>>> t{};
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < 4; ++j)
+        t.data[i * 4 + j] = dirac::c_entry(i, j);
+    return t;
+  }
+
   /// @brief The spinor identity (contract with `M` to take @f$\mathrm{tr}(M)@f$).
   template <int Din, int Dout> constexpr auto identity()
   {

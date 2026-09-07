@@ -49,7 +49,7 @@ namespace numtracer::network
   // would delete move-assignment and force the vlc vectors to be copied on every reallocation). The
   // builder functions below are the only constructors, so the values are still effectively immutable.
   struct DFac {
-    enum Kind { Gamma, Gamma5, Slash, Comm, LoopSep };
+    enum Kind { Gamma, Gamma5, Slash, Comm, LoopSep, C };
     Kind kind = Gamma;
     // Field docs name the VARIANT, never its enum ordinal — the ordinal tags that used to be here
     // pointed at the wrong variant (`vlc` is the Slash momentum, which was tagged "kind 1" = Gamma5,
@@ -58,35 +58,72 @@ namespace numtracer::network
     std::vector<std::pair<double, int>>
         vlc;     ///< Slash: the momentum lin. comb. Comm: leg-A slash momentum (when mu < 0)
     int nu = -1; ///< Comm: leg-B FREE id (-1 ⇒ leg-B is a slash, use `vlc2`)
+    /// @brief Multiply this factor's TRANSPOSE instead of the factor itself.
+    ///
+    /// A closed spinor loop is a cycle in a degree-2 index network, and following that cycle is a
+    /// matrix product only where each factor's declared (din,dout) order matches the traversal.
+    /// Where it does not, the network wants @f$M^T@f$ — that is not a gamma identity, it is what
+    /// following the cycle means. The front-end walk (`orderDiracFacs`) knows which factors it
+    /// entered backwards and marks them; this flag carries that marking. Handled entirely at
+    /// BLOCK-PRECOMPUTE time in `numeric_dirac`, so the fold itself is unaffected.
+    ///
+    /// Placed HERE, between `nu` and `vlc2`, so it lands in the 4 bytes of padding the int/vector
+    /// alignment already leaves: appended at the end instead it pushed sizeof(DFac) 64 -> 72, and a
+    /// DiracNet is a vector of these that the fold walks per DFS node — measured +1.4% instructions.
+    bool transposed = false;
     std::vector<std::pair<double, int>> vlc2; ///< Comm: leg-B slash momentum (when nu < 0)
   };
   /// @brief A closed gamma chain in trace order (loop closes implicitly).
   using DiracNet = std::vector<DFac>;
 
-  inline DFac dgamma(int muId) { return {DFac::Gamma, muId, {}, -1, {}}; } ///< free gluon leg γ^μ
+  inline DFac dgamma(int muId) { return {DFac::Gamma, muId, {}, -1, false, {}}; } ///< free gluon leg γ^μ
   /// @brief Boundary between two INDEPENDENT closed spinor loops in one component (e.g. a quark loop
   ///        and the projection-closed external line, tied together only by gluon propagators). The
   ///        contraction traces each loop separately and multiplies the resulting Lorentz tensors,
   ///        contracting their shared gluon legs via the Lorentz net — NOT a Wick pairing across loops.
-  inline DFac dloopsep() { return {DFac::LoopSep, -1, {}, -1, {}}; }
-  inline DFac dslash(std::vector<std::pair<double, int>> vlc) { return {DFac::Slash, -1, std::move(vlc), -1, {}}; } ///< γ·p
-  inline DFac dg5() { return {DFac::Gamma5, -1, {}, -1, {}}; }                                                      ///< γ5
+  inline DFac dloopsep() { return {DFac::LoopSep, -1, {}, -1, false, {}}; }
+  inline DFac dslash(std::vector<std::pair<double, int>> vlc) { return {DFac::Slash, -1, std::move(vlc), -1, false, {}}; } ///< γ·p
+  inline DFac dg5() { return {DFac::Gamma5, -1, {}, -1, false, {}}; }                                                      ///< γ5
+  /// @brief The charge-conjugation matrix @f$C=\gamma^2\gamma^4@f$ as a chain token.
+  ///
+  /// Like γ5 it is block-DIAGONAL in the Weyl split, so it does NOT flip the antidiagonal trace
+  /// parity — but unlike γ5 its blocks are signed permutations rather than ±identity, so it costs
+  /// two 2×2 multiplies rather than a sign flip. It carries no index of its own: the two spinor
+  /// slots are the chain neighbours, exactly as for γ5.
+  ///
+  /// A `C` reaching the engine means the front end chose to KEEP it rather than fold it away; see
+  /// the charge-conjugation rewrite in `Codegen.m`. Both are legal — the folded form is production,
+  /// the token form is the oracle they are graded against.
+  inline DFac dc() { return {DFac::C, -1, {}, -1, false, {}}; }
+
+  /// @brief The transpose of a chain token: `dtr(dgamma(3))`, `dtr(dslash(...))`, …
+  ///
+  /// Composes with every builder above rather than doubling them. In the Weyl block split a
+  /// transpose is cheap and exact: a block-ANTIdiagonal factor (γ, slash) transposes by swapping its
+  /// P and Q blocks and transposing each 2×2; a block-DIAGONAL one (γ5, C, σ) transposes its two
+  /// diagonal blocks in place. Special cases the engine exploits: @f$\gamma_5^T=\gamma_5@f$ is a
+  /// no-op and @f$C^T=-C@f$ is a sign flip.
+  inline DFac dtr(DFac d)
+  {
+    d.transposed = !d.transposed;
+    return d;
+  }
   /// @brief bare commutator `[γ^μ, γ^ν] = γ^μγ^ν − γ^νγ^μ`, both legs FREE (open Lorentz ids μ,ν).
-  inline DFac dcomm(int muId, int nuId) { return {DFac::Comm, muId, {}, nuId, {}}; }
+  inline DFac dcomm(int muId, int nuId) { return {DFac::Comm, muId, {}, nuId, false, {}}; }
   /// @brief bare commutator `[A̸, B̸]`, both legs SLASHED with momenta A,B (struct-7 external projector).
   inline DFac dcomm_ss(std::vector<std::pair<double, int>> a, std::vector<std::pair<double, int>> b)
   {
-    return {DFac::Comm, -1, std::move(a), -1, std::move(b)};
+    return {DFac::Comm, -1, std::move(a), -1, false, std::move(b)};
   }
   /// @brief bare commutator `[γ^μ, B̸]`, leg-A FREE (gluon id μ), leg-B SLASHED with momentum B (loop vertex σ^{μν}B_ν).
   inline DFac dcomm_fs(int muId, std::vector<std::pair<double, int>> b)
   {
-    return {DFac::Comm, muId, {}, -1, std::move(b)};
+    return {DFac::Comm, muId, {}, -1, false, std::move(b)};
   }
   /// @brief bare commutator `[A̸, γ^ν]`, leg-A SLASHED with momentum A, leg-B FREE (gluon id ν).
   inline DFac dcomm_sf(std::vector<std::pair<double, int>> a, int nuId)
   {
-    return {DFac::Comm, -1, std::move(a), nuId, {}};
+    return {DFac::Comm, -1, std::move(a), nuId, false, {}};
   }
 
   namespace dirac_detail
@@ -158,8 +195,19 @@ namespace numtracer::network
         NT_THROW(std::runtime_error,
                  "dirac_value: chain contains a LoopSep marker — split the chain into its "
                  "independent spinor loops before tracing (see ndetail::split_loops).");
+      else if (d.transposed)
+        NT_THROW(std::runtime_error,
+                 "dirac_value: chain contains a TRANSPOSED token. The Wick-pairing recursion pairs "
+                 "factors by the Clifford algebra and has no notion of a factor's index order, so it "
+                 "would silently trace the untransposed factor. Use numeric_dirac.");
+      else if (d.kind == DFac::C)
+        NT_THROW(std::runtime_error,
+                 "dirac_value: chain contains a charge-conjugation (C) token. The Wick-pairing "
+                 "recursion knows only the Clifford algebra, and C is not a gamma — pair_factor "
+                 "would read its empty vlc and silently collapse the trace. Use numeric_dirac, "
+                 "or fold C away in the front end before tracing here.");
     // Gamma parity. Count ONLY the antidiagonal-block tokens, exactly as numeric_dirac does
-    // (numeric_contract.hpp): a Comm is two gammas and a LoopSep is none, so both contribute 0 mod 2
+    // (numeric_contract.hpp): a Comm is two gammas, a LoopSep none and a C two, so all contribute 0 mod 2
     // — counting either as ONE gamma (the old `!= Gamma5` test) inverted the verdict, returning a
     // structural zero for a nonzero 4-gamma trace like {sigma, gamma, gamma} and passing a genuinely
     // odd chain like {sigma, gamma} through to trace_rec. Both are now refused above, but keep the

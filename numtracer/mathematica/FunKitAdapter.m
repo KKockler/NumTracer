@@ -38,6 +38,13 @@ $ffMap = <|
   (* Dirac (spinor) sector. FunKit emits a slashed momentum as gamma[mu,..] * vec[q,mu]
      (the gamma carries the Lorentz axis), so ntGamma -> Dirac::gamma_axis. *)
   "gamma" -> ntGamma, "gamma5" -> ntGamma5, "deltaDirac" -> ntDeltaDirac,
+  (* Charge conjugation. FormTracer's Dirac vocabulary is CLOSED — DefineLorentzTensors has nine
+     positional slots and no extension hook — so C cannot be a FORM head, and FunKit/TensorBases
+     never trace it. A model supplies it as an INERT head on a hand-written vertex rule (or on a
+     basis built with "Reduce"->False and "BuildProjectors"->False, the only path that reaches no
+     FORM call), and it is NumTracer that gives it algebra. The name follows the prior art in
+     DiFfRG 1.0's Mathematica layer, which resolved ChargeConj the same way. *)
+  "ChargeConj" -> ntC,
   (* flavour-TRIVIAL Kronecker delta -> a private head, contracted to a power of Nf below (its
      dimension Nf is symbolic). Correct ONLY for a flavour-blind closed loop (delta^{ii} = Nf,
      e.g. Zq/ZA quark loops). A fundamental flavour delta sitting INSIDE a τ-trace must instead
@@ -145,7 +152,7 @@ sunMap[nc_, nf_] := <|
    the guard below — which is exactly how vecs used to reach the emitted C++ as an opaque scalar.
    Every finite-T token FormTracer declares (FormTracer.m:62) must appear here, mapped or refused. *)
 $funKitHeads = {"FEx", "FTerm", "deltaLorentz", "vec", "vecs", "sp", "sps",
-  "deltaDirac", "gamma", "gamma5", "sigma", "transProj", "longProj",
+  "deltaDirac", "gamma", "gamma5", "ChargeConj", "sigma", "transProj", "longProj",
   "transProjElectric", "transProjMagnetic",
   "deltaAdjCol", "deltaFundCol", "FCol", "TCol", "epsAdjCol", "epsFundCol",
   "deltaAdjFlav", "deltaFundFlav", "fFlav", "tauFlav", "TFlav",

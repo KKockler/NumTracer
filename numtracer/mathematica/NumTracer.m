@@ -130,6 +130,8 @@ ntGamma::usage = "ntGamma[mu, din, dout] — Dirac gamma^mu carrying a Lorentz a
 
 ntGamma5::usage = "ntGamma5[din, dout] — Dirac gamma_5 on spinor axes din,dout.";
 
+ntC::usage = "ntC[din, dout] — the charge-conjugation matrix C = gamma^2 gamma^4 on spinor axes din,dout. Satisfies C^T = C^-1 = -C, C gamma_mu^T C^-1 = -gamma_mu and C gamma5^T C^-1 = +gamma5 (arXiv:2606.23772 Eq. 46). Like gamma5 it is block-diagonal in the Weyl basis, so it does not flip the odd-trace parity. It is what makes an anomalous (qq / qbar qbar) vertex writable — see the orientation guard in Codegen.m.";
+
 ntSigma::usage = "ntSigma[legA, legB, din, dout] — INTERNAL codegen token for the bare γ-commutator [A,B] on spinor axes din,dout, folded from the struct-7 quark-gluon-vertex σ^{μν}. Each leg is {\"slash\", mom} (a slashed momentum) or {\"free\", mu} (an open Lorentz id). Emitted by foldDiracSigma so the antisymmetric γ-pair is never distributed into two traces.";
 
 ntDeltaDirac::usage = "ntDeltaDirac[din, dout] — spinor identity delta (Dirac::identity); closes a spinor trace.";

@@ -31,6 +31,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
@@ -204,20 +205,27 @@ namespace numtracer::numeric
           commB[i] = slashC(nsym, ndetail::mom_components(nsym, d.vlc2, comp));
         }
         slashMat.emplace_back(nsym); // placeholder
-      } else {                       // kind 2: γ5 — block-diagonal in the Weyl basis, folded in below without a matrix.
+      } else {                       // γ5 and C — block-diagonal in the Weyl basis, folded in below
         slashMat.emplace_back(nsym); // placeholder (keeps slashMat aligned with the token index)
       }
     }
     const int f = freeLegs.size();
     NT_STAT_ADD(nd_calls, 1);
     NT_STAT_ADD(nd_tokens, chain.size());
-    // Trace parity is set by the BLOCK-ANTIDIAGONAL factors only — Gamma and Slash. Gamma5 and Comm
-    // (σ) are block-DIAGONAL, so they do not flip it: a Comm is two gammas and a LoopSep is none,
-    // both 0 mod 2. An odd antidiagonal count ⇒ the final product is antidiagonal ⇒ tr = 0.
+    // Trace parity is set by the BLOCK-ANTIDIAGONAL factors only — Gamma and Slash. Gamma5, Comm
+    // (σ) and C are block-DIAGONAL, so they do not flip it: a Comm is two gammas, a C is two
+    // (C = γ²γ⁴) and a LoopSep is none, all 0 mod 2. An odd antidiagonal count ⇒ the final product
+    // is antidiagonal ⇒ tr = 0.
     // Keep this count in step with its sibling in network/dirac.hpp; the two engines must agree.
     std::size_t nAntidiag = 0;
-    for (const network::DFac &d : chain)
+    // `hasC` / `hasTr` piggyback on this pass: a separate scan would cost a full traversal per call
+    // inside the phase-A Dirac fold, for tokens almost no chain carries.
+    bool hasC = false, hasTr = false;
+    for (const network::DFac &d : chain) {
       if (d.kind == network::DFac::Gamma || d.kind == network::DFac::Slash) ++nAntidiag;
+      else if (d.kind == network::DFac::C) hasC = true;
+      if (d.transposed) hasTr = true;
+    }
     ndetail::Factor F;
     F.ids = freeLegs;
     // The free-leg tensor has 4^f entries; `total` is a 32-bit int, so f >= 16 (4^16 = 2^32)
@@ -251,14 +259,64 @@ namespace numtracer::numeric
       return B2{x[0] * y[0] + x[1] * y[2], x[0] * y[1] + x[1] * y[3], x[2] * y[0] + x[3] * y[2],
                 x[2] * y[1] + x[3] * y[3]};
     };
+    // Transpose of a row-major 2x2 block: swap the off-diagonal entries.
+    auto t2 = [](const B2 &b) { return B2{b[0], b[2], b[1], b[3]}; };
     std::array<B2, 4> gP, gQ;
     for (int mu = 0; mu < 4; ++mu) {
       Mat4 g = gammaC(nsym, mu);
       blocksOf(g, gP[mu], gQ[mu]);
     }
+    // TRANSPOSED tokens. A block-ANTIdiagonal factor M = [[0,P],[Q,0]] has M^T = [[0,Q^T],[P^T,0]],
+    // i.e. swap P and Q and transpose each 2x2; a block-DIAGONAL factor diag(U,L) has
+    // M^T = diag(U^T, L^T). Both are precompute-time, so the DFS below is untouched. The gamma and C
+    // blocks are shared constants rather than per-token, so a transposed occurrence needs its own
+    // copy; slash blocks are already per-token and are transposed at their fill site. Built only when
+    // the chain actually carries a transposed token — almost none do.
+    // Held behind a pointer, not by value: `std::array<B2,4>` is 16 MPoly, and two of them plus the
+    // transposed C blocks would default-construct ~40 MPoly on EVERY numeric_dirac call — inside the
+    // phase-A Dirac fold — for a feature almost no chain uses. Measured as +1.4% instructions on an
+    // all-untransposed fold before this was made lazy.
+    struct TrBlocks {
+      std::array<B2, 4> gP, gQ; ///< transposed gamma blocks (C's ride sP/sQ, see below)
+    };
+    std::unique_ptr<TrBlocks> tb;
+    if (hasTr) {
+      tb = std::make_unique<TrBlocks>();
+      for (int mu = 0; mu < 4; ++mu) {
+        tb->gP[mu] = t2(gQ[mu]);
+        tb->gQ[mu] = t2(gP[mu]);
+      }
+    }
+    // C is block-DIAGONAL, so it needs the other two blocks: upper-LEFT and lower-RIGHT. Built only
+    // when the chain actually carries a C — the vast majority of chains do not, and cmatC would
+    // otherwise allocate 16 MPoly per call inside the phase-A Dirac fold.
+    auto diagBlocksOf = [&](const Mat4 &M, B2 &U, B2 &L) {
+      for (int rr = 0; rr < 2; ++rr)
+        for (int cc = 0; cc < 2; ++cc) {
+          U[rr * 2 + cc] = M.entries[rr][cc];
+          L[rr * 2 + cc] = M.entries[rr + 2][cc + 2];
+        }
+    };
+
     std::vector<B2> sP(chain.size()), sQ(chain.size());
+    // C's two DIAGONAL blocks ride the same per-token sP/sQ arrays as the slashes (a C token never
+    // uses them otherwise). That keeps them out of the recursive `walk` lambda's capture set: extra
+    // captured state costs registers in the hottest loop in the fold, which is worth more than the
+    // handful of MPoly this saves.
+    B2 cU0, cL0;
+    if (hasC) diagBlocksOf(cmatC(nsym), cU0, cL0);
     for (std::size_t i = 0; i < chain.size(); ++i)
-      if (chain[i].kind == network::DFac::Slash) blocksOf(slashMat[i], sP[i], sQ[i]);
+      if (chain[i].kind == network::DFac::Slash) {
+        blocksOf(slashMat[i], sP[i], sQ[i]);
+        if (chain[i].transposed) {
+          B2 p = t2(sQ[i]), q = t2(sP[i]);
+          sP[i] = std::move(p);
+          sQ[i] = std::move(q);
+        }
+      } else if (chain[i].kind == network::DFac::C) {
+        sP[i] = chain[i].transposed ? t2(cU0) : cU0;
+        sQ[i] = chain[i].transposed ? t2(cL0) : cL0;
+      }
     // kind 3 commutator: 2×2 blocks of any SLASHED leg (the FREE legs index gP/gQ per assignment below).
     std::vector<B2> cAP(chain.size()), cAQ(chain.size()), cBP(chain.size()), cBQ(chain.size());
     for (std::size_t i = 0; i < chain.size(); ++i)
@@ -305,6 +363,7 @@ namespace numtracer::numeric
         return;
       }
       const network::DFac &d = chain[i];
+      // γ5 = diag(+I,-I) is SYMMETRIC, so `d.transposed` is a no-op here by construction.
       if (d.kind == network::DFac::Gamma5) { // block-diagonal: negate one block, parity unchanged
         if (!started) {
           self(self, i + 1, flat, id2, neg2(id2), true, false);
@@ -314,6 +373,17 @@ namespace numtracer::numeric
           self(self, i + 1, flat, neg2(m0), m1, started, antidiag);
         else
           self(self, i + 1, flat, m0, neg2(m1), started, antidiag);
+        return;
+      }
+      if (d.kind == network::DFac::C) { // block-diagonal; blocks (transposed or not) in sP[i]/sQ[i]
+        if (!started) {
+          self(self, i + 1, flat, sP[i], sQ[i], true, false);
+          return;
+        }
+        if (antidiag)
+          self(self, i + 1, flat, mul2(m0, sQ[i]), mul2(m1, sP[i]), started, antidiag);
+        else
+          self(self, i + 1, flat, mul2(m0, sP[i]), mul2(m1, sQ[i]), started, antidiag);
         return;
       }
       if (d.kind == network::DFac::Comm) { // block-diagonal diag(Su,Sl); free legs branch 4-way each
@@ -326,6 +396,14 @@ namespace numtracer::numeric
             const B2 &Qb = bFree ? gQ[muB] : cBQ[i];
             B2 Su, Sl;
             commBlocks(Pa, Qa, Pb, Qb, Su, Sl);
+            // sigma is block-DIAGONAL, so its transpose is its two blocks transposed. Unlike gamma
+            // and C these depend on the free-leg assignment, so this is the one transpose that
+            // cannot be hoisted out of the DFS — it is still only two 2x2 swaps, and only for a
+            // transposed Comm token.
+            if (d.transposed) {
+                Su = t2(Su);
+                Sl = t2(Sl);
+              }
             int nf = flat;
             if (aFree) nf = nf * 4 + muA;
             if (bFree) nf = nf * 4 + muB;
@@ -339,6 +417,22 @@ namespace numtracer::numeric
         return;
       }
       if (d.kind == network::DFac::Gamma) { // free leg: 4-way branch on the concrete component
+        // The two arms are DUPLICATED rather than selected by a `const std::array<B2,4>&` bound to
+        // one of two arrays, so the common path's gP[mu] stays a direct access rather than an
+        // indirect load. Measured neutral against the reference form on an all-untransposed fold —
+        // kept because it is the shape that cannot pessimise the hot path, not because it won.
+        if (d.transposed) {
+          for (int mu = 0; mu < 4; ++mu) {
+            const int nf = flat * 4 + mu;
+            if (!started)
+              self(self, i + 1, nf, tb->gP[mu], tb->gQ[mu], true, true);
+            else if (antidiag)
+              self(self, i + 1, nf, mul2(m0, tb->gQ[mu]), mul2(m1, tb->gP[mu]), started, !antidiag);
+            else
+              self(self, i + 1, nf, mul2(m0, tb->gP[mu]), mul2(m1, tb->gQ[mu]), started, !antidiag);
+          }
+          return;
+        }
         for (int mu = 0; mu < 4; ++mu) {
           const int nf = flat * 4 + mu;
           if (!started)
@@ -1231,11 +1325,23 @@ namespace numtracer::numeric
   ///        commutator) or a SLOT reference (an index into the diagram's slot list).
   struct DChainTok {
     bool isSlot = false;
-    network::DFac fac{network::DFac::Gamma, -1, {}, -1, {}};
+    network::DFac fac{network::DFac::Gamma, -1, {}, -1, false, {}};
     int slot = -1;
+    /// @brief Splice this slot's chain TRANSPOSED (slot tokens only; a fixed token carries its own
+    ///        `DFac::transposed` instead).
+    ///
+    /// A slot is a sum of chains, and @f$(A_1\cdots A_n)^T = A_n^T\cdots A_1^T@f$ — so transposing
+    /// one means reversing each option's token list and transposing every token in it. That has to
+    /// happen HERE, at the splice, rather than in the front end: `$dsCache`/`$dslCache` key on the
+    /// slot expression, so a Mathematica-side transposed slot would collide with its untransposed
+    /// twin in the cache. The option's `netFacs` are pure Lorentz tensors on the open legs and are
+    /// unaffected by a spinor transpose.
+    bool transposed = false;
   };
-  inline DChainTok dtfix(network::DFac f) { return {false, std::move(f), -1}; }
-  inline DChainTok dtslot(int s) { return {true, {network::DFac::Gamma, -1, {}, -1, {}}, s}; }
+  inline DChainTok dtfix(network::DFac f) { return {false, std::move(f), -1, false}; }
+  inline DChainTok dtslot(int s) { return {true, {network::DFac::Gamma, -1, {}, -1, false, {}}, s, false}; }
+  /// @brief A slot reference spliced transposed. See @ref DChainTok::transposed.
+  inline DChainTok dtrslot(int s) { return {true, {network::DFac::Gamma, -1, {}, -1, false, {}}, s, true}; }
 
   // Public entry points that reference the dressing types above.
   NUMTRACER_FUNC DPoly numeric_value_dressed_netval(int nsym, const std::vector<DChainTok> &chain,
@@ -1315,7 +1421,15 @@ namespace numtracer::numeric
           // surrounding net closes every open leg for all structure choices alike. An option with an
           // empty `toks` is the spinor identity δ (tr(1)=4 restored by nCollapsed below when a whole
           // loop collapses); empty `netFacs` ⇒ no net change (the byte-identical fast path).
-          concrete.insert(concrete.end(), opt.toks.begin(), opt.toks.end());
+          if (tok.transposed) {
+            // (A1..An)^T = An^T..A1^T: reverse the option's chain and transpose every token in it.
+            // netFacs are pure Lorentz and untouched. Loop accounting below is order-insensitive
+            // (it counts LoopSep markers and split_loops segments), so reversing is safe here.
+            for (auto it = opt.toks.rbegin(); it != opt.toks.rend(); ++it)
+              concrete.push_back(network::dtr(*it));
+          } else {
+            concrete.insert(concrete.end(), opt.toks.begin(), opt.toks.end());
+          }
           extraNet.insert(extraNet.end(), opt.netFacs.begin(), opt.netFacs.end());
         }
         if (!(combCoeff.re == 0 && combCoeff.im == 0)) {
