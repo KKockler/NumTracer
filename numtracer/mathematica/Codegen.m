@@ -61,7 +61,29 @@ ntWolframRssMB[] := Quiet @ Check[
 
 (* a C++ double literal at full precision (exact rationals -> doubles). *)
 
-cppNum[x_] := ToString[CForm[N[x, 17]]];
+cppNum[x_] := ToString[CForm[If[MachineNumberQ[x], SetPrecision[x, 17], N[x, 17]]]];
+
+(* ---- sub-term scalars as PACKED machine complex ------------------------------------------------
+   The expansion below produces one scalar per sub-term, and the dense finite-T flows have tens to
+   hundreds of millions of them (a finite-T/finite-mu four-quark lambda4L2: 396 M). They used to be
+   carried as the precision-17 numbers that N[num, 17] (slot options) and the branch scalars
+   produce, mixed with exact integers, so no per-net list could pack: measured ~125 bytes per
+   scalar against 16 packed. Together with packing the two slotCombo id columns (24 -> 8 bytes),
+   a sub-term costs ~56 bytes instead of ~190 (measured on that flow: 23 GB after the expansion,
+   where the unpacked expansion had passed 36 GB at 85% of the nets).
+
+   Packing them as machine doubles keeps the emitted VALUES: cppNum prints a machine number as
+   SetPrecision[x, 17], the exact 17-significant-digit decimal of that double, which a C++ compiler
+   parses back to the identical double. What changes is where rounding happens: the per-net merge
+   sums shared sub-terms in double instead of at 17 digits (a few ulp), and the emitted literals are
+   no longer byte-identical to the precision-17 path. Where every scalar is exactly representable
+   (e.g. ZA/ZAPre of a finite-T QCD tree) the output IS byte-identical. NT_GEN_EXACT_SCALARS=1
+   restores the precision-17 path exactly -- the one the committed reference kernels come from. *)
+$ntExactScalars := Environment["NT_GEN_EXACT_SCALARS"] === "1";
+ntPackCx[l_List] :=
+  If[$ntExactScalars || !VectorQ[l, NumberQ],
+    l,
+    Developer`ToPackedArray[N[l] + 0. I]];
 
 (* ---- integer-table text ----------------------------------------------------------------------
    The emitted generator is dominated by flat integer tables: 99.9% of ZAAqbq2's 25.7 MB main TU is
@@ -2005,6 +2027,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    groups on. Listable arithmetic over the ragged integer columns — no Map. *)
     traceKeyPacked      = ((dsI * nLs + lsI) * nDc + dcI) * nDl + dlI;
     traceDressKeyPacked = traceKeyPacked * nDr + drI;
+    If[$NumTracerVerbose, ntLog["[mem] dedup join: keys packed: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     subKeysLen = lens;
     If[noDedup,   (* I4 *)
       Module[{tot = Total[lens]},
@@ -2024,13 +2047,15 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
         Function[{ck, tks, drs, scs},
           Select[
             Function[g, {tks[[First[g]]], drs[[First[g]]], Total[scs[[g]]]}] /@ Values[PositionIndex[ck]],
-            #[[3]] =!= 0&]],
+            (* numeric, not structural: a packed machine sum cancels to 0. + 0. I, which =!= 0 would keep *)
+            #[[3]] != 0&]],
         {traceDressKeyPacked, traceKeyPacked, drI, subScalars}];
 (* I3: order the distinct traces by DESCENDING reference count, so a memory-capped run still caches
    the traces that repay caching most, and the singletons (refCount 1 — computing one costs the same
    whether or not it is cached, so caching it is pure RAM for no saving) land at the end where the
    default cap excludes them. ReverseSort on an Association is stable, which is what keeps ties in
    first-appearance order. *)
+    If[$NumTracerVerbose, ntLog["[mem] dedup join: per-net merge (netTerms) done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     (* First /@ #, not #[[All,1]] — the latter errors on a net whose terms all cancelled to {} *)
     refCount = Counts[Flatten[Map[First /@ #&, netTerms], 1]];
     distinctSubs = Keys[ReverseSort[refCount]];
@@ -2053,6 +2078,7 @@ ntGenDedupJoin[diracNetIds_, lorNetIds_, subScalars_, dressChainIds_, slotTupleI
    so decode that column here too — again only over the surviving terms. *)
     netTerms = Map[Function[nt, {subIdxOf[nt[[1]]], uDr[[nt[[2]] + 1]], nt[[3]]}] /@ #&, netTerms];
 
+    If[$NumTracerVerbose, ntLog["[mem] dedup join: decode done: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=", Round[ntWolframRssMB[]], " MB"]];
     ntStageResult["ntGenDedupJoin",
       {"subKeysLen", "netTerms", "refCount", "distinctSubs", "subIdxOf", "nSub", "nReused"},
       <|"subKeysLen" -> subKeysLen, "netTerms" -> netTerms, "refCount" -> refCount,
@@ -2176,19 +2202,39 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
             dress   = #[[All, 3]]& /@ slotOpts;
             cs = Tuples[structs];
             n  = Length[cs];
-            {dlInt /@ cs,
+            {Developer`ToPackedArray[dlInt /@ cs],
 (* by far the common case: no slot option on this core carries a dressing atom, so every
    combination's union is empty. Checked once per distinct option set. *)
              If[AllTrue[dress, AllTrue[#, # === {}&]&],
                ConstantArray[drInt[{}], n],
-               drInt /@ (Sort[Catenate[#]]& /@ Tuples[dress])],
+               Developer`ToPackedArray[drInt /@ (Sort[Catenate[#]]& /@ Tuples[dress])]],
              Flatten[Outer[Times, Sequence @@ nums]],
              n}]];
+(* MEMORY PROBE (verbose only): where the resident set goes on the dense finite-T flows, which grow
+   by tens of GB before this expansion reports. Stamps on entry, every 2000 nets, and after; then
+   what the scalar column actually holds (packed machine numbers, or boxed/exact/symbolic ones). *)
+    If[$NumTracerVerbose,
+      ntLog["[mem] emitNumericGenerator entry: MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=",
+        Round[ntWolframRssMB[]], " MB  ByteCount invNets=", Round[ByteCount[invNets]/2.^20],
+        " MB invRest=", Round[ByteCount[invRest]/2.^20], " MB  nets=", Length[invNets]]];
+    ntMemNet = 0;
+(* per-net probe: every 2000th net, the size of what THIS net expanded into, column by column
+   ({ds, ls, scal, dc, dl, dr}), its sub-term count and whether its scalar column is packed. The
+   identity on r, so the expansion's result is untouched. *)
+    ntMemProbeNet[r_] := (
+      If[$NumTracerVerbose && Mod[++ntMemNet, 2000] == 0,
+        ntLog["[mem]   expansion net ", ntMemNet, ": MemoryInUse=", Round[MemoryInUse[]/2.^20],
+          " MB  RSS=", Round[ntWolframRssMB[]], " MB | this net: sub-terms=", Length[r[[3]]],
+          "  KB per column {ds,ls,scal,dc,dl,dr}=", Round[ByteCount /@ r / 1024.],
+          "  scal packed=", Developer`PackedArrayQ[r[[3]]],
+          "  scal heads=", Counts[Head /@ Take[r[[3]], Min[Length[r[[3]]], 1000]]],
+          "  scal sample=", ToString[Short[Take[r[[3]], Min[Length[r[[3]]], 2]], 2]]]];
+      r);
     With[{ntT = First @ AbsoluteTiming[
     {diracNetStrs, lorentzNetStrs, subScalars, dressChains, dressSlotOpts, dressAtomIds} =
       Transpose @
         MapThread[
-          Function[{cores, rss},
+          Function[{cores, rss}, ntMemProbeNet @
             If[cores === {},
               {{}, {}, {}, {}, {}, {}},
 (* COLUMN-ORIENTED, not row-oriented. The obvious spelling builds one six-element ROW per sub-term
@@ -2209,7 +2255,7 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                           MatchQ[nv, _ntDressedCore],(* dressed numerator: expand slot options → structural sub-terms *)
                             With[{chain = nv[[1]], slotOpts = nv[[2]]},
                               If[slotOpts === {},
-                                {{dsInt["DiracNet{}"]}, {lsInt[lsStr]}, {scal}, {dcInt[chain]}, {dlInt[{}]}, {drInt[{}]}},
+                                {{dsInt["DiracNet{}"]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt[chain]}, {dlInt[{}]}, {drInt[{}]}},
 (* dl = this combination's STRUCTURAL option-string LIST (one dressing-free structStr per chain
    slot), interned so the table emitter still pools the distinct structures; the numeric Cx folds
    into the sub-term scalar and the dress ids become the DPoly key. *)
@@ -2217,17 +2263,23 @@ emitNumericGenerator[invNets_, invRest_, colourNets_, groups_, ncomp_, nsInner_,
                                   n = tb[[4]];
                                   {ConstantArray[dsInt["DiracNet{}"], n],
                                    ConstantArray[lsInt[lsStr], n],
-                                   scal * tb[[3]],
+                                   ntPackCx[scal * tb[[3]]],
                                    ConstantArray[dcInt[chain], n],
                                    tb[[1]],
                                    tb[[2]]}]]],
                           StringMatchQ[nv, "DiracNet" ~~ ___],(* gamma branch: DiracNet + projector rest *)
-                            {{dsInt[nv]}, {lsInt[lsStr]}, {scal}, {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
+                            {{dsInt[nv]}, {lsInt[lsStr]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}},
                           True,(* gamma-free branch: whole net is the rest *)
-                            {{dsInt["DiracNet{}"]}, {lsInt[nv]}, {scal}, {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
+                            {{dsInt["DiracNet{}"]}, {lsInt[nv]}, ntPackCx[{scal}], {dcInt["std::vector<DChainTok>{}"]}, {dlInt[{}]}, {drInt[{}]}}]]],
                     {cores, rss[[All, 1]], rss[[All, 2]]}]]],
           {invNets, invRest}];]},
       ntLog["[prof] sub-term expansion: ", ntT, " s"]];
+    If[$NumTracerVerbose,
+      ntLog["[mem] after expansion (before stats): MemoryInUse=", Round[MemoryInUse[]/2.^20], " MB  RSS=",
+        Round[ntWolframRssMB[]], " MB"]];
+    If[$NumTracerVerbose,
+      ntLog["[mem]   sub-terms=", Total[Length /@ subScalars],
+        "  per-net scalar columns packed=", Count[subScalars, _?Developer`PackedArrayQ], "/", Length[subScalars]]];
 (* ---- colour-net table: chunk DEFINITIONS on the parallel -O0 units, assembler in the main TU ----
    The distinct colour nets are one `SUNNet{sun3.T(..), ..}` constructor-call literal each, and on a
    flow with a large colour graph the table dwarfs everything else in the main TU (measured: 6.28 MB
