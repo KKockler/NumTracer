@@ -1848,10 +1848,37 @@ unitLoopMixedOkQ[frame_, magSym_] :=
       AnyTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym])&] &&
       AllTrue[cc, (fullQ[#] || unitLoopSpatialQ[#, magSym] || FreeQ[#, magSym])&]];
 
+(* SHARED DIRECTIONS (2026-09-24). Loop tags that are the same vector up to the temporal slot -- a
+   finite-T frame's l1 and its fermionic partner lf1 = l1 + (pi T, 0) from frameShiftedLoop, or any
+   two keys with identical direction coefficients -- used to mint one ntU$ set and one unit group EACH.
+   The traces then carried two independent copies of the same three direction numbers, so monomials
+   in the copies could neither merge (cos1 * cos1' never became cos1^2) nor reduce against the SAME
+   group's Sum U^2 = 1, and every polynomial downstream grew: ZA4 had MPoly vars {f0, l1, U2..U4,
+   U5..U7, p, T} with U5..U7 == U2..U4 numerically. Keys are now matched on their direction list, so
+   the second tag reuses the first one's symbols and group. `dirSyms` memoises by (kind, directions). *)
 unitLoopMixedFrameSpec[frame_, magSym_] := Module[
-    {loopQ, svKeys, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS},
+    {loopQ, svKeys, loopKeys, spatKeys, extFrame, pf, defs, groups = {}, n = 0, nf, nfS, dirSeen = <||>, dirSyms},
     loopQ[comps_] := Module[{cc = PowerExpand[comps]},
       AllTrue[Range[4], (Simplify[cc[[#]] - Coefficient[cc[[#]], magSym] magSym] === 0)&]];
+    (* direction list -> list of ntU$ symbols (0 where the direction vanishes); one unit group per
+       DISTINCT direction list, minted on first sight and reused by every later key that matches *)
+    dirSyms[kind_, dirs_List] :=
+      With[{key = {kind, Simplify /@ dirs}},
+        If[KeyExistsQ[dirSeen, key],
+          dirSeen[key],
+          Module[{grp = {}, syms},
+            syms =
+              Map[
+                Function[dir,
+                  If[dir === 0,
+                    0,
+                    With[{s = Symbol["ntU$" <> ToString[n++]]},
+                      defs[s] = dir;
+                      AppendTo[grp, s];
+                      s]]],
+                dirs];
+            AppendTo[groups, grp];
+            dirSeen[key] = syms]]];
     (* spatial vectors are derived from their parent at the end, never classified — see
        spatialVecKeysOf. Held out of loopKeys/spatKeys/extFrame so they mint nothing of their own. *)
     svKeys   = spatialVecKeysOf[frame];
@@ -1871,19 +1898,9 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
         Map[
           Function[q,
             q ->
-              Module[{grp = {}, cc = PowerExpand[frame[q]], ncomp},
-                ncomp =
-                  Table[
-                    Module[{dir = Coefficient[cc[[mu]], magSym], s},
-                      If[dir === 0,
-                        0,
-                        s = Symbol["ntU$" <> ToString[n++]];
-                        defs[s] = dir;
-                        AppendTo[grp, s];
-                        magSym s]],
-                    {mu, 1, 4}];
-                AppendTo[groups, grp];
-                ncomp]],
+              Module[{cc = PowerExpand[frame[q]], syms},
+                syms = dirSyms["full", Table[Coefficient[cc[[mu]], magSym], {mu, 1, 4}]];
+                magSym syms]],
           loopKeys];
     (* spatial loops (finite T): temporal component = polyFrameSpec's minted form, spatial
        components = magSym · ntU$n with the unit group over the SPATIAL directions only
@@ -1893,21 +1910,9 @@ unitLoopMixedFrameSpec[frame_, magSym_] := Module[
         Map[
           Function[q,
             q ->
-              Module[{grp = {}, cc = PowerExpand[frame[q]], ncomp},
-                ncomp =
-                  Join[
-                    {pf[q][[1]]},
-                    Table[
-                      Module[{dir = Coefficient[cc[[mu]], magSym], s},
-                        If[dir === 0,
-                          0,
-                          s = Symbol["ntU$" <> ToString[n++]];
-                          defs[s] = dir;
-                          AppendTo[grp, s];
-                          magSym s]],
-                      {mu, 2, 4}]];
-                AppendTo[groups, grp];
-                ncomp]],
+              Module[{cc = PowerExpand[frame[q]], syms},
+                syms = dirSyms["spatial", Table[Coefficient[cc[[mu]], magSym], {mu, 2, 4}]];
+                Join[{pf[q][[1]]}, magSym syms]]],
           spatKeys];
     (* spatial vectors LAST, off the finished components: whatever treatment the parent got — a
        polyFrameSpec external, a full unit loop, or a spatial unit loop — the spatial vector is that
@@ -1943,12 +1948,15 @@ numericComponents[env_, frame_, symDefs_, unitGroups_ : {}] := Module[
         Abort[]]];
     usyms = Sort @ DeleteDuplicates @ Flatten[Variables /@ Values[compExpr]];
     nsym = Length[usyms];
+(* Coefficients may be complex (a silver-blaze frame component pi T - I muq has coefficient -I on
+   muq): emit Re and Im separately, as dscV does -- cppNum of a Complex is Wolfram's Complex(a,b),
+   which is not C++. Fixed 2026-09-24. *)
 (* Emit through the generator's `env` (a LorentzEnv bound to nsym) — the sole construction path for
    MPoly now that the bare-nsym factories are private. *)
     mpcpp[e_] := Module[{rules = CoefficientRules[e, usyms]},
         If[rules === {},
           "env.zero()",
-          "(" <> StringRiffle[("env.mono({" <> StringRiffle[ToString /@ #[[1]], ","] <> "},Cx{" <> cppNum[#[[2]]] <> ",0})")& /@ rules, " + "] <> ")"
+          "(" <> StringRiffle[("env.mono({" <> StringRiffle[ToString /@ #[[1]], ","] <> "},Cx{" <> cppNum[Re[#[[2]]]] <> "," <> cppNum[Im[#[[2]]]] <> "})")& /@ rules, " + "] <> ")"
         ]];
     compCpp = Association @ KeyValueMap[#1 -> (mpcpp /@ #2)&, compExpr];
     vfill[s_] := If[KeyExistsQ[symDefs, s],
